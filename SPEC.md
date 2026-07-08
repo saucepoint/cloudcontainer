@@ -1,6 +1,6 @@
 # Codestation — Product Specification
 
-**Status:** Draft v3.1 for build (v2 revised after design review; v3 simplifies onboarding — agent-first wizard, all credentials optional/deferrable, agent-subscription auth supported; v3.1 adds the test suite, §18)
+**Status:** Draft v3.2 for build (v2 revised after design review; v3 simplifies onboarding — agent-first wizard, all credentials optional/deferrable, agent-subscription auth supported; v3.1 adds the test suite, §18; v3.2 replaces the per-host Go daemon with a Hono-on-Node.js daemon — the same web framework as the control-plane Worker, sharing a common contract package and auth middleware; §10 records why a direct Worker→Incus design was rejected)
 **Date:** 2026-07-08
 **One-liner:** World ID-gated, lightweight Debian "cloud containers" preconfigured for coding agents, on Hetzner + Incus, free and paid tiers.
 
@@ -8,7 +8,7 @@
 
 ## 1. Vision
 
-Codestation lets any **World ID-verified human** spin up a lightweight, always-on Debian "cloud container" — an Incus system container — that comes pre-wired for coding-agent work: SSH-key access, GitHub + Cloudflare credentials, the user's chosen coding agent (Pi / Claude Code / Codex / OpenCode) preinstalled, and the user's own LLM API keys injected at boot. The service never subsidizes inference; users bring their own keys.
+Codestation lets any **World ID-verified human** spin up a lightweight, always-on Debian "cloud container" — an Incus system container — that comes pre-wired for coding-agent work: SSH-key access, GitHub + Cloudflare credentials, the user's chosen coding agents (Pi / Claude Code / Codex / OpenCode) preinstalled, and the user's own LLM API keys injected at boot. The service never subsidizes inference; users bring their own keys.
 
 ### Why this exists (Problem)
 - Coding agents need a stable, well-tooled Linux environment to do real work.
@@ -307,12 +307,13 @@ KV stores signed session data (session **revocations** are written to D1 and che
 - **Control plane:** Cloudflare Pages (dashboard front-end) + Workers (API).
 - **State:** **D1** for structured state, RPC nonces, and session revocations; **KV** for session data only.
 - **Secrets:** Cloudflare Workers Secrets (Stripe secret, GitHub App private key, host-daemon client cert/key, credential master key, nullifier-HMAC key).
-- **Per-host control daemon:** a small Go process on each Hetzner host exposing an HTTPS API secured by **mTLS** (Workers mTLS-certificate binding; daemon server cert pinned) **plus signed requests with nonces** (replay-checked against D1). Credential-bearing payloads are additionally **sealed to the destination host's public key** (see Credential handling) — plaintext secrets never transit, even inside the mTLS tunnel, and a leaked Worker client cert alone cannot extract them. Operations are **asynchronous jobs**: the Worker enqueues (`provision`, `start`, `stop`, `resize`, `rebuild`, `destroy`, `refresh-credentials`, `sync-keys`, `export-window`) and receives a job ID; the daemon executes (shelling out to Incus CLI / API) and reports status; the dashboard polls job state. Synchronous calls are limited to `health` and `stats`. *(Provisioning takes minutes; a Worker request cannot and should not hold that long.)*
+- **Per-host control daemon:** a small **Hono-on-Node.js** process on each Hetzner host exposing an HTTPS API secured by **mTLS** (Workers mTLS-certificate binding; daemon server cert pinned) **plus signed requests with nonces** (replay-checked against D1). It is *the same web framework as the control-plane Worker*: the signed-request / nonce / sealed-payload logic is written once as **Hono middleware in the shared contract package** and mounted on both the Worker (Workers runtime) and the daemon (Node runtime). Credential-bearing payloads are additionally **sealed to the destination host's public key** (see Credential handling) — plaintext secrets never transit, even inside the mTLS tunnel, and a leaked Worker client cert alone cannot extract them. Operations are **asynchronous jobs**: the Worker enqueues (`provision`, `start`, `stop`, `resize`, `rebuild`, `destroy`, `refresh-credentials`, `sync-keys`, `export-window`) and receives a job ID; the daemon executes them, driving Incus over its **local Unix socket** (REST API / CLI via `child_process`) and owning the host-level operations that have no Incus API surface (nftables baseline, ZFS encryption-key handling), then reports status; the dashboard polls job state. Synchronous calls are limited to `health` and `stats`. *(Provisioning takes minutes; a Worker request cannot and should not hold that long.)*
+  - **Rejected — Worker → Incus REST API directly (no host daemon):** Incus can expose its REST API over the network with mTLS client-cert auth, and a Worker could call it, so this was considered. Rejected on three grounds: **(1) it collapses the sealed-credential model** — the Worker would push plaintext secrets to Incus via `incus file push`, so sealing-to-host becomes moot and a leaked Worker mTLS cert grants *total* control of every container and the host's storage, versus the ~9 narrow, least-privilege ops the daemon exposes; **(2) not everything is in the Incus API** — the host nftables baseline (outbound-25 block, connection-rate limits), ZFS native-encryption key loading, and reboot resync are host-OS operations, so a host-side component is required regardless; **(3) duration/orchestration** — multi-minute, multi-step provisioning cannot ride a single Worker invocation, and pushing the whole workflow into the Cron reconciler still would not solve (2). The daemon keeps the Incus control surface on a private Unix socket and off the public edge.
 - **Reconciler:** a **Workers Cron Trigger** (every 5 min) drives all time-based and corrective transitions: grace-period expiry (`suspended_at` + 7 days → destroy), export-window expiry, stuck-job timeouts, waitlist admission, the GitHub token refresh loop (control-plane-side, §9), and D1↔host drift detection (daemon `stats` diffed against D1 state). **No state transition depends on a user or webhook happening to arrive.**
 - **Hosts:** **independent hosts** (no shared distributed storage, no live migration). MVP deploys **one Hetzner dedicated host** (~64 GB / 8-16 vCPU, Falkenstein), with architecture and scheduler multi-host-ready.
 
 ### Host lifecycle
-- **Bootstrap (documented, repeatable):** provision Debian on the host → run the bootstrap script/Ansible role (installs Incus, **ZFS pool with native encryption enabled** — key handling documented in the runbook — the control daemon, nftables baseline incl. outbound-25 block) → issue daemon server cert → daemon generates its **X25519 credential keypair** (private key never leaves the host) → register row in `hosts` with endpoint + cert fingerprint + daemon public key. Adding a host is config + this runbook; no dashboard or daemon code changes (acceptance criterion 12).
+- **Bootstrap (documented, repeatable):** provision Debian on the host → run the bootstrap script/Ansible role (installs Incus, **ZFS pool with native encryption enabled** — key handling documented in the runbook — the **Node.js runtime** and the control daemon (installed as a systemd service), nftables baseline incl. outbound-25 block) → issue daemon server cert → daemon generates its **X25519 credential keypair** (private key never leaves the host) → register row in `hosts` with endpoint + cert fingerprint + daemon public key. Adding a host is config + this runbook; no dashboard or daemon code changes (acceptance criterion 12).
 - **Reboot behavior:** containers are marked `boot.autostart=true`; the daemon starts on boot, resyncs actual Incus state to D1 via the reconciler, and re-applies NAT port forwards and egress limits.
 - **OS patching:** host runs unattended-upgrades; **containers ship with unattended-upgrades enabled by default** (user may disable; ToS states patching inside the container is ultimately the user's responsibility).
 
@@ -500,15 +501,15 @@ A build is releasable when it satisfies **all** of the following. Each criterion
 2. **Time never passes in tests.** Grace expiry, token refresh, port quarantine, sustained-CPU windows, and dunning are all driven by injected clocks, forced expiries, or Stripe **test clocks** — a 7-day grace test runs in seconds. The reconciler takes its clock as a parameter for exactly this reason.
 3. **Two execution tiers.** A fast tier (unit + integration, everything in-process or in Miniflare) runs on every PR in under ~5 minutes; the full-stack tier (real Incus + ZFS on the dev box, §20) runs nightly and pre-release. Nothing in the fast tier needs network access to World ID, GitHub, Stripe, or a host.
 4. **Secrets hygiene is an executable test, not a review rule.** Test runs inject distinctive **canary credentials** (e.g. `CANARY-github-token-…`); after the credential-lifecycle E2E, the suite greps D1 `jobs` rows, daemon logs, Worker logs, and alert output for any canary value and fails on a hit (AC5).
-5. **Both sides of every wire protocol test against shared fixtures** (contract tests) so the TS control plane and Go daemon cannot drift apart silently.
+5. **Both sides of every wire protocol test against shared fixtures** (contract tests) so the control-plane Worker and the host daemon cannot drift apart silently. Both are Hono/TypeScript, so the RPC/crypto types, validators, and the auth **middleware itself** live in a **shared workspace package** mounted on both the Worker and the daemon — but the golden fixtures are still asserted independently on each side, guarding against one side's runtime (Workers vs. Node) diverging from the shared contract.
 
 ### Layers
 
 | # | Layer | Scope | Tooling | Runs |
 |---|---|---|---|---|
 | L1 | Unit — control plane | Pure logic in Workers/TS | Vitest + `@cloudflare/vitest-pool-workers` (Miniflare D1/KV/Cron) | Every PR |
-| L2 | Unit — daemon | Pure logic in Go | `go test`, fake `exec` for Incus/nftables | Every PR |
-| L3 | Contract — Worker↔daemon | Shared RPC/crypto fixtures | Golden files consumed by both Vitest and `go test` | Every PR |
+| L2 | Unit — daemon | Pure logic in Node/TS | Vitest (Node), faked `child_process` for Incus/nftables | Every PR |
+| L3 | Contract — Worker↔daemon | Shared RPC/crypto fixtures | Golden files consumed by both the Workers and Node Vitest suites | Every PR |
 | L4 | Integration — control plane | Full API flows against real D1 schema, mocked externals | `wrangler dev`/Miniflare; World ID simulator; GitHub App mock; Stripe CLI fixtures | Every PR |
 | L5 | E2E — full stack | Real daemon + Incus + file-backed ZFS on the dev box | Test harness driving the public API + SSH client | Nightly + pre-release |
 | L6 | Security & abuse | Firewall, limits, replay, hygiene | Runs inside L5 environment | Nightly + pre-release |
@@ -527,11 +528,11 @@ A build is releasable when it satisfies **all** of the following. Each criterion
 - **Crypto:** credential master-key encrypt/decrypt round-trip; X25519 sealed-box **test vectors** (fixed keypair + plaintext → expected ciphertext behavior, tamper → open fails); nullifier-HMAC vectors.
 - **Reconciler (logic level, injected clock):** `suspended_at` + 7 days → destroy job enqueued; export-window expiry; GitHub refresh triggered before `github_expires_at`; waitlist admission; D1↔`stats` drift produces corrective jobs.
 
-### L2 — Daemon unit tests (Go)
+### L2 — Daemon unit tests (Node/TS, Vitest)
 
 - **Request auth:** valid signature accepted; bad signature, expired timestamp, and **replayed nonce** rejected (nonce check against the store interface, faked).
-- **Sealed payloads:** decrypts the shared test vectors (L3); tampered ciphertext and wrong-key ciphertext fail closed; plaintext exists only in memory (no temp-file writes — asserted via fake FS).
-- **Incus/nftables command construction:** given a job, the exact CLI/API calls are asserted against a fake `exec` — provision, resize (cgroup + ZFS quota values for both tiers), rebuild (home dataset preserved and re-attached), destroy, NAT port forward, egress/connection-rate rules, port-25 block.
+- **Sealed payloads:** decrypts the shared test vectors (L3); tampered ciphertext and wrong-key ciphertext fail closed; plaintext exists only in memory (no temp-file writes — asserted via a faked `fs`).
+- **Incus/nftables command construction:** given a job, the exact CLI/API calls are asserted against a faked `child_process` — provision, resize (cgroup + ZFS quota values for both tiers), rebuild (home dataset preserved and re-attached), destroy, NAT port forward, egress/connection-rate rules, port-25 block.
 - **Credential file writes:** correct per-agent paths for all four agents, mode `0600`, owner `dev`; `refresh-credentials` rewrites without restart; removal on credential deletion.
 - **MOTD rendering:** checklist reflects exactly the connected/missing credential set; updates after a `refresh-credentials`/`sync-keys` job.
 - **Boot resync:** given a fake Incus state diverging from expected state, the daemon reports the diff the reconciler needs; port forwards and limits re-application is idempotent.
@@ -539,7 +540,7 @@ A build is releasable when it satisfies **all** of the following. Each criterion
 
 ### L3 — Contract tests (shared golden fixtures)
 
-- A signed RPC request generated by the TS Worker code **verifies in the Go daemon code**, and vice-versa for responses; a sealed credential payload produced by TS **opens in Go**. Fixtures are committed golden files; a change on either side that breaks the wire format fails CI on both sides.
+- A signed RPC request generated by the Worker code **verifies in the daemon code**, and vice-versa for responses; a sealed credential payload produced on the control-plane side **opens on the daemon side**. Because both run on the shared contract package, these tests primarily guard against the two runtimes (Workers vs. Node) diverging — e.g. Web Crypto vs. Node `crypto` — and against unintended edits to the shared package. Fixtures are committed golden files; a change on either side that breaks the wire format fails CI on both sides.
 - JSON schemas for every job `op` payload and `stats`/`health` responses, validated by both suites.
 
 ### L4 — Control-plane integration tests (Miniflare, mocked externals)
@@ -596,7 +597,7 @@ Runs the M0–M4 stack (§20) via the public API plus a real SSH client; asserts
 
 | Stage | Contents | Trigger | Budget |
 |---|---|---|---|
-| PR gate | L1 + L2 + L3 + L4, lint, typecheck, `go vet` | Every PR | ≤ 5 min |
+| PR gate | L1 + L2 + L3 + L4, lint, typecheck (both packages) | Every PR | ≤ 5 min |
 | Nightly | L5 + L6 on the dev box (fresh daemon deploy via the bootstrap role — which regression-tests the runbook itself) | Nightly | ≤ 45 min |
 | Pre-release | Full L1–L7 + manual checklist (real Orb verify, real GitHub App smoke, real email send, AC12 host bootstrap) | Before each release | — |
 
@@ -664,7 +665,7 @@ The daemon + Incus + ZFS layer needs a Linux environment, not a dedicated server
 
 ### Local toolchain
 
-- **Node + wrangler** (Workers/Pages/D1), **Go** (daemon), **Ansible** (bootstrap role), **Stripe CLI**.
+- **Node + wrangler** (Workers/Pages/D1), **Hono-on-Node** (host daemon — same framework as the control-plane Worker; long-running under systemd on the host), **Ansible** (bootstrap role), **Stripe CLI**.
 - **Tunnel** (`cloudflared` or similar) so World ID redirects, GitHub App callbacks, and Stripe webhooks reach the dev machine.
 - **Internal dev CA** (mkcert or scripted openssl) for the daemon server cert + Worker client cert during development; production certs are issued by the bootstrap runbook. The X25519 sealed-box layer is a library concern (libsodium-style), not infrastructure — cover it with test vectors.
 
