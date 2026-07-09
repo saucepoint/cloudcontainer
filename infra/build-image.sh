@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Build the `codestation-base` Incus image (SPEC §10 container): Debian 13 with
+# the full toolchain, sshd hardened to pubkey-only, non-root `dev` user with
+# passwordless sudo, and system-wide Node 22 so agent installs survive home-
+# volume swaps. Re-run monthly to rebake agent/toolchain versions.
+set -euo pipefail
+
+NAME=cs-image-build
+ALIAS="${ALIAS:-codestation-base}"
+BASE="${BASE:-images:debian/13}"
+
+incus delete -f "$NAME" 2>/dev/null || true
+incus launch "$BASE" "$NAME"
+
+echo "waiting for network…"
+for i in $(seq 1 60); do
+  incus exec "$NAME" -- sh -c 'getent hosts deb.debian.org >/dev/null 2>&1' && break
+  sleep 2
+done
+
+incus exec "$NAME" -- sh -eu <<'SETUP'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq \
+  openssh-server sudo git gh build-essential python3 python3-venv \
+  curl zsh tmux ripgrep fd-find jq unzip sqlite3 ca-certificates gnupg \
+  unattended-upgrades locales
+
+# uv (python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+# Node 22 system-wide (agents live in /usr/lib/node_modules, not $HOME,
+# so they survive home-volume swaps and rebuilds)
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y -qq nodejs
+
+# fd symlink (debian names it fdfind)
+ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+
+# dev user: passwordless sudo, no password auth anywhere
+useradd -m -s /bin/zsh dev || true
+usermod -aG sudo dev
+echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
+chmod 440 /etc/sudoers.d/dev
+passwd -l dev
+
+# sshd: pubkey-only (spec §12), no root login
+cat > /etc/ssh/sshd_config.d/codestation.conf <<'SSHD'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers dev
+PrintMotd yes
+SSHD
+systemctl enable ssh
+
+# Per-container SSH host keys: strip the baked ones so every container
+# generates its own on first boot. A dedicated oneshot ordered before
+# ssh.service (a drop-in ExecStartPre would run after Debian's `sshd -t`
+# check, which fails while keys are missing).
+cat > /etc/systemd/system/ssh-host-keys.service <<'UNIT'
+[Unit]
+Description=Generate SSH host keys if missing
+Before=ssh.service
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+mkdir -p /etc/systemd/system/ssh.service.d
+cat > /etc/systemd/system/ssh.service.d/host-keys.conf <<'UNIT'
+[Unit]
+Wants=ssh-host-keys.service
+After=ssh-host-keys.service
+UNIT
+systemctl enable ssh-host-keys
+
+# MOTD is fully daemon-managed
+rm -f /etc/update-motd.d/* 2>/dev/null || true
+echo "" > /etc/motd
+
+apt-get clean
+rm -f /etc/ssh/ssh_host_*
+SETUP
+
+incus stop "$NAME"
+incus publish "$NAME" --alias "$ALIAS" --reuse
+incus delete "$NAME"
+echo "image '$ALIAS' published."

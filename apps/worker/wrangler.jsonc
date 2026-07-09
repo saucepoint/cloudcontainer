@@ -1,0 +1,54 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "codestation",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "codestation",
+      "database_id": "28516f87-bfbc-435b-a2b8-faf0fbc07757",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "8d9659fdccfa4c8f9497e65c0a17ee19"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    // Public base URL of the deployed dashboard (no trailing slash).
+    "BASE_URL": "https://codestation.saucepoint.workers.dev",
+    // World ID app from the Worldcoin Developer Portal (public identifier).
+    // Must be upgraded to World ID 4.0 (Developer Portal → "Enable World ID 4.0" banner)
+    // before RP_SIGNING_KEY/WORLD_ID_RP_ID below are valid.
+    "WORLD_ID_APP_ID": "app_21d4835daba5b66694f08b17d898d4b1",
+    // World ID 4.0 RP id, minted alongside the signing key when the app is
+    // registered/upgraded for v4 (Developer Portal → configure_world_id). Public identifier.
+    "WORLD_ID_RP_ID": "rp_acfc6b195c1110a6",
+    // Set to "1" ONLY for local development: enables /auth/dev login bypass.
+    "DEV_AUTH": "0",
+    // GitHub App OAuth client id; leave empty to hide the GitHub connect flow.
+    "GITHUB_APP_CLIENT_ID": ""
+  }
+  // Secrets (set via `wrangler secret put <NAME>`):
+  //   RP_SIGNING_KEY           — World ID 4.0 RP signing key (Developer Portal →
+  //                              configure_world_id; returned once, rotate via
+  //                              rotate_world_id_signing_key if lost)
+  //   CREDENTIAL_MASTER_KEY    — base64 32-byte key (npx tsx scripts/genkeys.ts)
+  //   NULLIFIER_HMAC_KEY       — base64 32-byte key for the ban table
+  //   WORKER_RPC_PRIVATE_KEY   — base64 Ed25519 private key for daemon RPC signing
+  //   GITHUB_APP_CLIENT_SECRET — GitHub App client secret (optional)
+  //   DEV_AUTH_TOKEN           — optional: enables /auth/dev?token=<value> on the
+  //                              deployment (World ID bypass for testing; delete the
+  //                              secret to turn it off)
+}
