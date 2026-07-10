@@ -1,5 +1,12 @@
 import { Hono } from "hono";
-import { AGENTS, toHex, type JobOp, type LlmKeys } from "@codestation/contract";
+import {
+  AGENTS,
+  INPUT_LIMITS,
+  LLM_PROVIDERS,
+  toHex,
+  type JobOp,
+  type LlmKeys,
+} from "@codestation/contract";
 import { requireUnrevokedSession, requireUser } from "./auth.js";
 import { revokeSession, sha256Hex } from "./sessions.js";
 import {
@@ -26,7 +33,7 @@ const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 
 export function validPubkey(key: string): boolean {
-  return SSH_KEY_RE.test(key.trim()) && key.trim().length < 4096;
+  return SSH_KEY_RE.test(key.trim()) && key.trim().length < INPUT_LIMITS.sshKeyBytes;
 }
 
 /** Parse a JSON request body; null (never a throw) on malformed input. */
@@ -39,12 +46,86 @@ async function insertSshKey(
   userId: string,
   label: string,
   pubkey: string,
-): Promise<void> {
-  await env.DB.prepare(
-    "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
+): Promise<"inserted" | "duplicate" | "limit"> {
+  const normalized = pubkey.trim();
+  const existing = await env.DB.prepare(
+    "SELECT id FROM ssh_keys WHERE user_id = ? AND pubkey = ? LIMIT 1",
   )
-    .bind(userId, label.slice(0, 64), pubkey.trim(), Date.now())
+    .bind(userId, normalized)
+    .first();
+  if (existing) return "duplicate";
+  const count = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM ssh_keys WHERE user_id = ?",
+  )
+    .bind(userId)
+    .first<{ count: number }>();
+  if ((count?.count ?? 0) >= INPUT_LIMITS.sshKeysPerAccount) return "limit";
+  const inserted = await env.DB.prepare(
+    "INSERT OR IGNORE INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(userId, label.slice(0, 64), normalized, Date.now())
     .run();
+  return inserted.meta.changes ? "inserted" : "duplicate";
+}
+
+interface CredentialInput {
+  llmKeys?: Record<string, unknown>;
+  cloudflareToken?: unknown;
+}
+
+interface NormalizedCredentialInput {
+  llmKeys: Record<string, string>;
+  cloudflareToken?: string;
+}
+
+/** Validate credential names, types, and sizes before encrypting user input. */
+function normalizeCredentialInput(
+  input: CredentialInput,
+): { value: NormalizedCredentialInput } | { error: string } {
+  if (
+    input.llmKeys !== undefined &&
+    (!input.llmKeys || typeof input.llmKeys !== "object" || Array.isArray(input.llmKeys))
+  ) {
+    return { error: "llmKeys must be an object" };
+  }
+
+  const llmKeys: Record<string, string> = {};
+  for (const [provider, raw] of Object.entries(input.llmKeys ?? {})) {
+    if (!LLM_PROVIDERS.includes(provider as (typeof LLM_PROVIDERS)[number])) {
+      return { error: `unknown model provider: ${provider || "(empty)"}` };
+    }
+    if (typeof raw !== "string") return { error: `credential for ${provider} must be text` };
+    const value = raw.trim();
+    const max =
+      provider === "codex_subscription_token"
+        ? INPUT_LIMITS.codexAuthBytes
+        : INPUT_LIMITS.tokenBytes;
+    if (value.length > max) return { error: `credential for ${provider} is too large` };
+    if (provider === "codex_subscription_token" && value) {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+      } catch {
+        return { error: "Codex auth.json must be a valid JSON object" };
+      }
+    }
+    llmKeys[provider] = value;
+  }
+
+  if (input.cloudflareToken !== undefined && typeof input.cloudflareToken !== "string") {
+    return { error: "Cloudflare token must be text" };
+  }
+  const cloudflareToken =
+    typeof input.cloudflareToken === "string" ? input.cloudflareToken.trim() : undefined;
+  if (cloudflareToken && cloudflareToken.length > INPUT_LIMITS.cloudflareTokenBytes) {
+    return { error: "Cloudflare token is too large" };
+  }
+  return {
+    value: {
+      llmKeys,
+      ...(cloudflareToken !== undefined ? { cloudflareToken } : {}),
+    },
+  };
 }
 
 /** `ssh -p <port> dev@<host>` for a placed container, or null if it has no host/port yet. */
@@ -63,6 +144,7 @@ interface ContainerView {
   cpu: number;
   ramMb: number;
   diskGb: number;
+  rootDiskGb: number;
   sshCommand: string | null;
   hostKeyFingerprints: string[];
   createdAt: number;
@@ -86,6 +168,7 @@ async function containerView(
     cpu: container.cpu,
     ramMb: container.ram_mb,
     diskGb: container.disk_gb,
+    rootDiskGb: container.disk_gb,
     sshCommand,
     hostKeyFingerprints: container.host_key_fingerprints
       ? (JSON.parse(container.host_key_fingerprints) as string[])
@@ -93,6 +176,39 @@ async function containerView(
     createdAt: container.created_at,
     job: job ? { id: job.id, op: job.op, status: job.status, error: job.error } : null,
     allowedOps: allowedUserOps(container.status),
+  };
+}
+
+async function currentContainerView(env: Bindings, userId: string): Promise<ContainerView | null> {
+  const container = await getContainerForUser(env, userId);
+  if (!container) return null;
+  let job = await latestJob(env, container.id);
+  if (job && (job.status === "queued" || job.status === "running")) {
+    job = await refreshJob(env, job);
+  }
+  // A completed destroy removes the row while its job is being refreshed.
+  const fresh = await getContainerForUser(env, userId);
+  return fresh ? containerView(env, fresh, job) : null;
+}
+
+async function sshKeysView(env: Bindings, userId: string) {
+  const rows = await env.DB.prepare(
+    "SELECT id, label, pubkey, created_at FROM ssh_keys WHERE user_id = ? ORDER BY created_at, id",
+  )
+    .bind(userId)
+    .all();
+  return rows.results;
+}
+
+async function credentialsView(env: Bindings, userId: string) {
+  const row = await getCredentialsRow(env, userId);
+  const llm = decryptLlmKeys(env, row);
+  // Presence only — credential values never leave the control plane.
+  return {
+    llm: Object.fromEntries(Object.keys(llm).map((key) => [key, true])),
+    cloudflare: Boolean(row?.cloudflare_token),
+    github: row?.github_login ?? (row?.github_token ? "connected" : null),
+    githubAvailable: githubConfigured(env),
   };
 }
 
@@ -104,8 +220,8 @@ export const apiRoutes = new Hono<AppContext>()
     const body = await readJson<{
       agents?: string[];
       sshPubkey?: string;
-      llmKeys?: Record<string, string>;
-      cloudflareToken?: string;
+      llmKeys?: Record<string, unknown>;
+      cloudflareToken?: unknown;
     }>(c);
     const requested = new Set(Array.isArray(body?.agents) ? body!.agents : []);
     // Normalize to canonical order; reject empty or unknown picks.
@@ -116,25 +232,41 @@ export const apiRoutes = new Hono<AppContext>()
     const existing = await getContainerForUser(c.env, user.id);
     if (existing) return c.json({ error: "container already exists" }, 409);
 
+    if (body.sshPubkey !== undefined && typeof body.sshPubkey !== "string") {
+      return c.json({ error: "SSH public key must be text" }, 400);
+    }
     const pubkey = body.sshPubkey?.trim();
     if (pubkey && !validPubkey(pubkey)) {
       return c.json({ error: "that does not look like an SSH public key" }, 400);
     }
-    if (body.cloudflareToken) {
-      const ok = await validateCloudflareToken(body.cloudflareToken).catch(() => false);
+    const normalized = normalizeCredentialInput(body);
+    if ("error" in normalized) return c.json({ error: normalized.error }, 400);
+    if (normalized.value.cloudflareToken) {
+      let ok: boolean;
+      try {
+        ok = await validateCloudflareToken(normalized.value.cloudflareToken);
+      } catch {
+        return c.json(
+          { error: "Cloudflare validation is temporarily unavailable; remove the token to launch now" },
+          503,
+        );
+      }
       if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
     }
 
     if (pubkey) {
-      await insertSshKey(c.env, user.id, "onboarding", pubkey);
+      const inserted = await insertSshKey(c.env, user.id, "onboarding", pubkey);
+      if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
     }
     const llmKeys = Object.fromEntries(
-      Object.entries(body.llmKeys ?? {}).filter(([, v]) => typeof v === "string" && v.trim()),
+      Object.entries(normalized.value.llmKeys).filter(([, value]) => value),
     );
-    if (Object.keys(llmKeys).length > 0 || body.cloudflareToken) {
+    if (Object.keys(llmKeys).length > 0 || normalized.value.cloudflareToken) {
       await upsertCredentials(c.env, user.id, {
         llmKeys,
-        ...(body.cloudflareToken ? { cloudflareToken: body.cloudflareToken } : {}),
+        ...(normalized.value.cloudflareToken
+          ? { cloudflareToken: normalized.value.cloudflareToken }
+          : {}),
       });
     }
 
@@ -145,17 +277,18 @@ export const apiRoutes = new Hono<AppContext>()
 
   // ------------------------------------------------------------------ status poll
   .get("/api/container", requireUser, async (c) => {
-    const user = c.get("user");
-    const container = await getContainerForUser(c.env, user.id);
-    if (!container) return c.json({ container: null });
-    let job = await latestJob(c.env, container.id);
-    if (job && (job.status === "queued" || job.status === "running")) {
-      job = await refreshJob(c.env, job);
-    }
-    const fresh = (await getContainerForUser(c.env, user.id)) ?? container;
-    // Destroy completed -> row is gone.
-    if (!fresh) return c.json({ container: null });
-    return c.json({ container: await containerView(c.env, fresh, job) });
+    return c.json({ container: await currentContainerView(c.env, c.get("user").id) });
+  })
+
+  // One authenticated round trip for the dashboard's initial, mostly-static state.
+  .get("/api/dashboard", requireUser, async (c) => {
+    const userId = c.get("user").id;
+    const [container, credentials, keys] = await Promise.all([
+      currentContainerView(c.env, userId),
+      credentialsView(c.env, userId),
+      sshKeysView(c.env, userId),
+    ]);
+    return c.json({ container, credentials, keys });
   })
 
   // ------------------------------------------------------------------ actions
@@ -190,22 +323,21 @@ export const apiRoutes = new Hono<AppContext>()
 
   // ------------------------------------------------------------------ ssh keys
   .get("/api/keys", requireUser, async (c) => {
-    const rows = await c.env.DB.prepare(
-      "SELECT id, label, pubkey, created_at FROM ssh_keys WHERE user_id = ?",
-    )
-      .bind(c.get("user").id)
-      .all();
-    return c.json({ keys: rows.results });
+    return c.json({ keys: await sshKeysView(c.env, c.get("user").id) });
   })
   .post("/api/keys", requireUser, async (c) => {
     const body = await readJson<{ pubkey?: string; label?: string }>(c);
-    const pubkey = body?.pubkey?.trim();
+    if (body?.label !== undefined && typeof body.label !== "string") {
+      return c.json({ error: "key label must be text" }, 400);
+    }
+    const pubkey = typeof body?.pubkey === "string" ? body.pubkey.trim() : undefined;
     if (!pubkey || !validPubkey(pubkey)) {
       return c.json({ error: "invalid SSH public key" }, 400);
     }
-    await insertSshKey(c.env, c.get("user").id, body?.label ?? "", pubkey);
+    const inserted = await insertSshKey(c.env, c.get("user").id, body?.label ?? "", pubkey);
+    if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
     await enqueueJobForUser(c.env, c.get("user").id, "sync-keys");
-    return c.json({ ok: true });
+    return c.json({ ok: true, duplicate: inserted === "duplicate" });
   })
   .delete("/api/keys/:id", requireUser, async (c) => {
     await c.env.DB.prepare("DELETE FROM ssh_keys WHERE id = ? AND user_id = ?")
@@ -217,33 +349,27 @@ export const apiRoutes = new Hono<AppContext>()
 
   // ------------------------------------------------------------------ credentials
   .get("/api/credentials", requireUser, async (c) => {
-    const row = await getCredentialsRow(c.env, c.get("user").id);
-    const llm = decryptLlmKeys(c.env, row);
-    // Presence only — never the values.
-    return c.json({
-      llm: Object.fromEntries(Object.keys(llm).map((k) => [k, true])),
-      cloudflare: Boolean(row?.cloudflare_token),
-      github: row?.github_login ?? (row?.github_token ? "connected" : null),
-      githubAvailable: githubConfigured(c.env),
-    });
+    return c.json(await credentialsView(c.env, c.get("user").id));
   })
   .post("/api/credentials", requireUser, async (c) => {
-    const body = await readJson<{
-      llmKeys?: Record<string, string>;
-      cloudflareToken?: string;
-    }>(c);
+    const body = await readJson<CredentialInput>(c);
     if (!body) return c.json({ error: "bad request" }, 400);
-    if (body.cloudflareToken) {
-      const ok = await validateCloudflareToken(body.cloudflareToken).catch(() => false);
+    const normalized = normalizeCredentialInput(body);
+    if ("error" in normalized) return c.json({ error: normalized.error }, 400);
+    if (normalized.value.cloudflareToken) {
+      let ok: boolean;
+      try {
+        ok = await validateCloudflareToken(normalized.value.cloudflareToken);
+      } catch {
+        return c.json({ error: "Cloudflare validation is temporarily unavailable" }, 503);
+      }
       if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
     }
-    const llmKeys: LlmKeys = {};
-    for (const [k, v] of Object.entries(body.llmKeys ?? {})) {
-      if (typeof v === "string") (llmKeys as Record<string, string>)[k] = v.trim();
-    }
     await upsertCredentials(c.env, c.get("user").id, {
-      llmKeys: llmKeys as Record<string, string>,
-      ...(body.cloudflareToken !== undefined ? { cloudflareToken: body.cloudflareToken } : {}),
+      llmKeys: normalized.value.llmKeys as LlmKeys,
+      ...(normalized.value.cloudflareToken !== undefined
+        ? { cloudflareToken: normalized.value.cloudflareToken }
+        : {}),
     });
     // Applies live — key rotation must not wait for a reboot (§5 U5).
     await pushCredentialsToContainer(c.env, c.get("user").id);
@@ -270,7 +396,12 @@ export const apiRoutes = new Hono<AppContext>()
   // Public: a local agent redeems the one-time token to register a pubkey.
   .post("/api/enroll", async (c) => {
     const body = await readJson<{ token?: string; pubkey?: string }>(c);
-    if (!body?.token || !body.pubkey || !validPubkey(body.pubkey)) {
+    if (
+      typeof body?.token !== "string" ||
+      !body.token ||
+      typeof body.pubkey !== "string" ||
+      !validPubkey(body.pubkey)
+    ) {
       return c.json({ error: "token and a valid SSH public key are required" }, 400);
     }
     const hash = await sha256Hex(body.token);
@@ -290,12 +421,13 @@ export const apiRoutes = new Hono<AppContext>()
       .run();
     if (!marked.meta.changes) return c.json({ error: "invalid or expired token" }, 403);
 
-    await insertSshKey(c.env, row.user_id, "enrolled", body.pubkey);
+    const inserted = await insertSshKey(c.env, row.user_id, "enrolled", body.pubkey);
+    if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
     await enqueueJobForUser(c.env, row.user_id, "sync-keys");
 
     const container = await getContainerForUser(c.env, row.user_id);
     const sshCommand = container ? await sshCommandFor(c.env, container) : null;
-    return c.json({ ok: true, sshCommand });
+    return c.json({ ok: true, duplicate: inserted === "duplicate", sshCommand });
   })
 
   // ------------------------------------------------------------------ account deletion (U8)

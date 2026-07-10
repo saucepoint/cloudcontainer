@@ -105,6 +105,62 @@ describe("grace expiry (suspended + 7 days -> destroy)", () => {
   });
 });
 
+describe("waitlist admission", () => {
+  it("admits users FIFO when capacity returns and reserves host resources once", async () => {
+    const { env } = makeEnv();
+    const first = await seedUser(env, "first");
+    const second = await seedUser(env, "second");
+    await seedHost(env, {
+      ram_total_mb: 4096,
+      ram_reserve_mb: 2048,
+      disk_total_gb: 16,
+      daemon_pubkey: generateX25519Keypair().publicKey,
+    });
+    await seedContainer(env, {
+      id: "container-first",
+      user_id: first.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+      created_at: 1000,
+    });
+    await seedContainer(env, {
+      id: "container-second",
+      user_id: second.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+      created_at: 2000,
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('first', 1000), ('second', 2000)",
+    ).run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route, statsRoute([]));
+
+    await reconcile(env, () => 10_000);
+
+    const rows = await env.DB.prepare(
+      "SELECT user_id, host_id, status FROM containers ORDER BY created_at",
+    ).all<{ user_id: string; host_id: string | null; status: string }>();
+    expect(rows.results).toEqual([
+      { user_id: "first", host_id: "host-1", status: "provisioning" },
+      { user_id: "second", host_id: null, status: "waitlisted" },
+    ]);
+    const host = await env.DB.prepare(
+      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    const admitted = await env.DB.prepare(
+      "SELECT admitted_at FROM waitlist WHERE user_id = 'first'",
+    ).first<{ admitted_at: number }>();
+    expect(admitted?.admitted_at).toBe(10_000);
+    expect(daemon.submitted).toMatchObject([
+      { op: "provision", containerId: "container-first" },
+    ]);
+  });
+});
+
 describe("drift correction (D1 <-> incus)", () => {
   it("adopts the host's actual state when D1 disagrees", async () => {
     const { env } = makeEnv();

@@ -81,12 +81,14 @@ describe("POST /api/provision", () => {
 
   it("rejects a malformed SSH key without creating anything", async () => {
     const { env, headers } = await setup();
-    const res = await app().request(
-      "/api/provision",
-      json({ agents: ["claude"], sshPubkey: "not-a-key" }, headers),
-      env,
-    );
-    expect(res.status).toBe(400);
+    for (const sshPubkey of ["not-a-key", 42]) {
+      const res = await app().request(
+        "/api/provision",
+        json({ agents: ["claude"], sshPubkey }, headers),
+        env,
+      );
+      expect(res.status).toBe(400);
+    }
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
 
@@ -98,7 +100,7 @@ describe("POST /api/provision", () => {
         {
           agents: ["codex", "claude"],
           sshPubkey: PUBKEY,
-          llmKeys: { anthropic: "CANARY-llm", "": "  " },
+          llmKeys: { anthropic: "CANARY-llm" },
           cloudflareToken: "cf-token",
         },
         headers,
@@ -145,6 +147,27 @@ describe("POST /api/provision", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("explains that launch can continue without the token when Cloudflare is unavailable", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    const headers = await login(env, user);
+    stubFetch(() => {
+      throw new Error("Cloudflare outage");
+    });
+
+    const res = await app().request(
+      "/api/provision",
+      json({ agents: ["claude"], cloudflareToken: "valid-looking" }, headers),
+      env,
+    );
+    expect(res.status).toBe(503);
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: expect.stringContaining("remove the token to launch now"),
+    });
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+  });
 });
 
 describe("GET /api/container", () => {
@@ -169,6 +192,35 @@ describe("GET /api/container", () => {
     expect(container.sshCommand).toBe("ssh -p 30500 dev@host-1.codestation.test");
     expect(container.allowedOps).toContain("stop");
     expect(container.hostKeyFingerprints).toEqual(["fp1"]);
+  });
+});
+
+describe("GET /api/dashboard", () => {
+  it("returns the initial container, credential-presence, and key state together", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, 'laptop', ?, ?)",
+    )
+      .bind(user.id, PUBKEY, Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/dashboard", { headers }, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      container: { status: string; sshCommand: string };
+      credentials: { llm: Record<string, boolean>; cloudflare: boolean };
+      keys: Array<{ label: string; pubkey: string }>;
+    };
+    expect(body.container).toMatchObject({
+      status: "running",
+      sshCommand: "ssh -p 30500 dev@host-1.codestation.test",
+    });
+    expect(body.credentials).toMatchObject({ llm: {}, cloudflare: false });
+    expect(body.keys).toMatchObject([{ label: "laptop", pubkey: PUBKEY }]);
   });
 });
 
@@ -236,6 +288,19 @@ describe("POST /api/container/:op", () => {
 });
 
 describe("SSH key management", () => {
+  it("treats adding the same public key twice as idempotent", async () => {
+    const { env } = makeEnv();
+    const headers = await login(env, await seedUser(env));
+
+    expect((await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env)).status).toBe(
+      200,
+    );
+    const duplicate = await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env);
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({ ok: true, duplicate: true });
+    expect((await env.DB.prepare("SELECT * FROM ssh_keys").all()).results).toHaveLength(1);
+  });
+
   it("adds a key, syncs it live, lists it, then deletes it", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -267,8 +332,10 @@ describe("SSH key management", () => {
   it("rejects invalid keys", async () => {
     const { env } = makeEnv();
     const headers = await login(env, await seedUser(env));
-    const res = await app().request("/api/keys", json({ pubkey: "junk" }, headers), env);
-    expect(res.status).toBe(400);
+    for (const body of [{ pubkey: "junk" }, { pubkey: 42 }, { pubkey: PUBKEY, label: 42 }]) {
+      const res = await app().request("/api/keys", json(body, headers), env);
+      expect(res.status).toBe(400);
+    }
   });
 
   it("cannot delete another user's key", async () => {
@@ -306,6 +373,54 @@ describe("credentials endpoint", () => {
     const body = await res.json();
     expect(body).toMatchObject({ llm: { openai: true }, cloudflare: true, github: null });
     expect(JSON.stringify(body)).not.toContain("CANARY-");
+  });
+
+  it("rejects unknown providers, non-text values, oversized secrets, and invalid auth.json", async () => {
+    const { env } = makeEnv();
+    const headers = await login(env, await seedUser(env));
+    const invalidBodies = [
+      { llmKeys: { mystery: "secret" } },
+      { llmKeys: { openai: 123 } },
+      { llmKeys: { openai: "x".repeat(16 * 1024 + 1) } },
+      { llmKeys: { codex_subscription_token: "not json" } },
+      { llmKeys: { codex_subscription_token: "[]" } },
+      { cloudflareToken: { token: "not-text" } },
+    ];
+
+    for (const body of invalidBodies) {
+      const res = await app().request("/api/credentials", json(body, headers), env);
+      expect(res.status).toBe(400);
+    }
+    expect((await env.DB.prepare("SELECT * FROM credentials_encrypted").all()).results).toHaveLength(
+      0,
+    );
+  });
+
+  it("accepts a valid Codex auth.json object and supports empty-string deletion", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+
+    expect(
+      (
+        await app().request(
+          "/api/credentials",
+          json({ llmKeys: { codex_subscription_token: '{"tokens":{"access_token":"x"}}' } }, headers),
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app().request(
+          "/api/credentials",
+          json({ llmKeys: { codex_subscription_token: "" } }, headers),
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    const presence = await app().request("/api/credentials", { headers }, env);
+    expect(await presence.json()).toMatchObject({ llm: {} });
   });
 });
 

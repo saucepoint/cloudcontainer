@@ -21,6 +21,9 @@ export const AGENT_BINARIES: Record<Agent, string> = {
 };
 
 export function installScript(agents: readonly Agent[]): string {
-  const installers = agents.map((a) => AGENT_INSTALLERS[a]);
-  return ["set -e", "export npm_config_loglevel=error", ...installers].join("\n");
+  const fallbacks = agents.map(
+    (agent) =>
+      `command -v ${AGENT_BINARIES[agent]} >/dev/null 2>&1 || ${AGENT_INSTALLERS[agent]}`,
+  );
+  return ["set -e", "export npm_config_loglevel=error", ...fallbacks].join("\n");
 }

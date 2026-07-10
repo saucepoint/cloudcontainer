@@ -1,127 +1,241 @@
 # Codestation
 
-World ID-gated Debian "cloud containers" preconfigured for coding agents
-(Pi / Claude Code / Codex / OpenCode), on Incus hosts, with a Cloudflare
-control plane. Implements [SPEC.md](./SPEC.md) **minus email and Stripe**
-(free tier only; billing/dunning/upgrade flows are stubbed at the state-machine
-level and slot in at M3).
+Codestation provisions a persistent Debian coding environment with Pi, Claude
+Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
+is designed so a beginner can sign in, choose agents, and launch without first
+learning VPS administration.
 
-## Layout
+The current release is a free, World ID-gated service: one Incus system
+container per verified human, reached over public-key SSH. It is intentionally
+described as a cloud container rather than a hardware-isolated VM. Paid plans,
+Stripe, email, backups, and production redundancy are roadmap work, not current
+features. See [SPEC.md](./SPEC.md) for the normative release contract.
 
-```
-packages/contract   shared wire contract: job schemas, X25519 sealed-box +
-                    at-rest crypto, Ed25519 signed-request scheme (runs
-                    identically on Workers and Node — same code, no runtime split)
-apps/worker         control plane: Hono on Cloudflare Workers — World ID login,
-                    onboarding wizard, dashboard (SSR), job orchestration, D1
-                    state, KV sessions, cron reconciler
-apps/daemon         per-host daemon: Hono on Node — verifies signed RPCs, opens
-                    sealed credential payloads in memory, drives incus (provision/
-                    start/stop/rebuild/resize/destroy/sync-keys/refresh-credentials)
-infra/              host bootstrap script, base-image build, runbook
-```
+## Repository layout
 
-## How a signup becomes an SSH login (≤ 5 min)
+    packages/contract   Shared Zod wire schemas, Ed25519 request signing,
+                        X25519 sealed delivery, and at-rest crypto
+    apps/worker         Hono SSR pages and JSON APIs on Cloudflare Workers;
+                        D1, KV sessions, and the Cron reconciler
+    apps/daemon         Hono on Node.js; verifies signed RPC, opens sealed
+                        payloads in memory, and drives local Incus
+    infra               Host bootstrap, base-image build, and operations runbook
 
-1. **Sign in with World ID** (World ID 4.0 Session proof, via IDKit). First
-   sign-in creates the account; `session_id` is stable per (RP, human), so one
-   human = one account, and banned-nullifier HMACs are enforced at signup.
-2. **Wizard** (one required choice): pick one or more agents, optionally paste
-   an SSH public key, LLM API keys / subscription credentials (Claude
-   `setup-token` token, Codex `~/.codex/auth.json`), Cloudflare token. Submit
-   returns immediately; provisioning is an async job.
-3. **Worker** allocates a host + SSH port, writes D1, seals credentials to the
-   host's X25519 key, signs the job request, POSTs it to the daemon.
-4. **Daemon** clones the prebaked `codestation-base` image (Debian 13 +
-   toolchain + sshd hardened to pubkey-only), attaches a per-container home
-   volume (quota'd), adds the NAT proxy device for the SSH port, writes
-   `authorized_keys` + credential files (0600, owned by `dev`) + MOTD
-   checklist, installs the chosen agents idempotently.
-5. **Dashboard** polls, then shows `ssh -p <port> dev@<host>` plus the host-key
-   fingerprints. No key? Mint a one-time enrollment token instead (single-use,
-   1 h TTL) and let your local agent register a key via `POST /api/enroll`.
+There is no separate Pages application. One Worker serves the HTML and APIs.
+
+## User flow
+
+1. The user completes one World ID 4.0 Session proof. The RP-scoped
+   session_id provides both one-human/one-account uniqueness and repeat login.
+2. Onboarding requires only one choice: one or more coding agents. SSH and all
+   model/developer credentials are optional.
+3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
+   any credentials to the selected host, signs the request, and returns HTTP
+   202 immediately.
+4. The daemon clones codestation-base, caps the disposable root disk, attaches
+   the separately capped persistent /home/dev volume, configures SSH and
+   credentials, and verifies the selected agents.
+   All four agents are baked into the image; a missing-only fallback installer
+   runs only for a selected binary that is unexpectedly absent. The selected
+   set drives dashboard and MOTD guidance even though every binary is available.
+5. The dashboard displays clear waiting/building/ready/error states, the SSH
+   command, and host-key fingerprints. If capacity is full, the FIFO waitlist
+   is admitted automatically by the reconciler.
+6. A user without a key can copy an enrollment prompt to a local coding agent.
+   The agent creates a local keypair, sends only the public key with a
+   single-use one-hour token, and configures ssh codestation.
+
+The dashboard loads container, credential-presence, and SSH-key data with one
+aggregate request. While work is active, it polls only container state: every
+five seconds for jobs/transitions and every thirty seconds on the waitlist.
+Polling is non-overlapping, pauses in a hidden tab, and resumes on visibility.
 
 ## Local development
 
-```bash
-npm install
-npm test                      # contract + worker + daemon suites
-npm run typecheck
-# Tests never touch the network or real infra: the worker suite runs against
-# an in-memory SQLite standing in for D1 (same engine, real migrations applied
-# — see apps/worker/test/helpers/env.ts), a Map for KV, and a stubbed fetch
-# for daemon/GitHub/Cloudflare HTTP; the daemon suite injects a fake exec to
-# assert exact incus command construction. Clocks are injected (SPEC §18).
+Requirements: Node.js 22 and npm.
 
-# control plane on Miniflare (D1/KV local):
-cd apps/worker
-npx wrangler d1 migrations apply codestation --local
-npx wrangler dev              # http://localhost:8787 — DEV_AUTH=1 enables /auth/dev
-```
+    npm ci
+    npm run typecheck
+    npm test
 
-`DEV_AUTH=1` (default in the committed `wrangler.jsonc` only if you set it)
-adds a "Dev login" button that skips World ID — never enable it in production.
-To bypass World ID on a *deployment* (e.g. while debugging the World ID
-integration), set a `DEV_AUTH_TOKEN` secret instead and log in via
-`/auth/dev?token=<value>&sub=<any-id>`; no button is shown and the route 404s
-without the token. Delete the secret to close the bypass.
+Prepare local D1 and start the Worker:
 
-To exercise the full provision path locally you need any Linux box/VM with
-Incus (see `infra/RUNBOOK.md`; a file-backed ZFS pool via `ZFS_LOOP_GB=40`
-behaves like the real thing). Register it in your **local** D1 with the SQL the
-bootstrap prints, run `wrangler dev`, and sign up.
+    cd apps/worker
+    npm run db:migrate:local
+    npx wrangler dev --var DEV_AUTH:1
 
-## Deploying the control plane
+The dashboard is normally at http://localhost:8787. DEV_AUTH=1 exposes the
+visible local development login and must not be committed as a deployed value.
+The checked-in Wrangler configuration keeps DEV_AUTH=0.
 
-```bash
-cd apps/worker
-npx wrangler d1 create codestation          # paste id into wrangler.jsonc
-npx wrangler kv namespace create SESSIONS   # paste id into wrangler.jsonc
-npx wrangler d1 migrations apply codestation --remote
+To exercise real provisioning, use a Debian 12/13 Linux box or VM with Incus.
+Bootstrap it with [infra/RUNBOOK.md](./infra/RUNBOOK.md), register the host in
+the local D1 database, then run the Worker locally. A file-backed ZFS pool is
+acceptable only for development.
 
-npx tsx scripts/genkeys.ts                  # prints the four secrets
-npx wrangler secret put CREDENTIAL_MASTER_KEY
-npx wrangler secret put NULLIFIER_HMAC_KEY
-npx wrangler secret put WORKER_RPC_PRIVATE_KEY
-npx wrangler secret put RP_SIGNING_KEY            # from developer.world.org, World ID 4.0
+### Test architecture
 
-# set vars in wrangler.jsonc: BASE_URL (your domain), WORLD_ID_APP_ID, WORLD_ID_RP_ID, DEV_AUTH="0"
-npx wrangler deploy
-```
+The fast suite never contacts live external services or infrastructure:
 
-World ID setup (developer.world.org): create an app (or upgrade an existing
-one via the **Enable World ID 4.0** banner), which mints an `rp_id` and a
-one-time `signing_key` — copy both immediately, the key is shown only once
-(rotate via the Developer Portal if lost). A staging app works with the
-[World App simulator](https://simulator.worldcoin.org) for end-to-end testing
-without an Orb verification.
+- Worker tests use Vitest, an in-memory node:sqlite database with the real
+  migrations, a Map-backed KV double, and intercepted fetch calls.
+- Daemon tests inject command execution and assert the generated Incus commands.
+- Contract tests exercise signing, replay rejection, encryption, sealing,
+  cross-runtime-safe encodings, and tamper failures.
+- GitHub, Cloudflare, World ID, Codex auth endpoints, and daemon HTTP are mocked.
+- CI runs npm ci, npm run typecheck, and npm test on Node.js 22.
 
-Optional GitHub App: register one with callback
-`https://<your-domain>/auth/github/callback`, user-to-server token expiry
-**enabled**, repo-scoped permissions; set `GITHUB_APP_CLIENT_ID` (var) and
-`GITHUB_APP_CLIENT_SECRET` (secret). The reconciler refreshes the ~8 h tokens
-control-plane-side; refresh tokens never reach hosts.
+There is not yet an automated real-Incus nightly suite. Provision-to-SSH,
+firewall, reboot, browser accessibility, and rollback checks are manual release
+evidence listed in SPEC.md.
 
-## Adding a host
+## Control-plane configuration
 
-`infra/RUNBOOK.md`. Summary: rsync repo → `bootstrap.sh` (incus + node +
-nftables baseline + daemon systemd + host keypair) → `build-image.sh` → insert
-the printed `hosts` row. No code changes (AC12).
+apps/worker/wrangler.jsonc declares the deployed Worker, D1 binding, KV binding,
+five-minute Cron trigger, public base URL, and World ID identifiers.
 
-## Deviations from SPEC.md (deliberate, documented)
+Required Worker secrets:
 
-- **No Stripe / no email** (per project owner): free tier only. `suspended`,
-  grace expiry, and `resize` are implemented so billing can attach at M3;
-  upgrade/dunning UI does not exist.
-- **World ID verify:** the spec's separate incognito-action proof assumed the
-  v2 verify API; World ID has since moved to 4.0. The app uses IDKit **Session
-  proofs** alone (`apps/worker/src/worldid.ts`) — `session_id` is already the
-  unique per-(RP, human) identifier, doing double duty as signup uniqueness
-  gate and login — instead of a separate uniqueness-preset verify + OIDC pair.
-- **mTLS:** daemon RPC ships with pinned self-signed TLS + mandatory Ed25519
-  signed requests (nonce + timestamp). Attaching a Workers mTLS-certificate
-  binding is config-only and recommended for production.
-- **Sustained-CPU ceiling & egress bandwidth shaping** are not yet enforced
-  (cgroup hard caps, port-25 block, and connection-rate limits are). TODO at M4.
-- **Daemon job registry is in-memory**; a daemon restart mid-job is converged
-  by the reconciler's stuck-job timeout into `error` + retry.
+- RP_SIGNING_KEY
+- CREDENTIAL_MASTER_KEY
+- NULLIFIER_HMAC_KEY
+- WORKER_RPC_PRIVATE_KEY
+
+Optional secrets:
+
+- GITHUB_APP_CLIENT_SECRET, paired with GITHUB_APP_CLIENT_ID
+- DEV_AUTH_TOKEN, for a controlled deployed development bypass
+
+Generate service keys with:
+
+    cd apps/worker
+    npx tsx scripts/genkeys.ts
+
+The generated Worker RPC public key belongs in each daemon configuration. The
+private half remains a Worker secret.
+
+### First control-plane setup
+
+This is only for a new Cloudflare environment:
+
+    cd apps/worker
+    npx wrangler d1 create codestation
+    npx wrangler kv namespace create SESSIONS
+
+Copy the returned IDs into wrangler.jsonc, then:
+
+    npm run db:migrate:remote
+    npx wrangler secret put CREDENTIAL_MASTER_KEY
+    npx wrangler secret put NULLIFIER_HMAC_KEY
+    npx wrangler secret put WORKER_RPC_PRIVATE_KEY
+    npx wrangler secret put RP_SIGNING_KEY
+    npx wrangler deploy
+
+World ID setup is in the World Developer Portal. The app must use World ID 4.0
+and provide WORLD_ID_APP_ID, WORLD_ID_RP_ID, and the one-time RP signing key.
+A staging World ID app can be exercised with the World simulator.
+
+For optional GitHub authorization, register a GitHub App with callback:
+
+    https://YOUR_BASE_URL/auth/github/callback
+
+Enable expiring user-to-server tokens and request only needed repository
+permissions. The control plane refreshes access tokens; refresh tokens never
+leave it.
+
+## Repeat deployment
+
+Do not recreate D1 or KV for a normal release. From a clean checkout:
+
+    npm ci
+    npm run typecheck
+    npm test
+    npm run db:migrate:remote -w apps/worker
+
+Review migrations before applying them. D1 migrations do not roll back
+automatically; prefer backward-compatible expand-first changes.
+
+If apps/daemon, packages/contract, its dependencies, the systemd unit, or host
+infrastructure changed, release the daemon first using the drain, backup,
+rollback, and verification procedure in [infra/RUNBOOK.md](./infra/RUNBOOK.md).
+A daemon restart clears active in-memory jobs and replay nonces, so never
+restart it while jobs are queued or running.
+
+Then deploy the Worker:
+
+    npm run deploy
+
+Verify:
+
+    curl -fsS -o /dev/null https://codestation.saucepoint.workers.dev/
+    cd apps/worker
+    npx wrangler d1 migrations list codestation --remote
+    npx wrangler deployments list
+
+When a Worker-only release fails, find the prior version in the deployment
+list and roll it back:
+
+    npx wrangler rollback PRIOR_VERSION_ID --message "rollback: reason"
+
+Rolling back Worker code does not reverse D1 migrations or roll back a daemon.
+Shared-contract changes therefore need backward compatibility or an explicitly
+coordinated release.
+
+### Deployed development bypass
+
+Keep DEV_AUTH=0. To enable a token-gated bypass temporarily:
+
+    cd apps/worker
+    npx wrangler secret put DEV_AUTH_TOKEN
+
+Then use:
+
+    https://BASE_URL/auth/dev?token=TOKEN&sub=TEST_ID
+
+The token is a shared bearer secret in the query string and may appear in
+browser history or request metadata. Use it only for controlled development.
+Remove it when finished:
+
+    npx wrangler secret delete DEV_AUTH_TOKEN
+
+Without a matching secret the route returns 404. A successful request creates
+or reuses the dev-prefixed test account and creates a KV session.
+
+## Adding and maintaining hosts
+
+See [infra/RUNBOOK.md](./infra/RUNBOOK.md). In summary:
+
+1. copy the repository to /opt/codestation;
+2. run infra/bootstrap.sh with the host ID and Worker RPC public key;
+3. issue a publicly trusted daemon certificate;
+4. build codestation-base;
+5. register the host in D1; and
+6. complete a real provision-to-SSH check.
+
+Adding a host requires a hosts row, not a code change. Existing-host updates
+must use draining and active-job checks; do not rerun bootstrap blindly.
+
+## Current limitations
+
+- Free tier only; no Stripe, paid upgrade, email, or dunning UI.
+- One small development host; current registered capacity supports one free
+  environment after reserve.
+- Development storage is file-backed ZFS without encryption. Production must
+  use encrypted ZFS and documented key handling.
+- No backups, replication, live migration, or host-failure recovery.
+- Daemon HTTPS is public. Ed25519 signatures and sealed credential payloads are
+  enforced, but mTLS/private networking and ingress restriction are not.
+- Daemon jobs and replay nonces are in memory and are lost on daemon restart.
+- The current certificate-renewal hook restarts the daemon; production should
+  use hot-reload TLS termination or coordinate renewal with active-job checks.
+- Port 25 and new-connection rate limits are enforced; bandwidth shaping and a
+  sustained-CPU ceiling are not.
+- The base image is not automatically rebuilt. Rebuild it for tool/agent/base
+  changes and on the security refresh cadence in the runbook.
+- Agent npm packages currently resolve latest-at-image-build, and fallback
+  installers are also unpinned. Exact pins, recorded build metadata, and an
+  SBOM remain supply-chain hardening work.
+- GitHub is hidden unless a GitHub App is configured.
+- Codex ChatGPT-plan device authorization follows the CLI flow and is not a
+  separately registered third-party OAuth integration; upstream changes may
+  require auth.json paste or in-shell login.

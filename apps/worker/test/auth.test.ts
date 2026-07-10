@@ -43,6 +43,21 @@ describe("signup and login via session identity", () => {
     expect(users.results[0]?.world_id_session_id).toBe("dev|alice");
   });
 
+  it("concurrent completions of the same proof converge on one account", async () => {
+    const { env } = makeEnv({ DEV_AUTH: "1" });
+
+    const responses = await Promise.all([
+      app().request("/auth/dev?sub=racing", {}, env),
+      app().request("/auth/dev?sub=racing", {}, env),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([302, 302]);
+    const users = await env.DB.prepare(
+      "SELECT * FROM users WHERE world_id_session_id = 'dev|racing'",
+    ).all();
+    expect(users.results).toHaveLength(1);
+  });
+
   it("redirects returning users with a container straight to the dashboard", async () => {
     const { env } = makeEnv({ DEV_AUTH: "1" });
     await seedHost(env);

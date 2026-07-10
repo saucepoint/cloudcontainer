@@ -39,6 +39,10 @@ class FakeD1Statement {
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {
+    return this.runSync();
+  }
+
+  runSync(): { success: true; meta: { changes: number } } {
     const info = this.db.prepare(this.sql).run(...this.params);
     return { success: true, meta: { changes: Number(info.changes) } };
   }
@@ -53,8 +57,15 @@ export class FakeD1 {
 
   async batch(statements: FakeD1Statement[]): Promise<unknown[]> {
     const out: unknown[] = [];
-    for (const s of statements) out.push(await s.run());
-    return out;
+    this.db.exec("BEGIN");
+    try {
+      for (const statement of statements) out.push(statement.runSync());
+      this.db.exec("COMMIT");
+      return out;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 
@@ -97,6 +108,7 @@ function migrationsSql(): string {
 
 export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
   const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
   db.exec(migrationsSql());
   const kv = new FakeKV();
   const rpcKeys = generateEd25519Keypair();
@@ -232,8 +244,9 @@ export function fakeDaemon(opts: { failWith?: string } = {}) {
   const submitted: Array<Record<string, unknown>> = [];
   const route: FetchRoute = (url, init) => {
     if (url.pathname === "/jobs" && init.method === "POST") {
-      submitted.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return Response.json({ ok: true }, { status: 202 });
+      const request = JSON.parse(String(init.body)) as Record<string, unknown>;
+      submitted.push(request);
+      return Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 });
     }
     const m = url.pathname.match(/^\/jobs\/(.+)$/);
     if (m) {

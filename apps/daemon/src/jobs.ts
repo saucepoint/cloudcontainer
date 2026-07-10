@@ -16,6 +16,8 @@ export interface JobRecord {
   result: ProvisionResult | null;
 }
 
+export class JobConflictError extends Error {}
+
 export class JobRunner {
   private jobs = new Map<string, JobRecord>();
   private chains = new Map<string, Promise<void>>();
@@ -26,10 +28,20 @@ export class JobRunner {
     return this.jobs.get(jobId);
   }
 
+  /** Number of containers with running or queued work (exposed for health/tests). */
+  pendingContainerCount(): number {
+    return this.chains.size;
+  }
+
   /** Accept and start a job; returns immediately (the daemon replies 202). */
   submit(request: JobRequest): JobRecord {
     const existing = this.jobs.get(request.jobId);
-    if (existing) return existing; // idempotent re-delivery
+    if (existing) {
+      if (existing.containerId !== request.containerId || existing.op !== request.op) {
+        throw new JobConflictError("job id already belongs to a different operation");
+      }
+      return existing; // idempotent re-delivery
+    }
 
     const record: JobRecord = {
       jobId: request.jobId,
@@ -42,21 +54,29 @@ export class JobRunner {
     this.jobs.set(request.jobId, record);
 
     const prev = this.chains.get(request.containerId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      record.status = "running";
-      try {
-        record.result = await this.provisioner.run(request);
-        record.status = "succeeded";
-      } catch (err) {
-        record.status = "failed";
-        // Error strings reference operations/kinds, never credential values.
-        record.error = err instanceof Error ? err.message : "job failed";
-        console.log(
-          JSON.stringify({ event: "job_failed", jobId: record.jobId, op: record.op, error: record.error }),
-        );
-      }
-      this.gc();
-    });
+    const next = prev
+      .then(async () => {
+        record.status = "running";
+        try {
+          record.result = await this.provisioner.run(request);
+          record.status = "succeeded";
+        } catch (err) {
+          record.status = "failed";
+          // Error strings reference operations/kinds, never credential values.
+          record.error = err instanceof Error ? err.message : "job failed";
+          console.log(
+            JSON.stringify({ event: "job_failed", jobId: record.jobId, op: record.op, error: record.error }),
+          );
+        }
+        this.gc();
+      })
+      .finally(() => {
+        // A newer job may already have extended this container's chain. Only
+        // the tail promise is allowed to remove the entry.
+        if (this.chains.get(request.containerId) === next) {
+          this.chains.delete(request.containerId);
+        }
+      });
     this.chains.set(request.containerId, next);
     return record;
   }

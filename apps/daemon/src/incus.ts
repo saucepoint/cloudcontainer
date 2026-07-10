@@ -116,6 +116,18 @@ export class Incus {
     await this.run(["config", "set", name, `limits.memory=${ramMb}MiB`]);
   }
 
+  /** Cap the disposable root filesystem inherited from the default profile. */
+  async setRootDiskLimit(name: string, sizeGb: number): Promise<void> {
+    await this.run([
+      "config",
+      "device",
+      "override",
+      name,
+      "root",
+      `size=${sizeGb}GiB`,
+    ]);
+  }
+
   async attachHome(name: string, pool: string, volume: string): Promise<void> {
     await this.run([
       "config", "device", "add", name, "home", "disk",

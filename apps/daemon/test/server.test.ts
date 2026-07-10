@@ -92,4 +92,25 @@ describe("daemon HTTP API", () => {
     const res = await app.request("/jobs", signedInit("POST", "/jobs", body));
     expect(res.status).toBe(400);
   });
+
+  it("returns 400 for malformed signed JSON", async () => {
+    const app = makeApp();
+    const body = '{"op":"stop"';
+    const res = await app.request("/jobs", signedInit("POST", "/jobs", body));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid job request" });
+  });
+
+  it("rejects reusing a job id for a different operation", async () => {
+    const app = makeApp();
+    const first = JSON.stringify({ op: "stop", jobId: "j-reused", containerId: "c-123" });
+    const conflicting = JSON.stringify({ op: "start", jobId: "j-reused", containerId: "c-123" });
+
+    expect((await app.request("/jobs", signedInit("POST", "/jobs", first))).status).toBe(202);
+    const res = await app.request("/jobs", signedInit("POST", "/jobs", conflicting));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "job id already belongs to a different operation",
+    });
+  });
 });

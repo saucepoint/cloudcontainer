@@ -7,7 +7,7 @@ import {
 } from "@codestation/contract";
 import type { DaemonConfig } from "../src/config.js";
 import { containerName, homeVolumeName, Incus, type ExecFn } from "../src/incus.js";
-import { JobRunner } from "../src/jobs.js";
+import { JobConflictError, JobRunner } from "../src/jobs.js";
 import { Provisioner } from "../src/provisioner.js";
 
 const hostKeys = generateX25519Keypair();
@@ -78,6 +78,9 @@ describe("provision command construction", () => {
     expect(init).toContain("limits.memory=2048MiB");
     expect(init).toContain("boot.autostart=true");
     expect(init).toContain("user.codestation.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    expect(flat).toContain(
+      "config device override cs-aaaaaaaabbbb root size=8GiB",
+    );
     expect(flat).toContainEqual(
       expect.stringContaining("config device add cs-aaaaaaaabbbb home disk pool=default source=home-cs-aaaaaaaabbbb path=/home/dev"),
     );
@@ -126,9 +129,68 @@ describe("provision command construction", () => {
     (req as Extract<JobRequest, { op: "provision" }>).spec.agents = ["claude", "codex", "pi"];
     await provisioner.run(req);
     const install = calls.map((c) => c.args.join(" ")).find((f) => f.includes("npm install -g"));
+    expect(install).toContain("command -v claude");
+    expect(install).toContain("command -v codex");
+    expect(install).toContain("command -v pi");
     expect(install).toContain("@anthropic-ai/claude-code");
     expect(install).toContain("@openai/codex");
     expect(install).toContain("@earendil-works/pi-coding-agent");
+    const selectedAgents = calls.find((call) =>
+      call.args.join(" ").includes("/etc/codestation-agents"),
+    );
+    expect(selectedAgents?.stdin).toBe("claude\ncodex\npi\n");
+  });
+
+  it("cleans a failed rootfs and can retry fresh provision without deleting home", async () => {
+    const calls: Call[] = [];
+    let rootExists = false;
+    let homeExists = false;
+    let failInstall = true;
+    let failCleanupDelete = true;
+    const exec: ExecFn = async (_cmd, args, stdin) => {
+      calls.push({ args, stdin });
+      if (args[0] === "info") {
+        if (!rootExists) throw new Error("not found");
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "storage" && args[1] === "volume" && args[2] === "show") {
+        if (!homeExists) throw new Error("not found");
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "storage" && args[1] === "volume" && args[2] === "create") {
+        homeExists = true;
+      } else if (args[0] === "init") {
+        if (rootExists) throw new Error("container already exists");
+        rootExists = true;
+      } else if (args[0] === "delete") {
+        if (failCleanupDelete) {
+          failCleanupDelete = false;
+          throw new Error("cleanup delete fault");
+        }
+        rootExists = false;
+      } else if (args.join(" ").includes("npm install -g") && failInstall) {
+        failInstall = false;
+        throw new Error("installer fault");
+      }
+      return {
+        stdout: args.join(" ").includes("ssh-keygen") ? "256 SHA256:abc root@cs (ED25519)\n" : "",
+        stderr: "",
+      };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run(provisionRequest())).rejects.toThrow("installer fault");
+    expect(rootExists).toBe(true); // best-effort cleanup was attempted but faulted
+    expect(homeExists).toBe(true);
+
+    await expect(provisioner.run(provisionRequest())).resolves.toMatchObject({
+      hostKeyFingerprints: ["256 SHA256:abc root@cs (ED25519)"],
+    });
+    expect(rootExists).toBe(true);
+    expect(calls.filter((c) => c.args.slice(0, 3).join(" ") === "storage volume create")).toHaveLength(1);
+    expect(calls.filter((c) => c.args[0] === "init")).toHaveLength(2);
+    expect(calls.filter((c) => c.args[0] === "delete")).toHaveLength(2);
+    expect(calls.some((c) => c.args.slice(0, 3).join(" ") === "storage volume delete")).toBe(false);
   });
 
   it("writes a pasted Codex subscription auth.json to ~/.codex, 0600 — never into argv", async () => {
@@ -164,9 +226,43 @@ describe("provision command construction", () => {
     const provisioner = new Provisioner(new Incus(fakeExec([])), makeConfig());
     await expect(provisioner.run(provisionRequest(sealed))).rejects.toThrow();
   });
+
+  it("rejects a decrypted credential payload that does not match the contract", async () => {
+    const sealed = sealJson({ llmKeys: { openai: 42 } }, hostKeys.publicKey);
+    const calls: Call[] = [];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+
+    await expect(provisioner.run(provisionRequest(sealed))).rejects.toThrow(
+      "invalid sealed credential payload",
+    );
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("resize / destroy", () => {
+  it("applies a stopped container's latest key and credential snapshot on start", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { llmKeys: { anthropic: "CANARY-after-stop" } },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+
+    await provisioner.run({
+      op: "start",
+      jobId: "j-start",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      sshKeys: ["ssh-ed25519 AAAA new-laptop"],
+      dashboardUrl: "https://codestation.example",
+      sealedCredentials: sealed,
+    });
+
+    expect(calls[0]?.args.join(" ")).toBe("start cs-aaaaaaaabbbb");
+    expect(calls.some((call) => call.stdin?.includes("ssh-ed25519 AAAA new-laptop"))).toBe(true);
+    expect(calls.some((call) => call.stdin?.includes("CANARY-after-stop"))).toBe(true);
+    expect(calls.some((call) => call.stdin?.includes("https://codestation.example"))).toBe(true);
+  });
+
   it("resize raises cgroup limits and grows the home volume", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
@@ -179,6 +275,7 @@ describe("resize / destroy", () => {
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
+    expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=32GiB");
     expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=32GiB");
   });
 
@@ -198,8 +295,19 @@ describe("job runner", () => {
     const rec = runner.submit(req);
     expect(rec.status === "queued" || rec.status === "running").toBe(true);
     expect(runner.submit(req)).toBe(rec);
+    expect(runner.pendingContainerCount()).toBe(1);
     await new Promise((r) => setTimeout(r, 50));
     expect(runner.get("j-stop")?.status).toBe("succeeded");
+    expect(runner.pendingContainerCount()).toBe(0);
+  });
+
+  it("rejects reusing a job id for a different operation", () => {
+    const runner = new JobRunner(new Provisioner(new Incus(fakeExec([])), makeConfig()));
+    runner.submit({ op: "stop", jobId: "j-reused", containerId: "c-1" });
+
+    expect(() =>
+      runner.submit({ op: "start", jobId: "j-reused", containerId: "c-1" }),
+    ).toThrow(JobConflictError);
   });
 
   it("captures failures with the error message", async () => {

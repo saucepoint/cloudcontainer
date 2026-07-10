@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ContainerSpecSchema,
+  INPUT_LIMITS,
   JobRequestSchema,
   JobStatusResponseSchema,
   LlmKeysSchema,
@@ -61,6 +62,20 @@ describe("JobRequestSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts a start request carrying the latest keys and sealed credential snapshot", () => {
+    expect(
+      JobRequestSchema.safeParse({
+        op: "start",
+        ...base,
+        sshKeys: ["ssh-ed25519 AAAA test"],
+        dashboardUrl: "https://x",
+        sealedCredentials: "abc",
+      }).success,
+    ).toBe(true);
+    // Kept compatible during daemon-first rolling deploys.
+    expect(JobRequestSchema.safeParse({ op: "start", ...base }).success).toBe(true);
+  });
+
   it("requires at least one agent in a spec", () => {
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: [] }).success).toBe(false);
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: ["vim"] }).success).toBe(false);
@@ -77,6 +92,17 @@ describe("LlmKeysSchema", () => {
     expect(LlmKeysSchema.safeParse({}).success).toBe(true);
     expect(LlmKeysSchema.safeParse({ anthropic: "k" }).success).toBe(true);
     expect(LlmKeysSchema.safeParse({ made_up_provider: "k" }).success).toBe(false);
+  });
+
+  it("bounds credential values before they cross the host RPC boundary", () => {
+    expect(
+      LlmKeysSchema.safeParse({ openai: "x".repeat(INPUT_LIMITS.tokenBytes + 1) }).success,
+    ).toBe(false);
+    expect(
+      LlmKeysSchema.safeParse({
+        codex_subscription_token: "x".repeat(INPUT_LIMITS.codexAuthBytes + 1),
+      }).success,
+    ).toBe(false);
   });
 });
 

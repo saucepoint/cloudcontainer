@@ -210,8 +210,9 @@ describe("POST /api/codex/device/poll", () => {
     const jobs: string[] = [];
     stubFetch(openai.route, (url, init) => {
       if (url.pathname === "/jobs" && init.method === "POST") {
-        jobs.push((JSON.parse(String(init.body)) as { op: string }).op);
-        return Response.json({ ok: true }, { status: 202 });
+        const request = JSON.parse(String(init.body)) as { jobId: string; op: string };
+        jobs.push(request.op);
+        return Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 });
       }
       return null;
     });

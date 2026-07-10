@@ -13,7 +13,7 @@ import {
 } from "@codestation/contract";
 import { loadConfig } from "./config.js";
 import { Incus, realExec } from "./incus.js";
-import { JobRunner } from "./jobs.js";
+import { JobConflictError, JobRunner } from "./jobs.js";
 import { Provisioner } from "./provisioner.js";
 
 const VERSION = "0.1.0";
@@ -70,12 +70,25 @@ export function buildApp(opts: {
   });
 
   app.post("/jobs", (c) => {
-    const parsed = JobRequestSchema.safeParse(JSON.parse(c.get("rawBody") || "{}"));
+    let body: unknown;
+    try {
+      body = JSON.parse(c.get("rawBody") || "{}");
+    } catch {
+      return c.json({ error: "invalid job request" }, 400);
+    }
+    const parsed = JobRequestSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "invalid job request" }, 400);
     }
-    const record = runner.submit(parsed.data);
-    return c.json({ jobId: record.jobId, status: record.status }, 202);
+    try {
+      const record = runner.submit(parsed.data);
+      return c.json({ jobId: record.jobId, status: record.status }, 202);
+    } catch (error) {
+      if (error instanceof JobConflictError) {
+        return c.json({ error: error.message }, 400);
+      }
+      throw error;
+    }
   });
 
   app.get("/jobs/:id", (c) => {

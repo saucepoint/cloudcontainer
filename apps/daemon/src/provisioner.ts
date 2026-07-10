@@ -5,6 +5,7 @@
  */
 import {
   AGENTS,
+  CredentialPayloadSchema,
   LLM_PROVIDERS,
   sealOpenJson,
   type Agent,
@@ -42,17 +43,42 @@ export class Provisioner {
 
   private unseal(sealedB64: string | undefined): CredentialPayload {
     if (!sealedB64) return {};
-    return sealOpenJson<CredentialPayload>(sealedB64, this.config.x25519PrivateKey);
+    const opened = sealOpenJson<unknown>(sealedB64, this.config.x25519PrivateKey);
+    const parsed = CredentialPayloadSchema.safeParse(opened);
+    if (!parsed.success) throw new Error("invalid sealed credential payload");
+    return parsed.data;
   }
 
   async run(request: JobRequest): Promise<ProvisionResult | null> {
     const name = containerName(request.containerId);
     switch (request.op) {
       case "provision":
-        return this.provision(request, name, false);
+        return this.provision(request, name);
       case "rebuild":
-        return this.provision(request, name, true);
-      case "start":
+        return this.provision(request, name);
+      case "start": {
+        await this.incus.start(name);
+        // Current Workers attach a full configuration snapshot to start jobs.
+        // This applies key/credential changes made while the container was
+        // stopped before users can rely on the resumed SSH session. Optional
+        // fields keep daemon-first rolling deploys compatible with old Workers.
+        if (request.sshKeys && request.dashboardUrl) {
+          const creds = this.unseal(request.sealedCredentials);
+          await this.writeAuthorizedKeys(name, request.sshKeys);
+          await this.writeCredentials(name, creds);
+          await this.incus.writeFile(
+            name,
+            "/etc/motd",
+            renderMotd({
+              agents: await this.agentsOf(name),
+              credentials: creds,
+              sshKeyCount: request.sshKeys.length,
+              dashboardUrl: request.dashboardUrl,
+            }),
+          );
+        }
+        return null;
+      }
       case "export-window":
         await this.incus.start(name);
         return null;
@@ -61,6 +87,7 @@ export class Provisioner {
         return null;
       case "resize":
         await this.incus.setLimits(name, request.spec.cpu, request.spec.ramMb);
+        await this.incus.setRootDiskLimit(name, request.spec.diskGb);
         await this.incus.resizeHomeVolume(
           this.config.storagePool,
           homeVolumeName(request.containerId),
@@ -102,48 +129,75 @@ export class Provisioner {
   private async provision(
     request: Extract<JobRequest, { op: "provision" | "rebuild" }>,
     name: string,
-    rebuild: boolean,
   ): Promise<ProvisionResult> {
     const { spec, sshKeys, dashboardUrl } = request;
     const creds = this.unseal(request.sealedCredentials);
     const vol = homeVolumeName(request.containerId);
 
-    if (rebuild && (await this.incus.exists(name))) {
-      await this.incus.delete(name); // rootfs is disposable; home volume survives
+    // Both rebuilds and retries of an interrupted fresh provision replace the
+    // disposable rootfs. The separately managed home volume always survives.
+    if (await this.incus.exists(name)) {
+      await this.incus.delete(name);
     }
     if (!(await this.incus.volumeExists(this.config.storagePool, vol))) {
       await this.incus.createHomeVolume(this.config.storagePool, vol, spec.diskGb);
     }
 
-    await this.incus.init(this.config.baseImage, name, request.containerId, spec.cpu, spec.ramMb);
-    await this.incus.attachHome(name, this.config.storagePool, vol);
-    await this.incus.addSshProxy(name, spec.sshPort);
-    await this.incus.start(name);
-    await this.incus.waitReady(name);
+    try {
+      await this.incus.init(this.config.baseImage, name, request.containerId, spec.cpu, spec.ramMb);
+      // The user has passwordless sudo, so the disposable rootfs needs the
+      // same hard cap as the persistent home volume to protect the host pool.
+      await this.incus.setRootDiskLimit(name, spec.diskGb);
+      await this.incus.attachHome(name, this.config.storagePool, vol);
+      await this.incus.addSshProxy(name, spec.sshPort);
+      await this.incus.start(name);
+      await this.incus.waitReady(name);
 
-    // The mounted home volume starts empty (or carries a previous home on
-    // rebuild): make sure it belongs to dev and has a shell skeleton.
-    await this.incus.shell(
-      name,
-      [
-        "chown dev:dev /home/dev",
-        "chmod 750 /home/dev",
-        'su - dev -c "test -f ~/.profile || cp -rT /etc/skel ~ 2>/dev/null || true"',
-      ].join(" && "),
-    );
+      // The mounted home volume starts empty (or carries a previous home on
+      // rebuild): make sure it belongs to dev and has a shell skeleton.
+      await this.incus.shell(
+        name,
+        [
+          "chown dev:dev /home/dev",
+          "chmod 750 /home/dev",
+          'su - dev -c "test -f ~/.profile || cp -rT /etc/skel ~ 2>/dev/null || true"',
+        ].join(" && "),
+      );
 
-    await this.writeAuthorizedKeys(name, sshKeys);
-    await this.writeCredentials(name, creds);
-    await this.incus.writeFile(
-      name,
-      "/etc/motd",
-      renderMotd({ agents: spec.agents, credentials: creds, sshKeyCount: sshKeys.length, dashboardUrl }),
-    );
+      await this.writeAuthorizedKeys(name, sshKeys);
+      await this.writeCredentials(name, creds);
+      await this.incus.writeFile(
+        name,
+        "/etc/codestation-agents",
+        spec.agents.join("\n") + "\n",
+      );
+      await this.incus.writeFile(
+        name,
+        "/etc/motd",
+        renderMotd({ agents: spec.agents, credentials: creds, sshKeyCount: sshKeys.length, dashboardUrl }),
+      );
 
-    // Idempotent agent installs (upgrade-in-place if present).
-    await this.incus.shell(name, installScript(spec.agents));
+      // Images contain all supported agents. This single fallback script only
+      // reaches npm when an older/custom image is missing a requested binary.
+      await this.incus.shell(name, installScript(spec.agents));
 
-    return { hostKeyFingerprints: await this.incus.hostKeyFingerprints(name) };
+      return { hostKeyFingerprints: await this.incus.hostKeyFingerprints(name) };
+    } catch (error) {
+      // A failed personalization must not leave an SSH proxy or disposable
+      // rootfs behind. Never delete the separately managed home volume.
+      try {
+        if (await this.incus.exists(name)) await this.incus.delete(name);
+      } catch (cleanupError) {
+        console.log(
+          JSON.stringify({
+            event: "provision_cleanup_failed",
+            containerId: request.containerId,
+            error: cleanupError instanceof Error ? cleanupError.message : "cleanup failed",
+          }),
+        );
+      }
+      throw error;
+    }
   }
 
   /** Pubkey-only SSH; no keys -> no authorized_keys file (fail closed, §13). */
@@ -280,7 +334,12 @@ export class Provisioner {
     try {
       const { stdout } = await this.incus.shell(
         name,
-        `for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done; true`,
+        `if test -s /etc/codestation-agents; then
+           cat /etc/codestation-agents
+         else
+           for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done
+         fi
+         true`,
       );
       const found = new Set(stdout.split("\n").map((l) => l.trim()));
       return AGENTS.filter((a) => found.has(a));

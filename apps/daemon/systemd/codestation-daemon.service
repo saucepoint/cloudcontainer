@@ -11,6 +11,8 @@ WorkingDirectory=/opt/codestation/apps/daemon
 ExecStart=/usr/bin/node /opt/codestation/node_modules/.bin/tsx src/index.ts
 Restart=always
 RestartSec=3
+# tsx forwards SIGTERM to Node, which exits 143 during an intentional restart.
+SuccessExitStatus=143
 # The daemon holds decrypted credentials in memory only; keep core dumps off.
 LimitCORE=0
 NoNewPrivileges=false

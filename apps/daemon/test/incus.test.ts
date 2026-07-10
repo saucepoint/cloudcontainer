@@ -69,6 +69,21 @@ describe("Incus.list", () => {
   });
 });
 
+describe("Incus disk limits", () => {
+  it("overrides the inherited root device with a hard size", async () => {
+    const { calls, exec } = capture();
+    await new Incus(exec).setRootDiskLimit("cs-x", 8);
+    expect(calls[0]?.args).toEqual([
+      "config",
+      "device",
+      "override",
+      "cs-x",
+      "root",
+      "size=8GiB",
+    ]);
+  });
+});
+
 describe("Incus.exists / volumeExists", () => {
   it("maps command failure to false", async () => {
     const exec: ExecFn = async () => {

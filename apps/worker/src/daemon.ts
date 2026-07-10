@@ -45,6 +45,14 @@ export async function daemonSubmitJob(
   if (res.status !== 202 && res.status !== 200) {
     throw new Error(`daemon rejected job (${res.status})`);
   }
+  const ack = (await res.json().catch(() => null)) as { jobId?: unknown; status?: unknown } | null;
+  if (
+    !ack ||
+    ack.jobId !== request.jobId ||
+    !["queued", "running", "succeeded", "failed"].includes(String(ack.status))
+  ) {
+    throw new Error("daemon returned an invalid job acknowledgement");
+  }
 }
 
 /** Returns null when the daemon does not know the job (lost to a daemon restart). */
@@ -56,17 +64,23 @@ export async function daemonJobStatus(
   const res = await daemonFetch(env, host, "GET", `/jobs/${jobId}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`daemon job status failed (${res.status})`);
-  return JobStatusResponseSchema.parse(await res.json());
+  const status = JobStatusResponseSchema.parse(await res.json());
+  if (status.jobId !== jobId) throw new Error("daemon returned status for the wrong job");
+  return status;
 }
 
 export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsResponse> {
   const res = await daemonFetch(env, host, "GET", "/stats");
   if (!res.ok) throw new Error(`daemon stats failed (${res.status})`);
-  return StatsResponseSchema.parse(await res.json());
+  const stats = StatsResponseSchema.parse(await res.json());
+  if (stats.hostId !== host.id) throw new Error("daemon stats host identity mismatch");
+  return stats;
 }
 
 export async function daemonHealth(env: Bindings, host: HostRow): Promise<HealthResponse> {
   const res = await daemonFetch(env, host, "GET", "/health");
   if (!res.ok) throw new Error(`daemon health failed (${res.status})`);
-  return HealthResponseSchema.parse(await res.json());
+  const health = HealthResponseSchema.parse(await res.json());
+  if (health.hostId !== host.id) throw new Error("daemon health host identity mismatch");
+  return health;
 }

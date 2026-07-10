@@ -12,7 +12,7 @@ import {
 } from "@codestation/contract";
 import { daemonJobStatus, daemonSubmitJob } from "./daemon.js";
 import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";
-import { allocatePort, quarantinePort } from "./ports.js";
+import { allocatePort } from "./ports.js";
 import { LIFECYCLE_OPS, pendingStatusFor, successStatusFor } from "./state.js";
 import type { Bindings, ContainerRow, HostRow, JobRow, UserRow } from "./types.js";
 
@@ -35,7 +35,7 @@ export async function getJob(env: Bindings, jobId: string): Promise<JobRow | nul
 
 export async function latestJob(env: Bindings, containerId: string): Promise<JobRow | null> {
   return env.DB.prepare(
-    "SELECT * FROM jobs WHERE container_id = ? ORDER BY created_at DESC LIMIT 1",
+    "SELECT * FROM jobs WHERE container_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
   )
     .bind(containerId)
     .first<JobRow>();
@@ -61,6 +61,11 @@ function specOf(container: ContainerRow) {
     diskGb: container.disk_gb,
     sshPort: container.ssh_port ?? 0,
   };
+}
+
+/** Home and disposable rootfs each receive the advertised disk cap. */
+export function diskReservationGb(homeDiskGb: number): number {
+  return homeDiskGb * 2;
 }
 
 /**
@@ -110,7 +115,20 @@ export async function buildJobRequest(
       };
     case "resize":
       return { op, ...base, spec: specOf(container) };
-    case "start":
+    case "start": {
+      const credRow = await getCredentialsRow(env, container.user_id);
+      const payload = buildCredentialPayload(env, credRow);
+      return {
+        op,
+        ...base,
+        sshKeys: await userSshKeys(env, container.user_id),
+        dashboardUrl: env.BASE_URL,
+        // Always send a full snapshot, including an empty one, so managed
+        // environment/GitHub credentials removed while stopped are cleared
+        // before SSH returns.
+        sealedCredentials: sealJson(payload, host.daemon_pubkey),
+      };
+    }
     case "stop":
     case "destroy":
     case "export-window":
@@ -164,8 +182,9 @@ export async function enqueueJob(
 
 /**
  * Enqueue a background op against a user's container, if it exists on a host
- * and is in a steady state (running/stopped). No-op otherwise — used for
- * live credential/key pushes where "no container yet" is not an error.
+ * and is running. Updates made while stopped remain encrypted in D1 and are
+ * applied from a full snapshot by the next `start` job. No-op when there is
+ * no running container — credential/key writes themselves still succeed.
  */
 export async function enqueueJobForUser(
   env: Bindings,
@@ -174,17 +193,20 @@ export async function enqueueJobForUser(
 ): Promise<void> {
   const container = await getContainerForUser(env, userId);
   if (!container?.host_id) return;
-  if (container.status !== "running" && container.status !== "stopped") return;
+  if (container.status !== "running") return;
   const host = await getHost(env, container.host_id);
   if (!host) return;
   await enqueueJob(env, op, container, host);
 }
 
 async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | "op">, error: string) {
-  await env.DB.prepare("UPDATE jobs SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
+  const claimed = await env.DB.prepare(
+    `UPDATE jobs SET status = 'failed', error = ?, updated_at = ?
+     WHERE id = ? AND status IN ('queued','running')`,
+  )
     .bind(error, Date.now(), job.id)
     .run();
-  if (LIFECYCLE_OPS.has(job.op)) {
+  if (claimed.meta.changes && LIFECYCLE_OPS.has(job.op)) {
     await env.DB.prepare("UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?")
       .bind(error, job.container_id)
       .run();
@@ -193,17 +215,28 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
 
 /** Destroy succeeded: free port + host accounting, drop the container row. */
 async function finalizeDestroy(env: Bindings, container: ContainerRow): Promise<void> {
+  const statements = [];
   if (container.host_id && container.ssh_port) {
-    await quarantinePort(env, container.host_id, container.ssh_port);
+    statements.push(
+      env.DB.prepare(
+        "INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
+      ).bind(container.host_id, container.ssh_port, Date.now()),
+    );
   }
   if (container.host_id) {
-    await env.DB.prepare(
-      "UPDATE hosts SET ram_allocated_mb = MAX(0, ram_allocated_mb - ?), disk_allocated_gb = MAX(0, disk_allocated_gb - ?) WHERE id = ?",
-    )
-      .bind(container.ram_mb, container.disk_gb, container.host_id)
-      .run();
+    statements.push(
+      env.DB.prepare(
+        "UPDATE hosts SET ram_allocated_mb = MAX(0, ram_allocated_mb - ?), disk_allocated_gb = MAX(0, disk_allocated_gb - ?) WHERE id = ?",
+      ).bind(container.ram_mb, diskReservationGb(container.disk_gb), container.host_id),
+    );
   }
-  await env.DB.prepare("DELETE FROM containers WHERE id = ?").bind(container.id).run();
+  statements.push(
+    env.DB.prepare("DELETE FROM waitlist WHERE user_id = ?").bind(container.user_id),
+  );
+  statements.push(env.DB.prepare("DELETE FROM containers WHERE id = ?").bind(container.id));
+  // D1 batch executes atomically: port quarantine, accounting, and row removal
+  // cannot be partially applied.
+  await env.DB.batch(statements);
 }
 
 /**
@@ -234,9 +267,15 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
   }
 
   if (status.status === "succeeded") {
-    await env.DB.prepare("UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ?")
+    // Dashboard polling and the cron reconciler may observe the same terminal
+    // result concurrently. Only the caller that wins this CAS may apply side
+    // effects such as releasing host capacity after destroy.
+    const claimed = await env.DB.prepare(
+      "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+    )
       .bind(Date.now(), job.id)
       .run();
+    if (!claimed.meta.changes) return (await getJob(env, job.id)) ?? job;
     if (job.op === "destroy") {
       await finalizeDestroy(env, container);
     } else {
@@ -256,7 +295,25 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
       }
     }
   } else if (status.status === "failed") {
-    await failJob(env, job, status.error ?? "job failed on host");
+    const claimed = await env.DB.prepare(
+      "UPDATE jobs SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+    )
+      .bind(status.error ?? "job failed on host", Date.now(), job.id)
+      .run();
+    if (claimed.meta.changes && LIFECYCLE_OPS.has(job.op)) {
+      await env.DB.prepare("UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?")
+        .bind(status.error ?? "job failed on host", job.container_id)
+        .run();
+    }
+  } else {
+    // A positive daemon heartbeat renews the lease. Long-but-healthy image or
+    // agent work must not time out merely because it exceeds the original
+    // dispatch timestamp.
+    await env.DB.prepare(
+      "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+    )
+      .bind(status.status, Date.now(), job.id)
+      .run();
   }
 
   return (await getJob(env, job.id)) ?? job;
@@ -275,18 +332,16 @@ export async function pickHost(
   ramMb: number,
   diskGb: number,
 ): Promise<HostRow | null> {
-  const hosts = await env.DB.prepare("SELECT * FROM hosts WHERE status = 'active'").all<HostRow>();
-  let best: HostRow | null = null;
-  let bestFree = -1;
-  for (const h of hosts.results) {
-    const freeRam = h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb;
-    const freeDisk = h.disk_total_gb - h.disk_allocated_gb;
-    if (freeRam >= ramMb && freeDisk >= diskGb && freeRam > bestFree) {
-      best = h;
-      bestFree = freeRam;
-    }
-  }
-  return best;
+  return env.DB.prepare(
+    `SELECT * FROM hosts
+     WHERE status = 'active'
+       AND ram_total_mb - ram_reserve_mb - ram_allocated_mb >= ?
+       AND disk_total_gb - disk_allocated_gb >= ?
+     ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC, id
+     LIMIT 1`,
+  )
+    .bind(ramMb, diskGb)
+    .first<HostRow>();
 }
 
 export interface ProvisionInput {
@@ -296,7 +351,7 @@ export interface ProvisionInput {
 /**
  * Create the container row and dispatch the provision job. Returns the
  * container in `provisioning` state, or `waitlisted` when no host has
- * capacity (§10: capacity-exceeded -> waitlist, manual admission).
+ * capacity (§10: the reconciler admits the FIFO waitlist when capacity returns).
  */
 export async function startProvision(
   env: Bindings,
@@ -306,41 +361,78 @@ export async function startProvision(
   const tier = TIERS.free;
   const containerId = crypto.randomUUID();
   const now = Date.now();
+  const agents = JSON.stringify(input.agents);
+  const reservedDiskGb = diskReservationGb(tier.diskGb);
 
-  const host = await pickHost(env, tier.ramMb, tier.diskGb);
-  if (!host) {
-    await env.DB.prepare(
-      `INSERT INTO containers (id, user_id, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
-       VALUES (?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
-    )
-      .bind(containerId, user.id, JSON.stringify(input.agents), tier.cpu, tier.ramMb, tier.diskGb, now)
-      .run();
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO waitlist (user_id, requested_at) VALUES (?, ?)",
-    )
-      .bind(user.id, now)
-      .run();
-    const row = await getContainerForUser(env, user.id);
-    if (!row) throw new Error("container row vanished");
-    return row;
+  // D1 batches are transactional. Capacity is checked in the INSERT itself,
+  // then `changes()` gates host accounting on that INSERT winning. This avoids
+  // oversubscription when two signups race for the last slot. A unique-port
+  // collision rolls the batch back and is retried with a fresh allocation.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const host = await pickHost(env, tier.ramMb, reservedDiskGb);
+    if (!host) break;
+    const port = await allocatePort(env, host.id);
+    try {
+      const results = (await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO containers
+             (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
+           SELECT ?, ?, h.id, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
+           FROM hosts h
+           WHERE h.id = ? AND h.status = 'active'
+             AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
+             AND h.disk_total_gb - h.disk_allocated_gb >= ?`,
+        ).bind(
+          containerId,
+          user.id,
+          port,
+          agents,
+          tier.cpu,
+          tier.ramMb,
+          tier.diskGb,
+          now,
+          host.id,
+          tier.ramMb,
+          reservedDiskGb,
+        ),
+        env.DB.prepare(
+          `UPDATE hosts
+           SET ram_allocated_mb = ram_allocated_mb + ?, disk_allocated_gb = disk_allocated_gb + ?
+           WHERE id = ? AND changes() = 1`,
+        ).bind(tier.ramMb, reservedDiskGb, host.id),
+      ])) as Array<{ meta?: { changes?: number } }>;
+
+      if (!results[0]?.meta?.changes) continue;
+      const container = await getContainerForUser(env, user.id);
+      if (!container) throw new Error("container row vanished");
+      await enqueueJob(env, "provision", container, host);
+      return (await getContainerForUser(env, user.id)) ?? container;
+    } catch (error) {
+      // A duplicate request for the same account is idempotent. Otherwise a
+      // concurrent port allocation may have won; retry from fresh DB state.
+      const existing = await getContainerForUser(env, user.id);
+      if (existing) return existing;
+      if (attempt === 3) throw error;
+    }
   }
 
-  const port = await allocatePort(env, host.id);
-  await env.DB.prepare(
-    `INSERT INTO containers (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
-     VALUES (?, ?, ?, ?, ?, 'free', ?, ?, ?, 'provisioning', ?)`,
-  )
-    .bind(containerId, user.id, host.id, port, JSON.stringify(input.agents), tier.cpu, tier.ramMb, tier.diskGb, now)
-    .run();
-  await env.DB.prepare(
-    "UPDATE hosts SET ram_allocated_mb = ram_allocated_mb + ?, disk_allocated_gb = disk_allocated_gb + ? WHERE id = ?",
-  )
-    .bind(tier.ramMb, tier.diskGb, host.id)
-    .run();
-
-  const container = await getContainerForUser(env, user.id);
-  if (!container) throw new Error("container row vanished");
-  await enqueueJob(env, "provision", container, host);
-  const fresh = await getContainerForUser(env, user.id);
-  return fresh ?? container;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO containers (id, user_id, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
+         VALUES (?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
+      ).bind(containerId, user.id, agents, tier.cpu, tier.ramMb, tier.diskGb, now),
+      env.DB.prepare(
+        `INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, NULL)
+         ON CONFLICT(user_id) DO UPDATE SET requested_at = excluded.requested_at, admitted_at = NULL`,
+      ).bind(user.id, now),
+    ]);
+  } catch (error) {
+    const existing = await getContainerForUser(env, user.id);
+    if (existing) return existing;
+    throw error;
+  }
+  const row = await getContainerForUser(env, user.id);
+  if (!row) throw new Error("container row vanished");
+  return row;
 }
