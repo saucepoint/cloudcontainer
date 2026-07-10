@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { AGENTS, toHex, type JobOp, type LlmKeys } from "@codestation/contract";
 import { requireUnrevokedSession, requireUser } from "./auth.js";
-import { sha256Hex } from "./sessions.js";
+import { revokeSession, sha256Hex } from "./sessions.js";
 import {
   decryptLlmKeys,
   getCredentialsRow,
@@ -12,6 +12,7 @@ import { githubConfigured, pushCredentialsToContainer } from "./github.js";
 import {
   containerAgents,
   enqueueJob,
+  enqueueJobForUser,
   getContainerForUser,
   getHost,
   latestJob,
@@ -22,9 +23,28 @@ import { allowedUserOps } from "./state.js";
 import type { AppContext, Bindings, ContainerRow, JobRow } from "./types.js";
 
 const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?$/;
+const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 
-function validPubkey(key: string): boolean {
+export function validPubkey(key: string): boolean {
   return SSH_KEY_RE.test(key.trim()) && key.trim().length < 4096;
+}
+
+/** Parse a JSON request body; null (never a throw) on malformed input. */
+async function readJson<T>(c: { req: { json(): Promise<unknown> } }): Promise<T | null> {
+  return (await c.req.json().catch(() => null)) as T | null;
+}
+
+async function insertSshKey(
+  env: Bindings,
+  userId: string,
+  label: string,
+  pubkey: string,
+): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(userId, label.slice(0, 64), pubkey.trim(), Date.now())
+    .run();
 }
 
 /** `ssh -p <port> dev@<host>` for a placed container, or null if it has no host/port yet. */
@@ -81,12 +101,12 @@ export const apiRoutes = new Hono<AppContext>()
   // ------------------------------------------------------------------ provision
   .post("/api/provision", requireUser, async (c) => {
     const user = c.get("user");
-    const body = (await c.req.json().catch(() => null)) as {
+    const body = await readJson<{
       agents?: string[];
       sshPubkey?: string;
       llmKeys?: Record<string, string>;
       cloudflareToken?: string;
-    } | null;
+    }>(c);
     const requested = new Set(Array.isArray(body?.agents) ? body!.agents : []);
     // Normalize to canonical order; reject empty or unknown picks.
     const agents = AGENTS.filter((a) => requested.has(a));
@@ -106,11 +126,7 @@ export const apiRoutes = new Hono<AppContext>()
     }
 
     if (pubkey) {
-      await c.env.DB.prepare(
-        "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, 'onboarding', ?, ?)",
-      )
-        .bind(user.id, pubkey, Date.now())
-        .run();
+      await insertSshKey(c.env, user.id, "onboarding", pubkey);
     }
     const llmKeys = Object.fromEntries(
       Object.entries(body.llmKeys ?? {}).filter(([, v]) => typeof v === "string" && v.trim()),
@@ -182,27 +198,20 @@ export const apiRoutes = new Hono<AppContext>()
     return c.json({ keys: rows.results });
   })
   .post("/api/keys", requireUser, async (c) => {
-    const body = (await c.req.json().catch(() => null)) as {
-      pubkey?: string;
-      label?: string;
-    } | null;
+    const body = await readJson<{ pubkey?: string; label?: string }>(c);
     const pubkey = body?.pubkey?.trim();
     if (!pubkey || !validPubkey(pubkey)) {
       return c.json({ error: "invalid SSH public key" }, 400);
     }
-    await c.env.DB.prepare(
-      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
-    )
-      .bind(c.get("user").id, (body?.label ?? "").slice(0, 64), pubkey, Date.now())
-      .run();
-    await syncKeys(c.env, c.get("user").id);
+    await insertSshKey(c.env, c.get("user").id, body?.label ?? "", pubkey);
+    await enqueueJobForUser(c.env, c.get("user").id, "sync-keys");
     return c.json({ ok: true });
   })
   .delete("/api/keys/:id", requireUser, async (c) => {
     await c.env.DB.prepare("DELETE FROM ssh_keys WHERE id = ? AND user_id = ?")
       .bind(Number(c.req.param("id")), c.get("user").id)
       .run();
-    await syncKeys(c.env, c.get("user").id);
+    await enqueueJobForUser(c.env, c.get("user").id, "sync-keys");
     return c.json({ ok: true });
   })
 
@@ -219,10 +228,10 @@ export const apiRoutes = new Hono<AppContext>()
     });
   })
   .post("/api/credentials", requireUser, async (c) => {
-    const body = (await c.req.json().catch(() => null)) as {
+    const body = await readJson<{
       llmKeys?: Record<string, string>;
       cloudflareToken?: string;
-    } | null;
+    }>(c);
     if (!body) return c.json({ error: "bad request" }, 400);
     if (body.cloudflareToken) {
       const ok = await validateCloudflareToken(body.cloudflareToken).catch(() => false);
@@ -247,20 +256,20 @@ export const apiRoutes = new Hono<AppContext>()
     const tokenBytes = new Uint8Array(32);
     crypto.getRandomValues(tokenBytes);
     const token = toHex(tokenBytes);
-    const now = Date.now();
     await c.env.DB.prepare(
       "INSERT INTO enrollment_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
     )
-      .bind(await sha256Hex(token), user.id, now + 3600 * 1000)
+      .bind(await sha256Hex(token), user.id, Date.now() + ENROLLMENT_TOKEN_TTL_SEC * 1000)
       .run();
-    return c.json({ token, expiresInSec: 3600, endpoint: `${c.env.BASE_URL}/api/enroll` });
+    return c.json({
+      token,
+      expiresInSec: ENROLLMENT_TOKEN_TTL_SEC,
+      endpoint: `${c.env.BASE_URL}/api/enroll`,
+    });
   })
   // Public: a local agent redeems the one-time token to register a pubkey.
   .post("/api/enroll", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as {
-      token?: string;
-      pubkey?: string;
-    } | null;
+    const body = await readJson<{ token?: string; pubkey?: string }>(c);
     if (!body?.token || !body.pubkey || !validPubkey(body.pubkey)) {
       return c.json({ error: "token and a valid SSH public key are required" }, 400);
     }
@@ -281,12 +290,8 @@ export const apiRoutes = new Hono<AppContext>()
       .run();
     if (!marked.meta.changes) return c.json({ error: "invalid or expired token" }, 403);
 
-    await c.env.DB.prepare(
-      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, 'enrolled', ?, ?)",
-    )
-      .bind(row.user_id, body.pubkey.trim(), Date.now())
-      .run();
-    await syncKeys(c.env, row.user_id);
+    await insertSshKey(c.env, row.user_id, "enrolled", body.pubkey);
+    await enqueueJobForUser(c.env, row.user_id, "sync-keys");
 
     const container = await getContainerForUser(c.env, row.user_id);
     const sshCommand = container ? await sshCommandFor(c.env, container) : null;
@@ -314,15 +319,6 @@ export const apiRoutes = new Hono<AppContext>()
       c.env.DB.prepare("DELETE FROM waitlist WHERE user_id = ?").bind(user.id),
       c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id),
     ]);
-    await c.env.SESSIONS.delete(`sess:${c.get("sessionId")}`);
+    await revokeSession(c.env, c.get("sessionId"));
     return c.json({ ok: true });
   });
-
-async function syncKeys(env: AppContext["Bindings"], userId: string): Promise<void> {
-  const container = await getContainerForUser(env, userId);
-  if (!container?.host_id) return;
-  if (container.status !== "running" && container.status !== "stopped") return;
-  const host = await getHost(env, container.host_id);
-  if (!host) return;
-  await enqueueJob(env, "sync-keys", container, host);
-}

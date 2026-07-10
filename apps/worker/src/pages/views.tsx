@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { AGENT_LABELS, AGENTS, LLM_PROVIDERS } from "@codestation/contract";
+import { CODEX_DEVICE_JS } from "./codexdevice.js";
 import { Layout } from "./layout.js";
 
 const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";
@@ -162,6 +163,16 @@ form.addEventListener('submit', async (e) => {
     btn.textContent = 'Provision my container';
   }
 });
+
+// ChatGPT sign-in stores the credential server-side the moment it completes,
+// so it needs no field in the provision body.
+document.getElementById('codex-signin').addEventListener('click', () => {
+  codexDeviceFlow(document.getElementById('codex-flow'), () => {
+    document.getElementById('codex-flow').innerHTML = '';
+    document.getElementById('codex-signin').style.display = 'none';
+    document.getElementById('codex-connected').style.display = '';
+  });
+});
 `;
 
 export const OnboardingPage: FC = () => (
@@ -207,10 +218,23 @@ export const OnboardingPage: FC = () => (
       <div class="card">
         <h2>3. Model access (optional)</h2>
         <p class="muted">
-          Your agents need an LLM. Paste an API key — or bring a subscription: a Claude token
-          from <code>claude setup-token</code>, or your Codex <code>~/.codex/auth.json</code>{" "}
-          from <code>codex login</code>. Stored encrypted, injected into your container only.
+          Your agents need an LLM. Sign in with your ChatGPT plan, paste an API key, or bring a
+          Claude token from <code>claude setup-token</code>. Stored encrypted, injected into your
+          container only.
         </p>
+        <div style="margin-bottom:0.9rem">
+          <button type="button" id="codex-signin" class="btn secondary">
+            Sign in with ChatGPT
+          </button>
+          <span id="codex-connected" class="ok" style="display:none">
+            ✓ ChatGPT connected — Codex will use your plan
+          </span>
+          <p class="muted" style="margin-top:0.5rem">
+            For Codex on a ChatGPT plan: approve a one-time code in your browser, nothing to
+            paste.
+          </p>
+          <div id="codex-flow"></div>
+        </div>
         <details>
           <summary>Add API keys now</summary>
           <label>
@@ -247,9 +271,12 @@ export const OnboardingPage: FC = () => (
           <input type="password" name="llm_openrouter" autocomplete="off" />
           <label>Claude subscription token (claude setup-token)</label>
           <input type="password" name="llm_claude_subscription_token" autocomplete="off" />
+        </details>
+        <details>
+          <summary>Advanced options</summary>
           <label>
-            Codex subscription — run <code>codex login</code> on your machine, then paste the
-            contents of <code>~/.codex/auth.json</code>
+            Codex subscription without the ChatGPT sign-in above — run <code>codex login</code>{" "}
+            on your machine, then paste the contents of <code>~/.codex/auth.json</code>
           </label>
           <textarea
             name="llm_codex_subscription_token"
@@ -275,6 +302,7 @@ export const OnboardingPage: FC = () => (
       </button>
       <div id="err" class="err"></div>
     </form>
+    <script dangerouslySetInnerHTML={{ __html: CODEX_DEVICE_JS }} />
     <script dangerouslySetInnerHTML={{ __html: ONBOARDING_JS }} />
   </Layout>
 );

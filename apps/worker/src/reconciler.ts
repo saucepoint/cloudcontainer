@@ -14,9 +14,9 @@ import {
 import { enqueueJob, getHost, refreshJob } from "./jobs.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
-const STUCK_JOB_MS = 15 * 60 * 1000;
-const GRACE_DAYS = 7;
-const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
+export const STUCK_JOB_MS = 15 * 60 * 1000;
+export const GRACE_DAYS = 7;
+export const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
 
 export async function reconcile(env: Bindings, now: () => number = Date.now): Promise<void> {
   await Promise.allSettled([

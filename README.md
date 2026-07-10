@@ -47,6 +47,11 @@ infra/              host bootstrap script, base-image build, runbook
 npm install
 npm test                      # contract + worker + daemon suites
 npm run typecheck
+# Tests never touch the network or real infra: the worker suite runs against
+# an in-memory SQLite standing in for D1 (same engine, real migrations applied
+# — see apps/worker/test/helpers/env.ts), a Map for KV, and a stubbed fetch
+# for daemon/GitHub/Cloudflare HTTP; the daemon suite injects a fake exec to
+# assert exact incus command construction. Clocks are injected (SPEC §18).
 
 # control plane on Miniflare (D1/KV local):
 cd apps/worker

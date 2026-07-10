@@ -7,7 +7,7 @@
 import { Hono } from "hono";
 import { encryptJsonAtRest, toHex } from "@codestation/contract";
 import { requireUser } from "./auth.js";
-import { enqueueJob, getContainerForUser, getHost } from "./jobs.js";
+import { enqueueJobForUser } from "./jobs.js";
 import type { AppContext, Bindings } from "./types.js";
 
 interface TokenResponse {
@@ -82,14 +82,9 @@ export async function storeGithubTokens(
     .run();
 }
 
-/** Push refreshed credentials into a running container, if there is one. */
+/** Push refreshed credentials into the user's container, if there is one. */
 export async function pushCredentialsToContainer(env: Bindings, userId: string): Promise<void> {
-  const container = await getContainerForUser(env, userId);
-  if (!container?.host_id) return;
-  if (container.status !== "running" && container.status !== "stopped") return;
-  const host = await getHost(env, container.host_id);
-  if (!host) return;
-  await enqueueJob(env, "refresh-credentials", container, host);
+  await enqueueJobForUser(env, userId, "refresh-credentials");
 }
 
 export const githubRoutes = new Hono<AppContext>()

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { apiRoutes } from "./api.js";
 import { authRoutes, requireUser } from "./auth.js";
+import { codexAuthRoutes } from "./codexauth.js";
 import { githubRoutes } from "./github.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
@@ -37,6 +38,7 @@ app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
 
 app.route("/", authRoutes);
 app.route("/", githubRoutes);
+app.route("/", codexAuthRoutes);
 app.route("/", apiRoutes);
 
 export default {

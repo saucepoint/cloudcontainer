@@ -144,8 +144,10 @@ export async function enqueueJob(
       .run();
   }
 
-  const request = await buildJobRequest(env, op, jobId, container, host);
   try {
+    // Inside the try: a request-build failure (e.g. bad host key material)
+    // must fail the job like a dispatch failure, not leave it stuck queued.
+    const request = await buildJobRequest(env, op, jobId, container, host);
     await daemonSubmitJob(env, host, request);
     await env.DB.prepare("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?")
       .bind(Date.now(), jobId)
@@ -158,6 +160,24 @@ export async function enqueueJob(
   const row = await getJob(env, jobId);
   if (!row) throw new Error("job row vanished");
   return row;
+}
+
+/**
+ * Enqueue a background op against a user's container, if it exists on a host
+ * and is in a steady state (running/stopped). No-op otherwise — used for
+ * live credential/key pushes where "no container yet" is not an error.
+ */
+export async function enqueueJobForUser(
+  env: Bindings,
+  userId: string,
+  op: "sync-keys" | "refresh-credentials",
+): Promise<void> {
+  const container = await getContainerForUser(env, userId);
+  if (!container?.host_id) return;
+  if (container.status !== "running" && container.status !== "stopped") return;
+  const host = await getHost(env, container.host_id);
+  if (!host) return;
+  await enqueueJob(env, op, container, host);
 }
 
 async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | "op">, error: string) {

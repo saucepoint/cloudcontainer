@@ -1,10 +1,12 @@
 import type { FC } from "hono/jsx";
 import { AGENT_LABELS, LLM_PROVIDER_LABELS, LLM_PROVIDERS } from "@codestation/contract";
+import { CODEX_DEVICE_JS } from "./codexdevice.js";
 import { Layout } from "./layout.js";
 
-const PROVIDER_OPTIONS = LLM_PROVIDERS.map(
-  (p) => `<option value="${p}">${LLM_PROVIDER_LABELS[p]}</option>`,
-).join("");
+// Codex gets its own "Sign in with ChatGPT" row; everything else stays a paste.
+const PROVIDER_OPTIONS = LLM_PROVIDERS.filter((p) => p !== "codex_subscription_token")
+  .map((p) => `<option value="${p}">${LLM_PROVIDER_LABELS[p]}</option>`)
+  .join("");
 
 const DASHBOARD_JS = `
 const $ = (id) => document.getElementById(id);
@@ -72,9 +74,10 @@ function renderContainer(c) {
 
 function renderCreds(cr) {
   const rows = [];
-  const llmAny = Object.keys(cr.llm || {}).length > 0;
-  const llmList = Object.keys(cr.llm || {}).join(', ');
-  rows.push(['Agent model access', llmAny ? 'connected (' + esc(llmList) + ')' : null, 'addCreds()', 'Add API key']);
+  const llmKeys = Object.keys(cr.llm || {}).filter((k) => k !== 'codex_subscription_token');
+  rows.push(['Agent model access', llmKeys.length ? 'connected (' + esc(llmKeys.join(', ')) + ')' : null, 'addCreds()', 'Add API key']);
+  rows.push(['ChatGPT (Codex)', (cr.llm || {}).codex_subscription_token ? 'connected' : null,
+    'codexStart()', 'Sign in with ChatGPT']);
   rows.push(['Cloudflare token', cr.cloudflare ? 'connected' : null, 'addCf()', 'Add token']);
   if (cr.githubAvailable) {
     rows.push(['GitHub', cr.github ? 'connected (' + esc(cr.github) + ')' : null,
@@ -86,10 +89,15 @@ function renderCreds(cr) {
       : '<span class="missing">not set · <a href="#" onclick="' + fn + ';return false">' + cta + '</a></span>')
   ).join('') + '</ul>' +
   '<div id="credform" style="display:none">' +
-    '<label>Provider</label><select id="prov" onchange="provChanged()">${PROVIDER_OPTIONS}</select>' +
+    '<label>Provider</label><select id="prov">${PROVIDER_OPTIONS}</select>' +
     '<label>Key / token</label><input type="password" id="provkey" autocomplete="off">' +
-    '<textarea id="provjson" style="display:none" placeholder="run codex login locally, then paste ~/.codex/auth.json here" spellcheck="false"></textarea>' +
     '<div class="row"><button class="btn" onclick="saveCred()">Save</button></div></div>' +
+  '<div id="codexbox" style="display:none">' +
+    '<div id="codexflow"></div>' +
+    '<details><summary>Advanced: paste auth.json instead</summary>' +
+    '<label>Run codex login on your machine, then paste ~/.codex/auth.json</label>' +
+    '<textarea id="codexjson" spellcheck="false"></textarea>' +
+    '<div class="row"><button class="btn" onclick="saveCodexJson()">Save</button></div></details></div>' +
   '<div id="cfform" style="display:none">' +
     '<label>Cloudflare API token</label><input type="password" id="cftok" autocomplete="off">' +
     '<div class="row"><button class="btn" onclick="saveCf()">Save</button></div></div>' +
@@ -187,19 +195,24 @@ window.copyPrompt = async () => {
   btn.textContent = 'Copied ✓';
   setTimeout(() => { btn.textContent = 'Copy prompt'; }, 2000);
 };
-window.addCreds = () => { $('credform').style.display = 'block'; $('cfform').style.display = 'none'; };
-window.addCf = () => { $('cfform').style.display = 'block'; $('credform').style.display = 'none'; };
-// The Codex subscription credential is a pasted auth.json blob — multiline, so a textarea.
-window.provChanged = () => {
-  const isJson = $('prov').value === 'codex_subscription_token';
-  $('provkey').style.display = isJson ? 'none' : '';
-  $('provjson').style.display = isJson ? '' : 'none';
+window.addCreds = () => { $('credform').style.display = 'block'; $('codexbox').style.display = 'none'; $('cfform').style.display = 'none'; };
+window.addCf = () => { $('cfform').style.display = 'block'; $('credform').style.display = 'none'; $('codexbox').style.display = 'none'; };
+window.codexStart = () => {
+  $('codexbox').style.display = 'block'; $('credform').style.display = 'none'; $('cfform').style.display = 'none';
+  codexDeviceFlow($('codexflow'), refresh);
+};
+window.saveCodexJson = async () => {
+  $('crederr').textContent = '';
+  try {
+    await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ llmKeys: { codex_subscription_token: $('codexjson').value.trim() } }) });
+    await refresh();
+  } catch (e) { $('crederr').textContent = e.message; }
 };
 window.saveCred = async () => {
   $('crederr').textContent = '';
-  const isJson = $('prov').value === 'codex_subscription_token';
   const body = { llmKeys: {} };
-  body.llmKeys[$('prov').value] = (isJson ? $('provjson').value : $('provkey').value).trim();
+  body.llmKeys[$('prov').value] = $('provkey').value.trim();
   try {
     await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     await refresh();
@@ -235,7 +248,9 @@ async function refresh() {
       api('/api/container'), api('/api/credentials'), api('/api/keys'),
     ]);
     renderContainer(c.container);
-    renderCreds(cr);
+    // The container poll timer re-renders every few seconds; don't wipe an
+    // in-flight ChatGPT sign-in off the screen.
+    if (!window.cxActive) renderCreds(cr);
     renderKeys(k.keys);
     renderDanger(c.container);
   } catch (e) {
@@ -274,6 +289,7 @@ export const DashboardPage: FC = () => (
         Your container must be destroyed before your account can be deleted.
       </p>
     </div>
+    <script dangerouslySetInnerHTML={{ __html: CODEX_DEVICE_JS }} />
     <script dangerouslySetInnerHTML={{ __html: DASHBOARD_JS }} />
   </Layout>
 );
