@@ -65,18 +65,44 @@ describe("buildJobRequest", () => {
     expect(request).not.toHaveProperty("sealedCredentials");
   });
 
-  it("builds bare requests for start/stop/destroy", async () => {
+  it("builds bare requests for stop/destroy", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     const host = await seedHost(env);
     const container = await seedContainer(env);
-    for (const op of ["start", "stop", "destroy"] as const) {
+    for (const op of ["stop", "destroy"] as const) {
       expect(await buildJobRequest(env, op, "j", container, host)).toEqual({
         op,
         jobId: "j",
         containerId: "container-1",
       });
     }
+  });
+
+  it("includes the latest keys and credentials when starting a stopped container", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    const host = await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const container = await seedContainer(env, { status: "stopped" });
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES ('user-1', '', 'ssh-ed25519 AAAA latest', ?)",
+    )
+      .bind(Date.now())
+      .run();
+    await upsertCredentials(env, "user-1", { llmKeys: { openai: "CANARY-latest" } });
+
+    const request = await buildJobRequest(env, "start", "j", container, host);
+    expect(request).toMatchObject({
+      op: "start",
+      jobId: "j",
+      containerId: "container-1",
+      sshKeys: ["ssh-ed25519 AAAA latest"],
+      dashboardUrl: "https://codestation.test",
+    });
+    if (request.op !== "start" || !request.sealedCredentials) throw new Error("missing snapshot");
+    expect(
+      sealOpenJson<CredentialPayload>(request.sealedCredentials, hostKeys.privateKey),
+    ).toEqual({ llmKeys: { openai: "CANARY-latest" } });
   });
 });
 
@@ -161,6 +187,19 @@ describe("enqueueJobForUser", () => {
     await enqueueJobForUser(env, "user-1", "sync-keys");
     expect(daemon.submitted).toMatchObject([{ op: "sync-keys" }]);
   });
+
+  it("defers updates for a stopped container until its enriched start job", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "stopped" });
+    stubFetch(() => {
+      throw new Error("should not dispatch while stopped");
+    });
+
+    await enqueueJobForUser(env, "user-1", "refresh-credentials");
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+  });
 });
 
 describe("refreshJob", () => {
@@ -207,10 +246,11 @@ describe("refreshJob", () => {
     await seedHost(env);
     await seedContainer(env, { status: "provisioning" });
     stubFetch(
-      (url, init) =>
-        url.pathname === "/jobs" && init.method === "POST"
-          ? Response.json({ ok: true }, { status: 202 })
-          : null,
+      (url, init) => {
+        if (url.pathname !== "/jobs" || init.method !== "POST") return null;
+        const request = JSON.parse(String(init.body)) as { jobId: string };
+        return Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 });
+      },
       (url) => (url.pathname.startsWith("/jobs/") ? new Response("gone", { status: 404 }) : null),
     );
 
@@ -224,8 +264,11 @@ describe("refreshJob", () => {
   it("destroy success quarantines the port, releases host accounting, and drops the row", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { ram_allocated_mb: 2048, disk_allocated_gb: 8 });
+    await seedHost(env, { ram_allocated_mb: 2048, disk_allocated_gb: 16 });
     await seedContainer(env, { status: "running" });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES ('user-1', 1, 2)",
+    ).run();
     const daemon = fakeDaemon();
     stubFetch(daemon.route);
 
@@ -243,6 +286,67 @@ describe("refreshJob", () => {
       port: number;
     }>();
     expect(q.results.map((r) => r.port)).toEqual([30500]);
+    expect((await env.DB.prepare("SELECT * FROM waitlist").all()).results).toHaveLength(0);
+  });
+
+  it("applies destroy completion side effects once when dashboard and cron poll concurrently", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "destroying" });
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('destroy-race', 'container-1', 'destroy', 'running', ?, ?)`,
+    )
+      .bind(now, now)
+      .run();
+    const job = await getJob(env, "destroy-race");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/destroy-race"
+        ? Response.json({
+            jobId: "destroy-race",
+            status: "succeeded",
+            error: null,
+            result: null,
+          })
+        : null,
+    );
+
+    await Promise.all([refreshJob(env, job), refreshJob(env, job)]);
+
+    const host = await env.DB.prepare(
+      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+  });
+
+  it("renews the D1 lease when the daemon reports a running heartbeat", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "provisioning" });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('heartbeat', 'container-1', 'provision', 'running', 1, 1)`,
+    ).run();
+    const job = await getJob(env, "heartbeat");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/heartbeat"
+        ? Response.json({
+            jobId: "heartbeat",
+            status: "running",
+            error: null,
+            result: null,
+          })
+        : null,
+    );
+
+    const refreshed = await refreshJob(env, job);
+    expect(refreshed.status).toBe("running");
+    expect(refreshed.updated_at).toBeGreaterThan(1);
   });
 
   it("keeps the job untouched on a transient daemon error (reconciler will time it out)", async () => {
@@ -251,10 +355,11 @@ describe("refreshJob", () => {
     await seedHost(env);
     await seedContainer(env);
     stubFetch(
-      (url, init) =>
-        url.pathname === "/jobs" && init.method === "POST"
-          ? Response.json({ ok: true }, { status: 202 })
-          : null,
+      (url, init) => {
+        if (url.pathname !== "/jobs" || init.method !== "POST") return null;
+        const request = JSON.parse(String(init.body)) as { jobId: string };
+        return Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 });
+      },
       () => {
         throw new Error("flaky network");
       },
@@ -325,7 +430,36 @@ describe("startProvision", () => {
       disk_allocated_gb: number;
     }>();
     expect(host?.ram_allocated_mb).toBe(2048);
-    expect(host?.disk_allocated_gb).toBe(8);
+    expect(host?.disk_allocated_gb).toBe(16);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
+  it("does not oversubscribe the final host slot when two provisions race", async () => {
+    const { env } = makeEnv();
+    const alice = await seedUser(env, "alice");
+    const bob = await seedUser(env, "bob");
+    await seedHost(env, {
+      ram_total_mb: 4096,
+      ram_reserve_mb: 2048,
+      disk_total_gb: 16,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const containers = await Promise.all([
+      startProvision(env, alice, { agents: ["codex"] }),
+      startProvision(env, bob, { agents: ["claude"] }),
+    ]);
+
+    expect(containers.map((container) => container.status).sort()).toEqual([
+      "provisioning",
+      "waitlisted",
+    ]);
+    const host = await env.DB.prepare(
+      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect(daemon.submitted).toHaveLength(1);
   });
 });

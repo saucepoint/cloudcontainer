@@ -67,18 +67,27 @@ export const TIERS = {
 } as const;
 export type Tier = keyof typeof TIERS;
 
+export const INPUT_LIMITS = {
+  sshKeyBytes: 4096,
+  sshKeysPerAccount: 64,
+  tokenBytes: 16 * 1024,
+  codexAuthBytes: 64 * 1024,
+  cloudflareTokenBytes: 4096,
+  sealedCredentialBytes: 256 * 1024,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Credential payloads (sealed to host key; never persisted in job rows)
 // ---------------------------------------------------------------------------
 
 export const LlmKeysSchema = z
   .object({
-    openai: z.string().optional(),
-    anthropic: z.string().optional(),
-    gemini: z.string().optional(),
-    openrouter: z.string().optional(),
-    claude_subscription_token: z.string().optional(),
-    codex_subscription_token: z.string().optional(),
+    openai: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    anthropic: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    gemini: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    openrouter: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
   })
   .strict();
 export type LlmKeys = z.infer<typeof LlmKeysSchema>;
@@ -86,9 +95,9 @@ export type LlmKeys = z.infer<typeof LlmKeysSchema>;
 export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
-    cloudflareToken: z.string().optional(),
-    githubToken: z.string().optional(),
-    githubLogin: z.string().optional(),
+    cloudflareToken: z.string().max(INPUT_LIMITS.cloudflareTokenBytes).optional(),
+    githubToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    githubLogin: z.string().max(256).optional(),
   })
   .strict();
 export type CredentialPayload = z.infer<typeof CredentialPayloadSchema>;
@@ -98,13 +107,19 @@ export type CredentialPayload = z.infer<typeof CredentialPayloadSchema>;
 // ---------------------------------------------------------------------------
 
 const base = {
-  jobId: z.string().min(1),
-  containerId: z.string().min(1),
+  jobId: z.string().min(1).max(128),
+  containerId: z.string().min(1).max(128),
 };
+
+const SshKeysSchema = z
+  .array(z.string().min(1).max(INPUT_LIMITS.sshKeyBytes))
+  .max(INPUT_LIMITS.sshKeysPerAccount);
+const DashboardUrlSchema = z.string().url().max(2048);
+const SealedCredentialsSchema = z.string().min(1).max(INPUT_LIMITS.sealedCredentialBytes);
 
 export const ContainerSpecSchema = z
   .object({
-    agents: z.array(z.enum(AGENTS)).min(1),
+    agents: z.array(z.enum(AGENTS)).min(1).max(AGENTS.length),
     tier: z.enum(["free", "paid"]),
     cpu: z.number().int().positive(),
     ramMb: z.number().int().positive(),
@@ -120,13 +135,24 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       op: z.literal("provision"),
       ...base,
       spec: ContainerSpecSchema,
-      sshKeys: z.array(z.string()),
-      dashboardUrl: z.string(),
+      sshKeys: SshKeysSchema,
+      dashboardUrl: DashboardUrlSchema,
       // base64 sealed box of CredentialPayload (may be absent if user skipped all)
-      sealedCredentials: z.string().optional(),
+      sealedCredentials: SealedCredentialsSchema.optional(),
     })
     .strict(),
-  z.object({ op: z.literal("start"), ...base }).strict(),
+  z
+    .object({
+      op: z.literal("start"),
+      ...base,
+      // Optional for rolling compatibility with older Workers. Current
+      // Workers include a full snapshot so changes made while stopped apply
+      // before SSH becomes available again.
+      sshKeys: SshKeysSchema.optional(),
+      dashboardUrl: DashboardUrlSchema.optional(),
+      sealedCredentials: SealedCredentialsSchema.optional(),
+    })
+    .strict(),
   z.object({ op: z.literal("stop"), ...base }).strict(),
   z
     .object({
@@ -140,9 +166,9 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       op: z.literal("rebuild"),
       ...base,
       spec: ContainerSpecSchema,
-      sshKeys: z.array(z.string()),
-      dashboardUrl: z.string(),
-      sealedCredentials: z.string().optional(),
+      sshKeys: SshKeysSchema,
+      dashboardUrl: DashboardUrlSchema,
+      sealedCredentials: SealedCredentialsSchema.optional(),
     })
     .strict(),
   z.object({ op: z.literal("destroy"), ...base }).strict(),
@@ -150,16 +176,16 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
     .object({
       op: z.literal("refresh-credentials"),
       ...base,
-      dashboardUrl: z.string(),
-      sealedCredentials: z.string(),
+      dashboardUrl: DashboardUrlSchema,
+      sealedCredentials: SealedCredentialsSchema,
     })
     .strict(),
   z
     .object({
       op: z.literal("sync-keys"),
       ...base,
-      sshKeys: z.array(z.string()),
-      dashboardUrl: z.string(),
+      sshKeys: SshKeysSchema,
+      dashboardUrl: DashboardUrlSchema,
     })
     .strict(),
   z.object({ op: z.literal("export-window"), ...base }).strict(),

@@ -35,12 +35,22 @@ async function findOrCreateUser(env: Bindings, sessionId: string): Promise<UserR
   if (banned) return null;
 
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(id, sessionId, sessionId, Date.now())
-    .run();
-  return getUser(env, id);
+  try {
+    await env.DB.prepare(
+      "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES (?, ?, ?, ?)",
+    )
+      .bind(id, sessionId, sessionId, Date.now())
+      .run();
+    return getUser(env, id);
+  } catch (error) {
+    // Two tabs can complete the same World ID proof concurrently. The unique
+    // session identity chooses the winner; the other request logs into it.
+    const winner = await env.DB.prepare("SELECT * FROM users WHERE world_id_session_id = ?")
+      .bind(sessionId)
+      .first<UserRow>();
+    if (winner) return winner.status === "banned" ? null : winner;
+    throw error;
+  }
 }
 
 async function loginAndRedirect(env: Bindings, user: UserRow, secure: boolean) {
@@ -94,7 +104,15 @@ export const authRoutes = new Hono<AppContext>()
       user,
       c.env.BASE_URL.startsWith("https"),
     );
-    return new Response(null, { status: 302, headers: { location, "set-cookie": cookie } });
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location,
+        "set-cookie": cookie,
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+      },
+    });
   })
   .post("/auth/logout", async (c) => {
     const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);

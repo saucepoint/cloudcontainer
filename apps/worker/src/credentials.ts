@@ -1,6 +1,7 @@
 import {
   decryptJsonAtRest,
   encryptJsonAtRest,
+  LlmKeysSchema,
   type CredentialPayload,
   type LlmKeys,
 } from "@codestation/contract";
@@ -17,7 +18,9 @@ export async function getCredentialsRow(
 
 export function decryptLlmKeys(env: Bindings, row: CredentialsRow | null): LlmKeys {
   if (!row?.llm_keys) return {};
-  return decryptJsonAtRest<LlmKeys>(row.llm_keys, env.CREDENTIAL_MASTER_KEY);
+  return LlmKeysSchema.parse(
+    decryptJsonAtRest<unknown>(row.llm_keys, env.CREDENTIAL_MASTER_KEY),
+  );
 }
 
 export function decryptString(env: Bindings, ciphertext: string | null): string | undefined {

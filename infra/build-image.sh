@@ -34,6 +34,12 @@ curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin s
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y -qq nodejs
 
+# Coding agents are part of the image, so a normal provision only personalizes
+# keys and credentials. Rebuilding this image is the deliberate update cadence;
+# the daemon retains a missing-binary fallback for older/custom images.
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
+
 # fd symlink (debian names it fdfind)
 ln -sf "$(command -v fdfind)" /usr/local/bin/fd
 
@@ -83,6 +89,11 @@ systemctl enable ssh-host-keys
 rm -f /etc/update-motd.d/* 2>/dev/null || true
 echo "" > /etc/motd
 
+# Keep the published image lean. Agent tarballs/native binaries can leave a
+# large root npm cache, and apt package indexes are useless until the next
+# explicit refresh.
+npm cache clean --force >/dev/null 2>&1 || true
+rm -rf /root/.npm /var/lib/apt/lists/* /tmp/*
 apt-get clean
 rm -f /etc/ssh/ssh_host_*
 SETUP

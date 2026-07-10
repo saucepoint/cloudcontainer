@@ -11,22 +11,62 @@ import {
   pushCredentialsToContainer,
   storeGithubTokens,
 } from "./github.js";
-import { enqueueJob, getHost, refreshJob } from "./jobs.js";
+import { diskReservationGb, enqueueJob, getHost, pickHost, refreshJob } from "./jobs.js";
+import { allocatePort } from "./ports.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
 export const STUCK_JOB_MS = 15 * 60 * 1000;
 export const GRACE_DAYS = 7;
 export const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
 
+/** Run I/O work in parallel without opening an unbounded number of host calls. */
+async function runBounded<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  let firstError: unknown;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (cursor < items.length) {
+        const item = items[cursor++];
+        if (item === undefined) continue;
+        try {
+          await task(item);
+        } catch (error) {
+          firstError ??= error;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (firstError) throw firstError;
+}
+
 export async function reconcile(env: Bindings, now: () => number = Date.now): Promise<void> {
-  await Promise.allSettled([
-    sweepJobs(env, now),
-    timeoutStuckJobs(env, now),
-    refreshGithubTokens(env, now),
-    expireSuspendedContainers(env, now),
-    correctDrift(env),
-    cleanupExpiredRows(env, now),
-  ]);
+  const tasks = [
+    ["sweep_jobs", sweepJobs(env, now)],
+    ["timeout_jobs", timeoutStuckJobs(env, now)],
+    ["github_refresh", refreshGithubTokens(env, now)],
+    ["grace_expiry", expireSuspendedContainers(env, now)],
+    ["waitlist_admission", admitWaitlistedContainers(env, now)],
+    ["drift_correction", correctDrift(env)],
+    ["expired_row_cleanup", cleanupExpiredRows(env, now)],
+  ] as const;
+  const results = await Promise.allSettled(tasks.map(([, task]) => task));
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.log(
+        JSON.stringify({
+          event: "reconcile_task_failed",
+          task: tasks[index]?.[0] ?? "unknown",
+          error: String(result.reason),
+        }),
+      );
+    }
+  });
 }
 
 /** Poll the daemon for jobs still marked queued/running (dashboard may not be polling). */
@@ -36,9 +76,9 @@ async function sweepJobs(env: Bindings, now: () => number): Promise<void> {
   )
     .bind(now() - STUCK_JOB_MS)
     .all<JobRow>();
-  for (const job of jobs.results) {
+  await runBounded(jobs.results, 5, async (job) => {
     await refreshJob(env, job);
-  }
+  });
 }
 
 /** Stuck jobs time out to failed; lifecycle containers drop to `error` (§12 convergence). */
@@ -50,11 +90,13 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
     .bind(cutoff)
     .all<JobRow>();
   for (const job of stuck.results) {
-    await env.DB.prepare(
-      "UPDATE jobs SET status = 'failed', error = 'timed out', updated_at = ? WHERE id = ?",
+    const claimed = await env.DB.prepare(
+      `UPDATE jobs SET status = 'failed', error = 'timed out', updated_at = ?
+       WHERE id = ? AND status IN ('queued','running') AND updated_at <= ?`,
     )
-      .bind(now(), job.id)
+      .bind(now(), job.id, cutoff)
       .run();
+    if (!claimed.meta.changes) continue;
     await env.DB.prepare(
       `UPDATE containers SET status = 'error', status_detail = 'operation timed out'
        WHERE id = ? AND status IN ('provisioning','destroying')`,
@@ -63,6 +105,65 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
       .run();
     console.log(JSON.stringify({ event: "job_timed_out", jobId: job.id, op: job.op }));
   }
+}
+
+/** FIFO admission when host capacity returns. Placement re-checks capacity. */
+async function admitWaitlistedContainers(env: Bindings, now: () => number): Promise<void> {
+  const waiting = await env.DB.prepare(
+    `SELECT c.* FROM containers c
+     JOIN waitlist w ON w.user_id = c.user_id
+     WHERE c.status = 'waitlisted' AND c.host_id IS NULL AND w.admitted_at IS NULL
+     ORDER BY w.requested_at, c.created_at, c.user_id
+     LIMIT 20`,
+  ).all<ContainerRow>();
+
+  for (const container of waiting.results) {
+    const host = await pickHost(
+      env,
+      container.ram_mb,
+      diskReservationGb(container.disk_gb),
+    );
+    if (!host) break;
+    const admitted = await placeWaitlistedContainer(env, container, host, now());
+    if (admitted) await enqueueJob(env, "provision", admitted, host);
+  }
+}
+
+async function placeWaitlistedContainer(
+  env: Bindings,
+  container: ContainerRow,
+  host: HostRow,
+  admittedAt: number,
+): Promise<ContainerRow | null> {
+  // Port allocation and capacity reservation are rechecked inside this D1
+  // transaction. `changes()` gates accounting on winning the waitlisted-row
+  // claim, so overlapping cron invocations cannot double-reserve capacity.
+  const port = await allocatePort(env, host.id, admittedAt);
+  const results = (await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE containers
+       SET host_id = ?, ssh_port = ?, status = 'provisioning', status_detail = NULL
+       WHERE id = ? AND status = 'waitlisted' AND host_id IS NULL
+         AND EXISTS (
+           SELECT 1 FROM hosts h
+           WHERE h.id = ? AND h.status = 'active'
+             AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= containers.ram_mb
+             AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
+         )`,
+    ).bind(host.id, port, container.id, host.id),
+    env.DB.prepare(
+      `UPDATE hosts
+       SET ram_allocated_mb = ram_allocated_mb + ?, disk_allocated_gb = disk_allocated_gb + ?
+       WHERE id = ? AND changes() = 1`,
+    ).bind(container.ram_mb, diskReservationGb(container.disk_gb), host.id),
+    env.DB.prepare(
+      "UPDATE waitlist SET admitted_at = ? WHERE user_id = ? AND changes() = 1",
+    ).bind(admittedAt, container.user_id),
+  ])) as Array<{ meta?: { changes?: number } }>;
+  if (!results[0]?.meta?.changes) return null;
+  return env.DB.prepare("SELECT * FROM containers WHERE id = ?")
+    .bind(container.id)
+    .first<ContainerRow>();
 }
 
 /** Control-plane-side GitHub token refresh loop (§9): the refresh token never leaves D1. */
@@ -76,7 +177,7 @@ async function refreshGithubTokens(env: Bindings, now: () => number): Promise<vo
     .bind(now() + GITHUB_REFRESH_LEAD_MS)
     .all<CredentialsRow>();
 
-  for (const row of rows.results) {
+  await runBounded(rows.results, 4, async (row) => {
     try {
       const refreshToken = decryptJsonAtRest<string>(
         row.github_refresh_token as string,
@@ -97,7 +198,7 @@ async function refreshGithubTokens(env: Bindings, now: () => number): Promise<vo
         JSON.stringify({ event: "github_token_refresh_failed", userId: row.user_id, error: String(err) }),
       );
     }
-  }
+  });
 }
 
 /** Suspended + 7 days -> destroy (billing suspension is out of scope without Stripe, but the reconciler rule stays). */
@@ -108,23 +209,23 @@ async function expireSuspendedContainers(env: Bindings, now: () => number): Prom
   )
     .bind(cutoff)
     .all<ContainerRow>();
-  for (const container of expired.results) {
-    if (!container.host_id) continue;
+  await runBounded(expired.results, 5, async (container) => {
+    if (!container.host_id) return;
     const host = await getHost(env, container.host_id);
-    if (!host) continue;
+    if (!host) return;
     await enqueueJob(env, "destroy", container, host);
-  }
+  });
 }
 
 /** D1 <-> host drift detection via daemon `stats` (§10). */
 async function correctDrift(env: Bindings): Promise<void> {
   const hosts = await env.DB.prepare("SELECT * FROM hosts WHERE status = 'active'").all<HostRow>();
-  for (const host of hosts.results) {
+  await runBounded(hosts.results, 3, async (host) => {
     let stats;
     try {
       stats = await daemonStats(env, host);
     } catch {
-      continue; // unreachable host: containers keep their last known state
+      return; // unreachable host: containers keep their last known state
     }
     const actual = new Map(stats.containers.map((s) => [s.containerId, s.incusStatus]));
     const rows = await env.DB.prepare(
@@ -146,7 +247,7 @@ async function correctDrift(env: Bindings): Promise<void> {
         );
       }
     }
-  }
+  });
 }
 
 async function cleanupExpiredRows(env: Bindings, now: () => number): Promise<void> {

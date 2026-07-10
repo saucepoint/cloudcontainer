@@ -11,6 +11,14 @@ import type { AppContext } from "./types.js";
 
 const app = new Hono<AppContext>();
 
+app.use("*", async (c, next) => {
+  await next();
+  c.header("referrer-policy", "no-referrer");
+  c.header("x-content-type-options", "nosniff");
+  c.header("x-frame-options", "DENY");
+  c.header("permissions-policy", "camera=(), microphone=(), geolocation=()");
+});
+
 app.onError((err, c) => {
   console.log(JSON.stringify({ event: "unhandled_error", path: c.req.path, error: String(err) }));
   if (c.req.path.startsWith("/api")) {

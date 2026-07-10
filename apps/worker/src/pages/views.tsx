@@ -7,6 +7,13 @@ const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist
 const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 const WORLD_ID_SESSION_KEY = "cs_world_id_session";
 
+const AGENT_GUIDANCE: Record<(typeof AGENTS)[number], string> = {
+  pi: "Flexible terminal agent; works with several model providers.",
+  claude: "Best if you use Claude Pro/Max or an Anthropic API key.",
+  codex: "Easiest start if you already have a ChatGPT plan.",
+  opencode: "Open-source interface with broad model-provider support.",
+};
+
 const worldIdJs = (environment: "production" | "staging") => `
 const btn = document.getElementById('worldid-btn');
 const status = document.getElementById('worldid-status');
@@ -21,8 +28,12 @@ async function startWorldIdSignIn() {
   status.textContent = 'Connecting to World ID…';
   qrWrap.innerHTML = '';
   try {
-    const { app_id, rp_context } = await fetch('/auth/session/rp-context').then((r) => r.json());
-    const savedSessionId = localStorage.getItem('${WORLD_ID_SESSION_KEY}');
+    const contextRes = await fetch('/auth/session/rp-context');
+    const context = await contextRes.json().catch(() => ({}));
+    if (!contextRes.ok) throw new Error(context.error || 'Could not start World ID sign-in.');
+    const { app_id, rp_context } = context;
+    let savedSessionId = null;
+    try { savedSessionId = localStorage.getItem('${WORLD_ID_SESSION_KEY}'); } catch (_) {}
     const config = { app_id, rp_context, environment: '${environment}' };
     const builder = savedSessionId
       ? IDKit.proveSession(savedSessionId, config)
@@ -58,7 +69,7 @@ async function startWorldIdSignIn() {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || 'Sign-in failed.');
 
-    localStorage.setItem('${WORLD_ID_SESSION_KEY}', completion.result.session_id);
+    try { localStorage.setItem('${WORLD_ID_SESSION_KEY}', completion.result.session_id); } catch (_) {}
     location.href = json.redirect;
   } catch (e) {
     status.textContent = e.message || 'Something went wrong. Please try again.';
@@ -75,13 +86,13 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
 }) => (
   <Layout>
     <h1>
-      An always-on Debian box,
+      Your ready-to-code cloud server,
       <br />
-      pre-wired for your coding agent.
+      set up in minutes.
     </h1>
     <p class="lead">
-      One World ID-verified human, one free cloud container. SSH in minutes: your agent
-      preinstalled, your keys injected, nothing to babysit.
+      Pick a coding agent and we install the Debian environment, developer tools, and secure SSH
+      access for you. One World ID-verified human gets one free server.
     </p>
     <div class="card">
       <button id="worldid-btn" class="btn" type="button">
@@ -94,11 +105,11 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
           </a>
         </span>
       ) : null}
-      <p id="worldid-status" class="muted" style="margin-top:1rem">
+      <p id="worldid-status" class="muted" style="margin-top:1rem" role="status" aria-live="polite">
         World ID proves you're a unique human — it's the only signup requirement. No credit
         card, no email.
       </p>
-      <div id="worldid-qr" class="qr"></div>
+      <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
       <script src={IDKIT_SRC}></script>
       <script type="module" dangerouslySetInnerHTML={{ __html: worldIdJs(worldIdEnvironment) }} />
     </div>
@@ -106,7 +117,7 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
       <h2>What you get</h2>
       <ul class="check">
         <li>
-          Debian 13 container, 1 vCPU / 2 GB RAM / 8 GB disk, always on
+          Debian 13, 1 vCPU / 2 GB RAM / 8 GB persistent home + 8 GB system disk
           <span class="ok">free</span>
         </li>
         <li>
@@ -145,9 +156,13 @@ form.addEventListener('submit', async (e) => {
     llmKeys,
     cloudflareToken: (data.get('cloudflareToken') || '').toString().trim() || undefined,
   };
-  if (body.agents.length === 0) { err.textContent = 'Pick at least one agent first.'; return; }
+  if (body.agents.length === 0) {
+    err.textContent = 'Pick at least one agent first.';
+    err.focus();
+    return;
+  }
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Starting…';
+  btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Starting…';
   try {
     const res = await fetch('/api/provision', {
       method: 'POST',
@@ -159,8 +174,9 @@ form.addEventListener('submit', async (e) => {
     location.href = '/dashboard';
   } catch (e2) {
     err.textContent = e2.message;
+    err.focus();
     btn.disabled = false;
-    btn.textContent = 'Provision my container';
+    btn.textContent = 'Create my coding server';
   }
 });
 
@@ -177,108 +193,130 @@ document.getElementById('codex-signin').addEventListener('click', () => {
 
 export const OnboardingPage: FC = () => (
   <Layout title="Set up" loggedIn>
-    <h1>Set up your container</h1>
+    <h1>Set up your coding server</h1>
     <p class="lead">
       One required choice, everything else optional — you can add credentials later from the
       dashboard.
     </p>
     <form id="wizard">
       <div class="card">
-        <h2>1. Pick your coding agents (at least one)</h2>
-        <div class="agents">
-          {AGENTS.map((a) => (
-            <div class="agent">
-              <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
-              <label for={`agent-${a}`}>
-                {AGENT_LABELS[a]}
-                <small>preinstalled &amp; ready</small>
-              </label>
-            </div>
-          ))}
-        </div>
-        <p class="muted" style="margin-top:0.9rem">
-          Pick as many as you like — they're all preinstalled. Fixed at creation, but you can
-          always SSH in and install another agent yourself.
-        </p>
+        <fieldset aria-describedby="agent-help">
+          <legend>1. Pick your coding agents (at least one)</legend>
+          <div class="agents">
+            {AGENTS.map((a) => (
+              <div class="agent">
+                <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
+                <label for={`agent-${a}`}>
+                  <span class="agent-title">
+                    {AGENT_LABELS[a]}
+                    {a === "codex" ? <span class="recommend">easy start</span> : null}
+                  </span>
+                  <small>{AGENT_GUIDANCE[a]}</small>
+                </label>
+              </div>
+            ))}
+          </div>
+          <p id="agent-help" class="muted" style="margin-top:0.9rem">
+            Not sure? Pick Codex if you have ChatGPT, Claude Code if you use Claude, or Pi/OpenCode
+            if you want to choose among API providers. You can pick more than one.
+          </p>
+        </fieldset>
       </div>
 
       <div class="card">
         <h2>2. SSH public key (recommended)</h2>
+        <label for="ssh-pubkey">Public key</label>
         <textarea
+          id="ssh-pubkey"
           name="sshPubkey"
           placeholder="ssh-ed25519 AAAA… you@laptop"
           spellcheck={false}
+          aria-describedby="ssh-key-help"
         ></textarea>
-        <p class="muted">
+        <p id="ssh-key-help" class="muted">
           Skip it and the dashboard will give you a copyable prompt for your local coding agent —
           it registers a key itself. Until a key exists the container accepts no logins.
         </p>
+        <details>
+          <summary>I want to find or create my key now</summary>
+          <p class="muted">
+            On macOS, Linux, or Windows PowerShell, run <code>ssh-keygen -t ed25519</code> if you
+            do not have a key, then copy the output of <code>cat ~/.ssh/id_ed25519.pub</code> above.
+            Never paste the private key (the file without <code>.pub</code>).
+          </p>
+        </details>
       </div>
 
       <div class="card">
         <h2>3. Model access (optional)</h2>
         <p class="muted">
           Your agents need an LLM. Sign in with your ChatGPT plan, paste an API key, or bring a
-          Claude token from <code>claude setup-token</code>. Stored encrypted, injected into your
-          container only.
+          Claude token from <code>claude setup-token</code>. Credentials are stored encrypted;
+          code running in your server can use them, so keep API tokens narrowly scoped.
         </p>
         <div style="margin-bottom:0.9rem">
           <button type="button" id="codex-signin" class="btn secondary">
             Sign in with ChatGPT
           </button>
-          <span id="codex-connected" class="ok" style="display:none">
+          <span id="codex-connected" class="ok" style="display:none" role="status" aria-live="polite">
             ✓ ChatGPT connected — Codex will use your plan
           </span>
           <p class="muted" style="margin-top:0.5rem">
             For Codex on a ChatGPT plan: approve a one-time code in your browser, nothing to
             paste.
           </p>
-          <div id="codex-flow"></div>
+          <div id="codex-flow" role="status" aria-live="polite"></div>
         </div>
         <details>
           <summary>Add API keys now</summary>
-          <label>
+          <label for="llm-anthropic">
             Anthropic API key (
             <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
               get key
             </a>
             )
           </label>
-          <input type="password" name="llm_anthropic" autocomplete="off" />
-          <label>
+          <input id="llm-anthropic" type="password" name="llm_anthropic" autocomplete="off" />
+          <label for="llm-openai">
             OpenAI API key (
             <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
               get key
             </a>
             )
           </label>
-          <input type="password" name="llm_openai" autocomplete="off" />
-          <label>
+          <input id="llm-openai" type="password" name="llm_openai" autocomplete="off" />
+          <label for="llm-gemini">
             Google (Gemini) API key (
             <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
               get key
             </a>
             )
           </label>
-          <input type="password" name="llm_gemini" autocomplete="off" />
-          <label>
+          <input id="llm-gemini" type="password" name="llm_gemini" autocomplete="off" />
+          <label for="llm-openrouter">
             OpenRouter API key (
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">
               get key
             </a>
             )
           </label>
-          <input type="password" name="llm_openrouter" autocomplete="off" />
-          <label>Claude subscription token (claude setup-token)</label>
-          <input type="password" name="llm_claude_subscription_token" autocomplete="off" />
+          <input id="llm-openrouter" type="password" name="llm_openrouter" autocomplete="off" />
+          <label for="llm-claude-token">Claude subscription token (claude setup-token)</label>
+          <input
+            id="llm-claude-token"
+            type="password"
+            name="llm_claude_subscription_token"
+            autocomplete="off"
+          />
         </details>
         <details>
           <summary>Advanced options</summary>
-          <label>
+          <label for="llm-codex-token">
             Codex subscription without the ChatGPT sign-in above — run <code>codex login</code>{" "}
             on your machine, then paste the contents of <code>~/.codex/auth.json</code>
           </label>
           <textarea
+            id="llm-codex-token"
             name="llm_codex_subscription_token"
             placeholder='{"OPENAI_API_KEY": null, "tokens": …}'
             spellcheck={false}
@@ -286,21 +324,21 @@ export const OnboardingPage: FC = () => (
         </details>
         <details>
           <summary>Add a Cloudflare API token now</summary>
-          <label>
+          <label for="cloudflare-token">
             Scoped API token (
             <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">
               create one
             </a>
             {" — Workers Scripts:Edit + DNS:Edit is a good template)"}
           </label>
-          <input type="password" name="cloudflareToken" autocomplete="off" />
+          <input id="cloudflare-token" type="password" name="cloudflareToken" autocomplete="off" />
         </details>
       </div>
 
       <button id="go" class="btn" type="submit">
-        Provision my container
+        Create my coding server
       </button>
-      <div id="err" class="err"></div>
+      <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>
     <script dangerouslySetInnerHTML={{ __html: CODEX_DEVICE_JS }} />
     <script dangerouslySetInnerHTML={{ __html: ONBOARDING_JS }} />
