@@ -118,6 +118,7 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     BASE_URL: "https://codestation.test",
     WORLD_ID_APP_ID: "app_test",
     WORLD_ID_RP_ID: "rp_test",
+    WORLD_ID_ENVIRONMENT: "production",
     DEV_AUTH: "0",
     GITHUB_APP_CLIENT_ID: "",
     RP_SIGNING_KEY: "00".repeat(32),

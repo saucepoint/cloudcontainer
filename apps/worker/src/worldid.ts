@@ -52,13 +52,30 @@ export async function verifySessionProof(
   env: Bindings,
   idkitResponse: unknown,
 ): Promise<WorldIdSessionIdentity> {
+  const proofEnvironment = (idkitResponse as { environment?: unknown } | null)?.environment;
+  if (proofEnvironment !== env.WORLD_ID_ENVIRONMENT) {
+    throw new Error(
+      `world id environment mismatch: expected ${env.WORLD_ID_ENVIRONMENT}, received ${String(proofEnvironment)}`,
+    );
+  }
+
   const res = await fetch(VERIFY_URL(env.WORLD_ID_RP_ID), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    // World Developer Portal rejects requests without a User-Agent with an HTML 403.
+    // Cloudflare Worker subrequests do not reliably supply one, so identify this call.
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "codestation-world-id/1.0",
+    },
     body: JSON.stringify(idkitResponse),
   });
   if (!res.ok) {
-    throw new Error(`world id proof verification failed: ${res.status}`);
+    // The verifier response contains an error code/detail, not the submitted
+    // proof. Preserve it in Worker logs so RP/key/environment mistakes can be
+    // distinguished without exposing proof material.
+    const detail = (await res.text()).slice(0, 1_000);
+    throw new Error(`world id proof verification failed: ${res.status} ${detail}`);
   }
   const json = idkitResponse as {
     session_id?: unknown;

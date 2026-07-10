@@ -132,8 +132,10 @@ Copy the returned IDs into wrangler.jsonc, then:
     npx wrangler deploy
 
 World ID setup is in the World Developer Portal. The app must use World ID 4.0
-and provide WORLD_ID_APP_ID, WORLD_ID_RP_ID, and the one-time RP signing key.
-A staging World ID app can be exercised with the World simulator.
+and provide `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, `WORLD_ID_ENVIRONMENT`, and the
+one-time RP signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real
+World App. Use `staging` only when the configured app/RP and World simulator are
+also staging. `DEV_AUTH` does not select the World ID environment.
 
 For optional GitHub authorization, register a GitHub App with callback:
 
