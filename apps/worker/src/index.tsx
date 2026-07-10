@@ -32,7 +32,7 @@ app.get("/", (c) =>
   c.html(
     <LandingPage
       devAuth={c.env.DEV_AUTH === "1"}
-      worldIdEnvironment={c.env.DEV_AUTH === "1" ? "staging" : "production"}
+      worldIdEnvironment={c.env.WORLD_ID_ENVIRONMENT}
     />,
   ),
 );

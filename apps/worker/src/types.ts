@@ -6,12 +6,18 @@ import type { ContainerStatus, JobOp, JobStatus, Tier } from "@codestation/contr
  */
 export type Bindings = Omit<
   Cloudflare.Env,
-  "BASE_URL" | "WORLD_ID_APP_ID" | "WORLD_ID_RP_ID" | "DEV_AUTH" | "GITHUB_APP_CLIENT_ID"
+  | "BASE_URL"
+  | "WORLD_ID_APP_ID"
+  | "WORLD_ID_RP_ID"
+  | "WORLD_ID_ENVIRONMENT"
+  | "DEV_AUTH"
+  | "GITHUB_APP_CLIENT_ID"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
   WORLD_ID_APP_ID: string;
   WORLD_ID_RP_ID: string;
+  WORLD_ID_ENVIRONMENT: "production" | "staging";
   DEV_AUTH: string;
   GITHUB_APP_CLIENT_ID: string;
   // secrets

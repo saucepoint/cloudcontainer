@@ -32,6 +32,14 @@ describe("inline page JS parses", () => {
   }
 });
 
+describe("World ID environment wiring", () => {
+  it("renders the configured environment independently of dev auth", () => {
+    const html = String(LandingPage({ devAuth: true, worldIdEnvironment: "production" }));
+    expect(html).toContain("environment: 'production'");
+    expect(html).toContain("Dev login");
+  });
+});
+
 describe("subscription sign-in wiring", () => {
   it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
     const html = String(OnboardingPage({}));

@@ -66,8 +66,21 @@ async function startWorldIdSignIn() {
 
     const completion = await request.pollUntilCompletion({ timeout: 180000 });
     if (!completion.success) {
-      const messages = { timeout: 'Timed out waiting for World App.', cancelled: 'Cancelled in World App.' };
-      throw new Error(messages[completion.error] || 'World ID verification failed.');
+      const messages = {
+        timeout: 'Timed out waiting for World App.',
+        cancelled: 'Cancelled in World App.',
+        user_rejected: 'Cancelled in World App.',
+        verification_rejected: 'Cancelled in World App.',
+        invalid_network: 'World ID environment mismatch. This site must use production with the real World App.',
+        invalid_rp_signature: 'World ID rejected this site’s RP signing key.',
+        unknown_rp: 'World ID does not recognize this site’s RP ID.',
+        inactive_rp: 'This site’s World ID registration is not active yet.',
+        world_id_4_not_available: 'Your World App does not have a World ID 4.0 credential yet.',
+        credential_unavailable: 'Your World App does not have the required proof-of-human credential.',
+        malformed_request: 'World ID rejected this site’s request configuration.',
+        connection_failed: 'The connection to World App was lost. Please try again.',
+      };
+      throw new Error(messages[completion.error] || ('World ID error: ' + completion.error));
     }
 
     status.textContent = 'Verifying…';
