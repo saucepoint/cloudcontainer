@@ -313,7 +313,7 @@ The daemon:
 5. adds the host-to-container SSH proxy;
 6. starts the container and waits for systemd;
 7. writes authorized keys and credentials;
-8. clones selected GitHub repositories into `/home/dev/repos/owner/name`;
+8. clones selected GitHub repositories into `/home/dev/repos/name`;
 9. writes the first-login checklist;
 10. verifies selected agents and installs only missing ones; and
 11. returns SSH host-key fingerprints.
@@ -657,7 +657,7 @@ manual checks above have been completed for affected areas.
 4. **Provisioning:** successful provisioning produces a Debian 13 environment,
    enforced RAM/CPU/home/root limits, a persistent home volume, a copyable SSH
    command, matching host-key fingerprints, and any selected GitHub repositories
-   cloned under `~/repos/owner/name` with `gh` authenticated.
+   cloned under `~/repos/name` with `gh` authenticated.
 5. **No-key safety:** without a key, SSH fails closed. A one-hour, single-use
    enrollment token can add a public key and allow SSH.
 6. **Waitlist:** insufficient capacity produces a clear waitlisted state.

@@ -210,12 +210,12 @@ export class Provisioner {
     }
   }
 
-  /** Clone requested repositories once into ~/repos/owner/name. */
+  /** Clone requested repositories once into ~/repos/repository-name. */
   private async cloneGithubRepositories(name: string, repositories: string[]): Promise<void> {
     for (const repository of repositories) {
       const [owner, repo] = repository.split("/");
       if (!owner || !repo) throw new Error("invalid GitHub repository name");
-      const parent = `/home/dev/repos/${owner}`;
+      const parent = "/home/dev/repos";
       const destination = `${parent}/${repo}`;
       const clone = [
         `if test -e ${shellQuote(destination)}; then`,

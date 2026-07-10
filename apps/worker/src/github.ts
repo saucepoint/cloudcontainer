@@ -127,6 +127,27 @@ export async function fetchGithubRepositories(token: string): Promise<GithubRepo
   return [...repos.values()];
 }
 
+/** Search repositories visible to the authenticated GitHub App user token. */
+export async function searchGithubRepositories(
+  token: string,
+  query: string,
+): Promise<GithubRepository[]> {
+  const repositories = await fetchGithubRepositories(token);
+  const needle = query.trim().toLocaleLowerCase();
+  return repositories
+    .filter((repository) => repository.fullName.toLocaleLowerCase().includes(needle))
+    .sort((left, right) => {
+      const leftName = left.fullName.split("/").at(-1)?.toLocaleLowerCase() ?? "";
+      const rightName = right.fullName.split("/").at(-1)?.toLocaleLowerCase() ?? "";
+      const relevance = (name: string) => name === needle ? 0 : name.startsWith(needle) ? 1 : 2;
+      return (
+        relevance(leftName) - relevance(rightName) ||
+        left.fullName.localeCompare(right.fullName)
+      );
+    })
+    .slice(0, 20);
+}
+
 export async function storeGithubTokens(
   env: Bindings,
   userId: string,
@@ -160,25 +181,76 @@ export async function pushCredentialsToContainer(env: Bindings, userId: string):
   await enqueueJobForUser(env, userId, "refresh-credentials");
 }
 
+async function beginGithubAuthorization(
+  env: Bindings,
+  userId: string,
+  returnTo: string,
+): Promise<string> {
+  const stateBytes = new Uint8Array(16);
+  crypto.getRandomValues(stateBytes);
+  const state = toHex(stateBytes);
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO oauth_states (state, user_id, created_at, expires_at, return_to) VALUES (?, ?, ?, ?, ?)",
+  )
+    .bind(state, userId, now, now + 10 * 60 * 1000, returnTo)
+    .run();
+  const params = new URLSearchParams({
+    client_id: env.GITHUB_APP_CLIENT_ID,
+    redirect_uri: `${env.BASE_URL}/auth/github/callback`,
+    state,
+    prompt: "select_account",
+  });
+  return `https://github.com/login/oauth/authorize?${params}`;
+}
+
+/** Revoke every user token and grant issued by this GitHub App for this user. */
+async function revokeGithubAuthorization(env: Bindings, token: string): Promise<void> {
+  const basicCredentials = btoa(`${env.GITHUB_APP_CLIENT_ID}:${env.GITHUB_APP_CLIENT_SECRET!}`);
+  const res = await fetch(
+    `https://api.github.com/applications/${encodeURIComponent(env.GITHUB_APP_CLIENT_ID)}/grant`,
+    {
+      method: "DELETE",
+      headers: {
+        authorization: `Basic ${basicCredentials}`,
+        accept: "application/vnd.github+json",
+        "content-type": "application/json",
+        "user-agent": "codestation",
+        "x-github-api-version": "2022-11-28",
+      },
+      body: JSON.stringify({ access_token: token }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  if (!res.ok) throw new Error(`github authorization revocation endpoint ${res.status}`);
+}
+
 export const githubRoutes = new Hono<AppContext>()
   .get("/auth/github", requireUser, async (c) => {
     if (!githubConfigured(c.env)) return c.text("GitHub App not configured", 404);
-    const stateBytes = new Uint8Array(16);
-    crypto.getRandomValues(stateBytes);
-    const state = toHex(stateBytes);
-    const now = Date.now();
     const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-    await c.env.DB.prepare(
-      "INSERT INTO oauth_states (state, user_id, created_at, expires_at, return_to) VALUES (?, ?, ?, ?, ?)",
-    )
-      .bind(state, c.get("user").id, now, now + 10 * 60 * 1000, returnTo)
-      .run();
-    const params = new URLSearchParams({
-      client_id: c.env.GITHUB_APP_CLIENT_ID,
-      redirect_uri: `${c.env.BASE_URL}/auth/github/callback`,
-      state,
-    });
-    return c.redirect(`https://github.com/login/oauth/authorize?${params}`);
+    return c.redirect(await beginGithubAuthorization(c.env, c.get("user").id, returnTo));
+  })
+  .post("/auth/github/reauth", requireUser, async (c) => {
+    if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
+    const userId = c.get("user").id;
+    try {
+      const token = await githubAccessToken(c.env, userId);
+      if (token) await revokeGithubAuthorization(c.env, token);
+      await c.env.DB.prepare(
+        `UPDATE credentials_encrypted
+         SET github_token = NULL, github_refresh_token = NULL, github_expires_at = NULL,
+             github_login = NULL, rotated_at = ?
+         WHERE user_id = ?`,
+      )
+        .bind(Date.now(), userId)
+        .run();
+      const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
+      return c.json({ authorizationUrl: await beginGithubAuthorization(c.env, userId, returnTo) });
+    } catch (err) {
+      console.log(JSON.stringify({ event: "github_reauthorize_failed", error: String(err) }));
+      return c.json({ error: "Could not reset GitHub authorization. Please retry." }, 502);
+    }
   })
   .get("/auth/github/callback", requireUser, async (c) => {
     const code = c.req.query("code");
@@ -210,7 +282,10 @@ export const githubRoutes = new Hono<AppContext>()
     try {
       const token = await githubAccessToken(c.env, c.get("user").id);
       if (!token) return c.json({ error: "connect GitHub first" }, 409);
-      return c.json({ repositories: await fetchGithubRepositories(token) });
+      const query = (c.req.query("q") ?? "").trim().toLocaleLowerCase();
+      if (!query) return c.json({ repositories: [] });
+      const repositories = await searchGithubRepositories(token, query);
+      return c.json({ repositories });
     } catch (err) {
       console.log(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
       return c.json({ error: "Could not load GitHub repositories. Reconnect GitHub and retry." }, 502);
