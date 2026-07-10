@@ -193,7 +193,7 @@ describe("provision command construction", () => {
     expect(calls.some((c) => c.args.slice(0, 3).join(" ") === "storage volume delete")).toBe(false);
   });
 
-  it("writes a pasted Codex subscription auth.json to ~/.codex, 0600 — never into argv", async () => {
+  it("writes the Codex subscription auth.json to ~/.codex, 0600 — never into argv", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
       { llmKeys: { codex_subscription_token: '{"tokens":"CANARY-codex-123"}' } },
@@ -207,6 +207,88 @@ describe("provision command construction", () => {
     const script = authWrite!.args.join(" ");
     expect(script).toContain(".codex/auth.json");
     expect(script).toContain("chmod 0600");
+    for (const c of calls) {
+      expect(c.args.join(" ")).not.toContain("CANARY-");
+    }
+  });
+
+  it("marks Claude onboarding complete when its subscription token is injected", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { llmKeys: { claude_subscription_token: "CANARY-oat01-claude-123" } },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    const envWrite = calls.find((c) => c.stdin?.includes("CLAUDE_CODE_OAUTH_TOKEN"));
+    expect(envWrite?.stdin).toContain("CANARY-oat01-claude-123");
+
+    const stateMerge = calls.find((c) => c.stdin?.includes("hasCompletedOnboarding"));
+    expect(stateMerge?.stdin).toContain('current.hasCompletedOnboarding = true');
+    expect(stateMerge?.stdin).toContain('/home/dev/.claude.json');
+    expect(stateMerge?.stdin).toContain('fs.renameSync(temp, file)');
+    expect(stateMerge?.stdin).toContain('fs.rmSync(__filename)');
+    expect(stateMerge?.args.join(" ")).toContain("chmod 0600");
+    expect(calls.map((c) => c.args.join(" "))).toContainEqual(
+      expect.stringContaining("claude-state-merge.cjs"),
+    );
+    for (const c of calls) {
+      expect(c.args.join(" ")).not.toContain("CANARY-");
+    }
+  });
+
+  it("merges Copilot and OpenCode Go into OpenCode's auth store via a self-deleting dev-run script", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { llmKeys: { github_copilot: "CANARY-gho-1", opencode_go: "CANARY-ocgo-1" } },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    // OpenCode Go is also exported as an env var; the Copilot token is file-based only.
+    const envWrite = calls.find((c) => c.stdin?.includes("OPENCODE_API_KEY"));
+    expect(envWrite?.stdin).toContain("CANARY-ocgo-1");
+    expect(envWrite?.stdin).not.toContain("CANARY-gho-1");
+
+    const merge = calls.find((c) => c.stdin?.includes("github-copilot"));
+    expect(merge?.stdin).toContain('"refresh":"CANARY-gho-1"');
+    expect(merge?.stdin).toContain('"opencode":{"type":"api","key":"CANARY-ocgo-1"}');
+    expect(merge?.stdin).toContain(".local/share/opencode/auth.json");
+    expect(merge?.stdin).toContain("rmSync(__filename)");
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContainEqual(expect.stringContaining("opencode-auth-merge.cjs"));
+    // Secrets hygiene: tokens travel via stdin, never in command arguments.
+    for (const c of calls) {
+      expect(c.args.join(" ")).not.toContain("CANARY-");
+    }
+  });
+
+  it("writes wrangler's config/default.toml from the OAuth payload, 0600 — never into argv", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      {
+        wranglerOauth: JSON.stringify({
+          oauth_token: "CANARY-wr-access",
+          refresh_token: "CANARY-wr-refresh",
+          expiration_time: "2026-07-10T00:00:00.000Z",
+          scopes: ["account:read", "workers:write"],
+        }),
+      },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    const toml = calls.find((c) => c.stdin?.includes("oauth_token"));
+    expect(toml).toBeDefined();
+    expect(toml!.args.join(" ")).toContain(".wrangler/config/default.toml");
+    expect(toml!.args.join(" ")).toContain("chmod 0600");
+    expect(toml!.stdin).toContain('oauth_token = "CANARY-wr-access"');
+    expect(toml!.stdin).toContain('refresh_token = "CANARY-wr-refresh"');
+    expect(toml!.stdin).toContain('expiration_time = "2026-07-10T00:00:00.000Z"');
+    expect(toml!.stdin).toContain('scopes = ["account:read", "workers:write"]');
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
     }

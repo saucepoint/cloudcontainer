@@ -8,6 +8,7 @@ import {
   CredentialPayloadSchema,
   LLM_PROVIDERS,
   sealOpenJson,
+  WranglerOauthSchema,
   type Agent,
   type CredentialPayload,
   type JobRequest,
@@ -28,12 +29,20 @@ const LLM_ENV_VARS: Record<LlmProvider, readonly string[]> = {
   openai: ["OPENAI_API_KEY"],
   gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   openrouter: ["OPENROUTER_API_KEY"],
+  opencode_go: ["OPENCODE_API_KEY"],
   claude_subscription_token: ["CLAUDE_CODE_OAUTH_TOKEN"],
   codex_subscription_token: [], // file-based: written to ~/.codex/auth.json, not an env var
+  github_copilot: [], // file-based: merged into OpenCode's auth.json, not an env var
 };
 
 /** Where the Codex CLI keeps its subscription (ChatGPT sign-in) credentials. */
 const CODEX_AUTH_PATH = "/home/dev/.codex/auth.json";
+/** Claude Code's machine-local state (separate from settings and credentials). */
+const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
+/** OpenCode's credential store; subscription entries are merged into it. */
+const OPENCODE_AUTH_PATH = "/home/dev/.local/share/opencode/auth.json";
+/** wrangler's login state. It checks the legacy ~/.wrangler location first. */
+const WRANGLER_CONFIG_PATH = "/home/dev/.wrangler/config/default.toml";
 
 export class Provisioner {
   constructor(
@@ -228,10 +237,10 @@ export class Provisioner {
     }
     add("CLOUDFLARE_API_TOKEN", creds.cloudflareToken);
 
-    // Codex subscription auth is the pasted contents of ~/.codex/auth.json
-    // (produced by `codex login` on the user's machine). Write-only: when the
-    // dashboard credential is absent we leave the file alone so an in-shell
-    // `codex login` survives credential refreshes.
+    // Codex subscription auth is the ~/.codex/auth.json blob assembled by the
+    // control-plane ChatGPT sign-in. Write-only: when the dashboard credential
+    // is absent we leave the file alone so an in-shell `codex login` survives
+    // credential refreshes.
     if (llm.codex_subscription_token) {
       await this.incus.writeFile(name, CODEX_AUTH_PATH, llm.codex_subscription_token.trim() + "\n", {
         owner: "dev:dev",
@@ -255,6 +264,85 @@ export class Provisioner {
          done`,
       ].join(" && "),
     );
+
+    // Claude Code recognizes CLAUDE_CODE_OAUTH_TOKEN as authenticated, but on
+    // a fresh home its interactive client still opens the login wizard until
+    // machine onboarding is marked complete. Merge only that marker so any
+    // existing Claude state in the persistent home volume survives refreshes.
+    if (llm.claude_subscription_token) {
+      const scriptPath = "/home/dev/.config/codestation/claude-state-merge.cjs";
+      const script = [
+        `const fs = require("fs");`,
+        `const file = ${JSON.stringify(CLAUDE_STATE_PATH)};`,
+        `let current = {};`,
+        `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
+        `current.hasCompletedOnboarding = true;`,
+        `const temp = file + ".codestation-" + process.pid;`,
+        `fs.writeFileSync(temp, JSON.stringify(current, null, 2) + "\\n", { mode: 0o600 });`,
+        `fs.renameSync(temp, file);`,
+        `fs.chmodSync(file, 0o600);`,
+        `fs.rmSync(__filename);`,
+      ].join("\n");
+      await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
+      await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
+    }
+
+    // GitHub Copilot and OpenCode Go live in OpenCode's auth store. Merged in
+    // by a short node script (node is baked into the base image) so providers
+    // connected in-shell via `opencode auth login` survive; write-only like
+    // the Codex file. The script embeds the tokens, so it is dev-owned 0600
+    // and removes itself after the merge. Runs after the chown -R above so
+    // dev can delete it from its directory.
+    const opencodeEntries: Record<string, unknown> = {};
+    if (llm.github_copilot) {
+      // OpenCode's github-copilot provider keeps the GitHub OAuth token as
+      // "refresh" and mints short-lived Copilot API tokens from it on demand.
+      opencodeEntries["github-copilot"] = {
+        type: "oauth",
+        refresh: llm.github_copilot,
+        access: "",
+        expires: 0,
+      };
+    }
+    if (llm.opencode_go) {
+      opencodeEntries["opencode"] = { type: "api", key: llm.opencode_go };
+    }
+    if (Object.keys(opencodeEntries).length > 0) {
+      const scriptPath = "/home/dev/.config/codestation/opencode-auth-merge.cjs";
+      const script = [
+        `const fs = require("fs");`,
+        `const file = ${JSON.stringify(OPENCODE_AUTH_PATH)};`,
+        `const add = ${JSON.stringify(opencodeEntries)};`,
+        `fs.mkdirSync(require("path").dirname(file), { recursive: true });`,
+        `let current = {};`,
+        `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
+        `fs.writeFileSync(file, JSON.stringify({ ...current, ...add }, null, 2) + "\\n", { mode: 0o600 });`,
+        `fs.rmSync(__filename);`,
+      ].join("\n");
+      await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
+      await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
+    }
+
+    // wrangler reads its login from config/default.toml and refreshes the
+    // tokens itself from inside the container. Write-only, like the Codex
+    // file: an absent dashboard credential leaves an in-shell `wrangler
+    // login` untouched.
+    if (creds.wranglerOauth) {
+      const wrangler = WranglerOauthSchema.parse(JSON.parse(creds.wranglerOauth));
+      const tomlStr = (value: string) => JSON.stringify(value); // JSON escaping is valid TOML
+      const toml = [
+        "# managed by codestation — wrangler rotates these tokens itself",
+        `oauth_token = ${tomlStr(wrangler.oauth_token)}`,
+        `refresh_token = ${tomlStr(wrangler.refresh_token)}`,
+        `expiration_time = ${tomlStr(wrangler.expiration_time)}`,
+        `scopes = [${wrangler.scopes.map(tomlStr).join(", ")}]`,
+      ].join("\n");
+      await this.incus.writeFile(name, WRANGLER_CONFIG_PATH, toml + "\n", {
+        owner: "dev:dev",
+        mode: "0600",
+      });
+      await this.incus.shell(name, "chown -R dev:dev /home/dev/.wrangler");
+    }
 
     if (creds.githubToken) {
       // gh CLI + git credential helper read from daemon-managed files (§9).
@@ -312,7 +400,9 @@ export class Provisioner {
         name,
         "grep -o '^export [A-Z_]*' /home/dev/.config/codestation/env 2>/dev/null | awk '{print $2}'; " +
           "test -f /home/dev/.config/gh/hosts.yml && echo GH_CONNECTED; " +
-          `test -f ${CODEX_AUTH_PATH} && echo CODEX_AUTH_JSON || true`,
+          `test -f ${CODEX_AUTH_PATH} && echo CODEX_AUTH_JSON; ` +
+          `grep -q '"github-copilot"' ${OPENCODE_AUTH_PATH} 2>/dev/null && echo COPILOT_CONNECTED; ` +
+          `test -f ${WRANGLER_CONFIG_PATH} && echo WRANGLER_CONNECTED || true`,
       );
       const vars = new Set(stdout.split("\n").map((l) => l.trim()));
       const llm: CredentialPayload["llmKeys"] = {};
@@ -320,8 +410,10 @@ export class Provisioner {
         if (LLM_ENV_VARS[provider].some((v) => vars.has(v))) llm[provider] = "1";
       }
       if (vars.has("CODEX_AUTH_JSON")) llm.codex_subscription_token = "1";
+      if (vars.has("COPILOT_CONNECTED")) llm.github_copilot = "1";
       if (Object.keys(llm).length) creds.llmKeys = llm;
       if (vars.has("CLOUDFLARE_API_TOKEN")) creds.cloudflareToken = "1";
+      if (vars.has("WRANGLER_CONNECTED")) creds.wranglerOauth = "1";
       if (vars.has("GH_CONNECTED")) creds.githubToken = "1";
     } catch {
       // best effort — an unreadable MOTD source should never fail the job

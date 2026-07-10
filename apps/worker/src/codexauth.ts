@@ -3,21 +3,20 @@
  * OpenAI's device-code flow control-plane-side: the dashboard shows a one-time
  * code, the user approves it at auth.openai.com from any browser, and the
  * Worker exchanges the resulting authorization code for tokens and stores them
- * as the `codex_subscription_token` auth.json blob — the exact shim path a
- * pasted ~/.codex/auth.json takes, so sealing, live refresh, and rebuilds all
- * behave identically.
+ * as the `codex_subscription_token` auth.json blob the Codex CLI expects, so
+ * sealing, live refresh, and rebuilds all behave identically.
  *
  * OpenAI offers no third-party OAuth registration for ChatGPT-plan auth; this
- * reuses the Codex CLI's public PKCE client id (as OpenCode does). If OpenAI
- * ever blocks it, the pasted-auth.json path under "Advanced options" remains.
- * Flow details mirror codex-rs/login/src/device_code_auth.rs: the poll
- * response carries the PKCE verifier, so no verifier state is held here.
+ * reuses the Codex CLI's public PKCE client id (as OpenCode does). Flow
+ * details mirror codex-rs/login/src/device_code_auth.rs: the poll response
+ * carries the PKCE verifier, so no verifier state is held here.
  */
 import { Hono } from "hono";
 import { requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
-import type { AppContext, Bindings } from "./types.js";
+import { checkOauthState, deleteOauthState, putOauthState } from "./oauthstate.js";
+import type { AppContext } from "./types.js";
 
 const OPENAI_ISSUER = "https://auth.openai.com";
 /** The Codex CLI's public (PKCE, secret-less) OAuth client. */
@@ -160,12 +159,6 @@ async function readJson<T>(c: { req: { json(): Promise<unknown> } }): Promise<T 
 
 const stateKey = (deviceAuthId: string) => `codex:${deviceAuthId}`;
 
-async function deleteState(env: Bindings, deviceAuthId: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM oauth_states WHERE state = ?")
-    .bind(stateKey(deviceAuthId))
-    .run();
-}
-
 export const codexAuthRoutes = new Hono<AppContext>()
 
   .post("/api/codex/device", requireUser, async (c) => {
@@ -175,27 +168,17 @@ export const codexAuthRoutes = new Hono<AppContext>()
     } catch (err) {
       // Log the failure kind only, never token material (§10).
       console.log(JSON.stringify({ event: "codex_device_start_failed", error: String(err) }));
-      return c.json({ error: "could not reach OpenAI — try again or paste auth.json" }, 502);
+      return c.json({ error: "could not reach OpenAI — try again in a minute" }, 502);
     }
     // Bind the attempt to this user so nobody else can poll it into their account.
-    const now = Date.now();
-    await c.env.DB.prepare(
-      "INSERT INTO oauth_states (state, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-    )
-      .bind(stateKey(start.deviceAuthId), c.get("user").id, now, now + DEVICE_AUTH_TTL_MS)
-      .run();
+    await putOauthState(c.env, stateKey(start.deviceAuthId), c.get("user").id, DEVICE_AUTH_TTL_MS);
     return c.json(start);
   })
 
   .post("/api/codex/device/poll", requireUser, async (c) => {
     const body = await readJson<{ deviceAuthId?: string; userCode?: string }>(c);
     if (!body?.deviceAuthId || !body.userCode) return c.json({ error: "bad request" }, 400);
-    const row = await c.env.DB.prepare(
-      "SELECT user_id, expires_at FROM oauth_states WHERE state = ?",
-    )
-      .bind(stateKey(body.deviceAuthId))
-      .first<{ user_id: string; expires_at: number }>();
-    if (!row || row.user_id !== c.get("user").id || row.expires_at < Date.now()) {
+    if (!(await checkOauthState(c.env, stateKey(body.deviceAuthId), c.get("user").id))) {
       return c.json({ error: "unknown or expired sign-in attempt — start over" }, 403);
     }
 
@@ -203,13 +186,13 @@ export const codexAuthRoutes = new Hono<AppContext>()
     try {
       result = await pollDeviceAuth(body.deviceAuthId, body.userCode);
     } catch (err) {
-      await deleteState(c.env, body.deviceAuthId);
+      await deleteOauthState(c.env, stateKey(body.deviceAuthId));
       console.log(JSON.stringify({ event: "codex_device_poll_failed", error: String(err) }));
-      return c.json({ error: "ChatGPT sign-in failed — try again or paste auth.json" }, 502);
+      return c.json({ error: "ChatGPT sign-in failed — start over and try again" }, 502);
     }
     if (result.status === "pending") return c.json({ status: "pending" });
 
-    await deleteState(c.env, body.deviceAuthId);
+    await deleteOauthState(c.env, stateKey(body.deviceAuthId));
     await upsertCredentials(c.env, c.get("user").id, {
       llmKeys: { codex_subscription_token: result.authJson },
     });

@@ -75,6 +75,12 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
   justify-content: space-between; align-items: center; font-size: 0.92rem; }
 .check li:last-child { border-bottom: 0; }
 .ok { color: var(--accent); } .missing { color: var(--muted); }
+.group-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted); margin: 1.5rem 0 0.25rem; }
+.provider { padding: 0.8rem 0; border-bottom: 1px solid var(--border); }
+.provider:last-of-type { border-bottom: 0; }
+.provider-head { display: flex; gap: 1rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.provider small { display: block; color: var(--muted); margin-top: 0.15rem; }
 details { margin-top: 1rem; } summary { cursor: pointer; color: var(--muted); font-size: 0.92rem; }
 .row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
 .notice { border-radius: 8px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; background: var(--panel2); }

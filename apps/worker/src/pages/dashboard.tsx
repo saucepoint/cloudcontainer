@@ -1,18 +1,28 @@
 import type { FC } from "hono/jsx";
-import { AGENT_LABELS, LLM_PROVIDER_LABELS, LLM_PROVIDERS } from "@codestation/contract";
-import { CODEX_DEVICE_JS } from "./codexdevice.js";
+import {
+  AGENT_LABELS,
+  LLM_PROVIDER_LABELS,
+  LLM_PROVIDERS,
+  SUBSCRIPTION_LLM_PROVIDERS,
+} from "@codestation/contract";
+import { AUTH_FLOWS_JS } from "./authflows.js";
 import { Layout } from "./layout.js";
 
-// Codex gets its own "Sign in with ChatGPT" row; everything else stays a paste.
-const PROVIDER_OPTIONS = LLM_PROVIDERS.filter((p) => p !== "codex_subscription_token")
-  .map((p) => `<option value="${p}">${LLM_PROVIDER_LABELS[p]}</option>`)
-  .join("");
+// Subscriptions each get their own sign-in row; the dropdown is API keys only.
+const API_KEY_PROVIDERS = LLM_PROVIDERS.filter(
+  (p) => !(SUBSCRIPTION_LLM_PROVIDERS as readonly string[]).includes(p),
+);
+const PROVIDER_OPTIONS = API_KEY_PROVIDERS.map(
+  (p) => `<option value="${p}">${LLM_PROVIDER_LABELS[p]}</option>`,
+).join("");
 
 const DASHBOARD_JS = `
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const AGENT_LABELS = ${JSON.stringify(AGENT_LABELS)};
 const PROVIDER_LABELS = ${JSON.stringify(LLM_PROVIDER_LABELS)};
+const API_KEY_PROVIDERS = ${JSON.stringify(API_KEY_PROVIDERS)};
+const CRED_BOXES = ['credform', 'claudebox', 'codexbox', 'copilotbox', 'opencodeform', 'cfform'];
 const STATUS_LABELS = {
   waitlisted: 'Waiting for capacity', provisioning: 'Building', running: 'Ready',
   stopped: 'Stopped', suspended: 'Suspended', upgrade_pending: 'Upgrade pending',
@@ -211,37 +221,66 @@ function applyContainer(c) {
   renderDanger(c);
 }
 
+function credRow([name, ok, fn, cta]) {
+  return '<li><span>' + esc(name) + '</span>' + (ok
+    ? '<span><span class="ok">✓ ' + esc(ok) + '</span> · ' +
+      '<button type="button" class="link-btn" onclick="' + fn + '">Update</button></span>'
+    : '<span class="missing">not set · <button type="button" class="link-btn" onclick="' + fn + '">' + esc(cta) + '</button></span>') +
+    '</li>';
+}
+
 function renderCreds(cr) {
-  const rows = [];
-  const llmKeys = Object.keys(cr.llm || {}).filter((k) => k !== 'codex_subscription_token');
-  const llmStatus = llmKeys.length ? 'connected (' + llmKeys.map(providerName).join(', ') + ')' : null;
-  rows.push(['Agent model access', llmStatus, 'addCreds()', 'Add API key']);
-  rows.push(['ChatGPT (Codex)', (cr.llm || {}).codex_subscription_token ? 'connected' : null,
-    'codexStart()', 'Sign in with ChatGPT']);
-  rows.push(['Cloudflare token', cr.cloudflare ? 'connected' : null, 'addCf()', 'Add token']);
+  const llm = cr.llm || {};
+  const subscriptions = [
+    ['Claude', llm.claude_subscription_token ? 'connected' : null, 'claudeStart()', 'Sign in with Claude'],
+    ['ChatGPT (Codex)', llm.codex_subscription_token ? 'connected' : null, 'codexStart()', 'Sign in with ChatGPT'],
+    ['GitHub Copilot', llm.github_copilot ? 'connected' : null, 'copilotStart()', 'Sign in with GitHub'],
+    ['OpenCode Go', llm.opencode_go ? 'connected' : null, 'addOpencode()', 'Add key'],
+  ];
+  const apiKeys = API_KEY_PROVIDERS.filter((k) => llm[k]);
+  const cfKinds = [cr.wrangler ? 'wrangler' : null, cr.cloudflare ? 'API token' : null].filter(Boolean);
+  const rows = [
+    ['Model API keys', apiKeys.length ? 'connected (' + apiKeys.map(providerName).join(', ') + ')' : null,
+      'addCreds()', 'Add API key'],
+    ['Cloudflare', cfKinds.length ? 'connected (' + cfKinds.join(' + ') + ')' : null, 'addCf()', 'Connect'],
+  ];
   if (cr.githubAvailable) {
     rows.push(['GitHub', cr.github ? 'connected (' + cr.github + ')' : null,
       "location.href='/auth/github'", 'Connect']);
   }
-  $('creds').innerHTML = '<ul class="check">' + rows.map(([name, ok, fn, cta]) =>
-    '<li><span>' + esc(name) + '</span>' + (ok
-      ? '<span><span class="ok">✓ ' + esc(ok) + '</span> · ' +
-        '<button type="button" class="link-btn" onclick="' + fn + '">Update</button></span>'
-      : '<span class="missing">not set · <button type="button" class="link-btn" onclick="' + fn + '">' + esc(cta) + '</button></span>')
-  ).join('') + '</ul>' +
+  $('creds').innerHTML =
+  '<h3 class="group-label">Subscriptions</h3>' +
+  '<ul class="check">' + subscriptions.map(credRow).join('') + '</ul>' +
+  '<h3 class="group-label">API keys &amp; tokens</h3>' +
+  '<ul class="check">' + rows.map(credRow).join('') + '</ul>' +
   '<div id="credform" hidden>' +
     '<label for="prov">Provider</label><select id="prov">${PROVIDER_OPTIONS}</select>' +
     '<label for="provkey">Key or token</label><input type="password" id="provkey" autocomplete="off">' +
     '<p class="muted">Save an empty value to remove the selected managed credential.</p>' +
     '<div class="row"><button type="button" class="btn" onclick="saveCred(this)">Save</button></div></div>' +
+  '<div id="claudebox" hidden>' +
+    '<div id="claudeflow" role="status" aria-live="polite"></div>' +
+    '<details><summary>Advanced: paste a token from claude setup-token instead</summary>' +
+    '<label for="claudetok">Run claude setup-token on your machine, then paste the token</label>' +
+    '<input type="password" id="claudetok" autocomplete="off">' +
+    '<div class="row"><button type="button" class="btn" onclick="saveClaudeToken(this)">Save</button></div></details></div>' +
   '<div id="codexbox" hidden>' +
-    '<div id="codexflow" role="status" aria-live="polite"></div>' +
-    '<details><summary>Advanced: paste auth.json instead</summary>' +
-    '<label for="codexjson">Run codex login on your machine, then paste ~/.codex/auth.json</label>' +
-    '<textarea id="codexjson" spellcheck="false"></textarea>' +
-    '<div class="row"><button type="button" class="btn" onclick="saveCodexJson(this)">Save</button></div></details></div>' +
+    '<div id="codexflow" role="status" aria-live="polite"></div></div>' +
+  '<div id="copilotbox" hidden>' +
+    '<div id="copilotflow" role="status" aria-live="polite"></div></div>' +
+  '<div id="opencodeform" hidden>' +
+    '<label for="opencodekey">OpenCode Go API key — copy it from ' +
+    '<a href="https://opencode.ai/auth" target="_blank" rel="noreferrer">opencode.ai/auth</a></label>' +
+    '<input type="password" id="opencodekey" autocomplete="off">' +
+    '<p class="muted">Save an empty value to remove it.</p>' +
+    '<div class="row"><button type="button" class="btn" onclick="saveOpencode(this)">Save</button></div></div>' +
   '<div id="cfform" hidden>' +
-    '<label for="cftok">Cloudflare API token</label><input type="password" id="cftok" autocomplete="off">' +
+    '<div class="row" style="margin-top:0.2rem">' +
+    '<button type="button" class="btn secondary" onclick="wranglerStart()">Sign in with Cloudflare (wrangler)</button>' +
+    (cr.wrangler ? '<button type="button" class="link-btn" style="color:var(--danger)" onclick="wranglerDisconnect(this)">Disconnect wrangler</button>' : '') +
+    '</div>' +
+    '<div id="wranglerflow" role="status" aria-live="polite"></div>' +
+    '<label for="cftok">Or paste a Cloudflare API token</label><input type="password" id="cftok" autocomplete="off">' +
     '<p class="muted">Use a narrowly scoped token. Save an empty value to remove it.</p>' +
     '<div class="row"><button type="button" class="btn" onclick="saveCf(this)">Save</button></div></div>' +
   '<div id="crederr" class="err" role="alert" aria-live="assertive"></div>';
@@ -441,18 +480,23 @@ window.mintToken = async (btn) => {
   }
 };
 
+function showCredBox(id) {
+  for (const box of CRED_BOXES) $(box).hidden = box !== id;
+  showCredentialError('');
+}
+
 window.addCreds = () => {
-  $('credform').hidden = false;
-  $('codexbox').hidden = true;
-  $('cfform').hidden = true;
+  showCredBox('credform');
   $('prov').focus();
 };
 
+window.addOpencode = () => {
+  showCredBox('opencodeform');
+  $('opencodekey').focus();
+};
+
 window.addCf = () => {
-  $('cfform').hidden = false;
-  $('credform').hidden = true;
-  $('codexbox').hidden = true;
-  $('cftok').focus();
+  showCredBox('cfform');
 };
 
 async function refreshCreds() {
@@ -460,40 +504,63 @@ async function refreshCreds() {
   renderCreds(result);
 }
 
+window.claudeStart = () => {
+  if (window.afActive) return;
+  showCredBox('claudebox');
+  claudeOauthFlow($('claudeflow'), refreshCreds);
+};
+
 window.codexStart = () => {
-  if (window.cxActive) return;
-  $('codexbox').hidden = false;
-  $('credform').hidden = true;
-  $('cfform').hidden = true;
+  if (window.afActive) return;
+  showCredBox('codexbox');
   codexDeviceFlow($('codexflow'), refreshCreds);
 };
 
-window.saveCodexJson = async (btn) => {
-  const restore = setButtonBusy(btn, 'Saving…');
+window.copilotStart = () => {
+  if (window.afActive) return;
+  showCredBox('copilotbox');
+  copilotDeviceFlow($('copilotflow'), refreshCreds);
+};
+
+window.wranglerStart = () => {
+  if (window.afActive) return;
+  wranglerOauthFlow($('wranglerflow'), refreshCreds);
+};
+
+window.wranglerDisconnect = async (btn) => {
+  if (!confirm('Disconnect wrangler? The signed-in state is removed from your server within a minute.')) return;
+  const restore = setButtonBusy(btn, 'Removing…');
   showCredentialError('');
   try {
     await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ llmKeys: { codex_subscription_token: $('codexjson').value.trim() } }) });
+      body: JSON.stringify({ wranglerOauth: '' }) });
     await refreshCreds();
   } catch (error) {
-    showCredentialError(errorMessage(error, 'Could not save the Codex sign-in.'));
+    showCredentialError(errorMessage(error, 'Could not disconnect wrangler.'));
     restore();
   }
 };
 
-window.saveCred = async (btn) => {
+async function saveLlmKey(btn, provider, value, failMessage) {
   const restore = setButtonBusy(btn, 'Saving…');
   showCredentialError('');
   const body = { llmKeys: {} };
-  body.llmKeys[$('prov').value] = $('provkey').value.trim();
+  body.llmKeys[provider] = value;
   try {
     await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     await refreshCreds();
   } catch (error) {
-    showCredentialError(errorMessage(error, 'Could not save that credential.'));
+    showCredentialError(errorMessage(error, failMessage));
     restore();
   }
-};
+}
+
+window.saveCred = (btn) => saveLlmKey(btn, $('prov').value, $('provkey').value.trim(),
+  'Could not save that credential.');
+window.saveOpencode = (btn) => saveLlmKey(btn, 'opencode_go', $('opencodekey').value.trim(),
+  'Could not save that OpenCode Go key.');
+window.saveClaudeToken = (btn) => saveLlmKey(btn, 'claude_subscription_token', $('claudetok').value.trim(),
+  'Could not save that Claude token.');
 
 window.saveCf = async (btn) => {
   const restore = setButtonBusy(btn, 'Saving…');
@@ -614,7 +681,7 @@ export const DashboardPage: FC = () => (
         Your server must be destroyed before your account can be deleted.
       </p>
     </section>
-    <script dangerouslySetInnerHTML={{ __html: CODEX_DEVICE_JS }} />
+    <script dangerouslySetInnerHTML={{ __html: AUTH_FLOWS_JS }} />
     <script dangerouslySetInnerHTML={{ __html: DASHBOARD_JS }} />
   </Layout>
 );

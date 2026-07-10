@@ -50,6 +50,21 @@ describe("upsertCredentials", () => {
     expect(buildCredentialPayload(env, row).cloudflareToken).toBeUndefined();
     expect(decryptLlmKeys(env, row)).toEqual({ openai: "o" }); // untouched
   });
+
+  it("stores the wrangler OAuth blob encrypted and clears it independently", async () => {
+    const env = await envWithUser();
+    const blob = JSON.stringify({ oauth_token: "CANARY-wr", refresh_token: "r", expiration_time: "t", scopes: [] });
+    await upsertCredentials(env, "user-1", { cloudflareToken: "cf-1", wranglerOauth: blob });
+
+    let row = await getCredentialsRow(env, "user-1");
+    expect(row?.wrangler_oauth).not.toContain("CANARY-wr"); // ciphertext only in D1
+    expect(buildCredentialPayload(env, row).wranglerOauth).toBe(blob);
+
+    await upsertCredentials(env, "user-1", { wranglerOauth: "" });
+    row = await getCredentialsRow(env, "user-1");
+    expect(buildCredentialPayload(env, row).wranglerOauth).toBeUndefined();
+    expect(buildCredentialPayload(env, row).cloudflareToken).toBe("cf-1"); // untouched
+  });
 });
 
 describe("buildCredentialPayload", () => {
