@@ -83,7 +83,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
 - Optional SSH key, enrollment-token flow, model credentials, Cloudflare token,
-  Codex subscription sign-in, and optional GitHub App integration.
+  Codex subscription sign-in, and optional GitHub App integration with
+  repository selection and automatic cloning.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
   credential-refresh jobs.
 - Automatic FIFO waitlist admission when host capacity becomes available.
@@ -140,7 +141,7 @@ Claude Code, Codex, and OpenCode. All other fields are visibly optional:
 - Claude subscription token;
 - Codex ChatGPT-plan sign-in or auth.json paste;
 - Cloudflare API token; and
-- GitHub App authorization, when configured.
+- GitHub App authorization and repositories to clone, when configured.
 
 Agent choices include a plain-language description and a beginner-oriented
 recommendation without hiding the other choices.
@@ -312,9 +313,10 @@ The daemon:
 5. adds the host-to-container SSH proxy;
 6. starts the container and waits for systemd;
 7. writes authorized keys and credentials;
-8. writes the first-login checklist;
-9. verifies selected agents and installs only missing ones; and
-10. returns SSH host-key fingerprints.
+8. clones selected GitHub repositories into `/home/dev/repos/owner/name`;
+9. writes the first-login checklist;
+10. verifies selected agents and installs only missing ones; and
+11. returns SSH host-key fingerprints.
 
 No SSH key means no authorized_keys file and therefore no usable SSH login.
 
@@ -373,7 +375,9 @@ paths.
 - A GitHub App flow is shown only when its client ID and secret are configured.
   GitHub user-to-server access and refresh tokens are stored encrypted. The
   control-plane reconciler refreshes expiring access; the refresh token never
-  goes to a host.
+  goes to a host. The access token configures `gh` and Git inside the container.
+  Onboarding lists repositories visible to that token, revalidates selected
+  names at submission, and clones at most 20 during provision or rebuild.
 
 ### Storage and delivery
 
@@ -495,7 +499,7 @@ operations synchronize keys and credentials.
 |---|---|
 | users | Internal UUID primary key; world_id_session_id unique |
 | ssh_keys | Multiple public keys per user; never private keys |
-| containers | user_id unique; at most one environment per account |
+| containers | user_id unique; at most one environment per account; selected GitHub repositories are non-secret JSON metadata |
 | hosts | Capacity, status, SSH hostname, daemon endpoint, and X25519 public key |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
@@ -652,7 +656,8 @@ manual checks above have been completed for affected areas.
    intentionally missing selected binary triggers only its fallback installer.
 4. **Provisioning:** successful provisioning produces a Debian 13 environment,
    enforced RAM/CPU/home/root limits, a persistent home volume, a copyable SSH
-   command, and matching host-key fingerprints.
+   command, matching host-key fingerprints, and any selected GitHub repositories
+   cloned under `~/repos/owner/name` with `gh` authenticated.
 5. **No-key safety:** without a key, SSH fails closed. A one-hour, single-use
    enrollment token can add a public key and allow SSH.
 6. **Waitlist:** insufficient capacity produces a clear waitlisted state.

@@ -70,6 +70,7 @@ export interface ContainerRow {
   host_id: string | null;
   ssh_port: number | null;
   agents: string; // JSON array of Agent, e.g. '["claude","codex"]'
+  github_repos: string; // JSON array of owner/name repositories cloned on provision
   tier: Tier;
   cpu: number;
   ram_mb: number;

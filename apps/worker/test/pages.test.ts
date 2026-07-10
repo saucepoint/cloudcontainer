@@ -97,6 +97,21 @@ describe("onboarding wizard order", () => {
   });
 });
 
+describe("GitHub repository onboarding", () => {
+  it("offers OAuth and repository selection only when the GitHub App is configured", () => {
+    const enabled = String(OnboardingPage({ githubAvailable: true }));
+    expect(enabled).toContain("Connect or reconnect GitHub");
+    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).toContain("/api/github/repos");
+    expect(enabled).toContain('name=\"githubRepo\"');
+    expect(enabled).toContain("~/repos/owner/name");
+
+    const disabled = String(OnboardingPage({ githubAvailable: false }));
+    expect(disabled).not.toContain("Connect or reconnect GitHub");
+    expect(disabled).not.toContain('id=\"github-repos\"');
+  });
+});
+
 describe("dashboard loading and polling", () => {
   it("loads one dashboard snapshot, then polls only container state without replacing forms", () => {
     const html = String(DashboardPage({}));

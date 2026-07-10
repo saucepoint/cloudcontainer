@@ -28,7 +28,9 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 1. The user completes one World ID 4.0 Session proof. The RP-scoped
    session_id provides both one-human/one-account uniqueness and repeat login.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
-   model/developer credentials are optional.
+   model/developer credentials are optional. When GitHub is configured, users
+   can authorize the GitHub App and select repositories to clone automatically
+   into `~/repos/owner/name`.
 3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
@@ -141,9 +143,12 @@ For optional GitHub authorization, register a GitHub App with callback:
 
     https://YOUR_BASE_URL/auth/github/callback
 
-Enable expiring user-to-server tokens and request only needed repository
-permissions. The control plane refreshes access tokens; refresh tokens never
-leave it.
+Enable expiring user-to-server tokens and grant read-only Contents permission
+(Metadata read access is implicit). Install the App for the accounts or
+organizations whose repositories users should be able to select. The control
+plane refreshes access tokens; refresh tokens never leave it. Provisioning
+preconfigures both `gh` and Git's HTTPS credential helper with the short-lived
+access token.
 
 ## Repeat deployment
 

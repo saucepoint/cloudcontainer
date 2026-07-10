@@ -175,6 +175,7 @@ export class Provisioner {
 
       await this.writeAuthorizedKeys(name, sshKeys);
       await this.writeCredentials(name, creds);
+      await this.cloneGithubRepositories(name, request.githubRepos);
       await this.incus.writeFile(
         name,
         "/etc/codestation-agents",
@@ -206,6 +207,24 @@ export class Provisioner {
         );
       }
       throw error;
+    }
+  }
+
+  /** Clone requested repositories once into ~/repos/owner/name. */
+  private async cloneGithubRepositories(name: string, repositories: string[]): Promise<void> {
+    for (const repository of repositories) {
+      const [owner, repo] = repository.split("/");
+      if (!owner || !repo) throw new Error("invalid GitHub repository name");
+      const parent = `/home/dev/repos/${owner}`;
+      const destination = `${parent}/${repo}`;
+      const clone = [
+        `if test -e ${shellQuote(destination)}; then`,
+        `  test -d ${shellQuote(`${destination}/.git`)} || { echo 'clone destination already exists and is not a git repository' >&2; exit 1; }`,
+        "else",
+        `  mkdir -p ${shellQuote(parent)} && gh repo clone ${shellQuote(repository)} ${shellQuote(destination)}`,
+        "fi",
+      ].join("\n");
+      await this.incus.shell(name, `su - dev -c ${shellQuote(clone)}`);
     }
   }
 
@@ -356,6 +375,10 @@ export class Provisioner {
         owner: "dev:dev",
         mode: "0600",
       });
+      // writeFile runs as root, so a newly created gh directory would remain
+      // root-owned. gh may migrate its config on first use and must be able to
+      // create config.yml before repository cloning starts.
+      await this.incus.shell(name, "chown dev:dev /home/dev/.config/gh");
       await this.incus.writeFile(
         name,
         "/home/dev/.git-credentials",

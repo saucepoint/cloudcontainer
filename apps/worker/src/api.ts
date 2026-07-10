@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import {
   AGENTS,
+  GithubRepoNameSchema,
   INPUT_LIMITS,
   LLM_PROVIDER_LABELS,
   LLM_PROVIDERS,
@@ -18,7 +19,12 @@ import {
   upsertCredentials,
   validateCloudflareToken,
 } from "./credentials.js";
-import { githubConfigured, pushCredentialsToContainer } from "./github.js";
+import {
+  fetchGithubRepositories,
+  githubAccessToken,
+  githubConfigured,
+  pushCredentialsToContainer,
+} from "./github.js";
 import {
   containerAgents,
   enqueueJob,
@@ -231,6 +237,7 @@ export const apiRoutes = new Hono<AppContext>()
       sshPubkey?: string;
       llmKeys?: Record<string, unknown>;
       cloudflareToken?: unknown;
+      githubRepos?: unknown;
     }>(c);
     const requested = new Set(Array.isArray(body?.agents) ? body!.agents : []);
     // Normalize to canonical order; reject empty or unknown picks.
@@ -263,6 +270,32 @@ export const apiRoutes = new Hono<AppContext>()
       if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
     }
 
+    if (body.githubRepos !== undefined && !Array.isArray(body.githubRepos)) {
+      return c.json({ error: "GitHub repositories must be a list" }, 400);
+    }
+    const githubRepos = [...new Set(body.githubRepos ?? [])];
+    if (
+      githubRepos.length > INPUT_LIMITS.githubReposPerProvision ||
+      githubRepos.some((repo) => !GithubRepoNameSchema.safeParse(repo).success)
+    ) {
+      return c.json({ error: "invalid GitHub repository selection" }, 400);
+    }
+    if (githubRepos.length > 0) {
+      try {
+        const token = await githubAccessToken(c.env, user.id);
+        if (!token) return c.json({ error: "connect GitHub before selecting repositories" }, 409);
+        const accessible = new Set(
+          (await fetchGithubRepositories(token)).map((repo) => repo.fullName),
+        );
+        const unavailable = githubRepos.find((repo) => !accessible.has(repo as string));
+        if (unavailable) {
+          return c.json({ error: `GitHub repository is no longer available: ${unavailable}` }, 400);
+        }
+      } catch {
+        return c.json({ error: "Could not verify GitHub repositories; retry in a moment" }, 503);
+      }
+    }
+
     if (pubkey) {
       const inserted = await insertSshKey(c.env, user.id, "onboarding", pubkey);
       if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
@@ -279,7 +312,10 @@ export const apiRoutes = new Hono<AppContext>()
       });
     }
 
-    const container = await startProvision(c.env, user, { agents });
+    const container = await startProvision(c.env, user, {
+      agents,
+      githubRepos: githubRepos as string[],
+    });
     const job = await latestJob(c.env, container.id);
     return c.json({ container: await containerView(c.env, container, job) }, 202);
   })

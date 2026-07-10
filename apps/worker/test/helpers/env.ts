@@ -188,6 +188,7 @@ export async function seedContainer(
     host_id: "host-1",
     ssh_port: 30500,
     agents: JSON.stringify(["claude"]),
+    github_repos: "[]",
     tier: "free",
     cpu: 1,
     ram_mb: 2048,

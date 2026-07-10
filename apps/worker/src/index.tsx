@@ -40,7 +40,7 @@ app.get("/", (c) =>
 app.get("/onboarding", requireUser, async (c) => {
   const container = await getContainerForUser(c.env, c.get("user").id);
   if (container) return c.redirect("/dashboard");
-  return c.html(<OnboardingPage />);
+  return c.html(<OnboardingPage githubAvailable={Boolean(c.env.GITHUB_APP_CLIENT_ID && c.env.GITHUB_APP_CLIENT_SECRET)} />);
 });
 
 app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
