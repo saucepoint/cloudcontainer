@@ -28,11 +28,11 @@ export function decryptString(env: Bindings, ciphertext: string | null): string 
   return decryptJsonAtRest<string>(ciphertext, env.CREDENTIAL_MASTER_KEY);
 }
 
-/** Merge new LLM keys / Cloudflare token into the encrypted row. Empty-string values delete a key. */
+/** Merge new LLM keys / Cloudflare credentials into the encrypted row. Empty-string values delete a key. */
 export async function upsertCredentials(
   env: Bindings,
   userId: string,
-  updates: { llmKeys?: Record<string, string>; cloudflareToken?: string },
+  updates: { llmKeys?: Record<string, string>; cloudflareToken?: string; wranglerOauth?: string },
 ): Promise<void> {
   const row = await getCredentialsRow(env, userId);
   const existing = decryptLlmKeys(env, row);
@@ -47,20 +47,19 @@ export async function upsertCredentials(
       ? encryptJsonAtRest(merged, env.CREDENTIAL_MASTER_KEY)
       : null;
 
-  let cfCipher = row?.cloudflare_token ?? null;
-  if (updates.cloudflareToken !== undefined) {
-    cfCipher =
-      updates.cloudflareToken === ""
-        ? null
-        : encryptJsonAtRest(updates.cloudflareToken, env.CREDENTIAL_MASTER_KEY);
-  }
+  const cipherOrKeep = (current: string | null, update: string | undefined): string | null => {
+    if (update === undefined) return current;
+    return update === "" ? null : encryptJsonAtRest(update, env.CREDENTIAL_MASTER_KEY);
+  };
+  const cfCipher = cipherOrKeep(row?.cloudflare_token ?? null, updates.cloudflareToken);
+  const wranglerCipher = cipherOrKeep(row?.wrangler_oauth ?? null, updates.wranglerOauth);
 
   await env.DB.prepare(
-    `INSERT INTO credentials_encrypted (user_id, llm_keys, cloudflare_token, rotated_at)
-     VALUES (?1, ?2, ?3, ?4)
-     ON CONFLICT(user_id) DO UPDATE SET llm_keys = ?2, cloudflare_token = ?3, rotated_at = ?4`,
+    `INSERT INTO credentials_encrypted (user_id, llm_keys, cloudflare_token, wrangler_oauth, rotated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(user_id) DO UPDATE SET llm_keys = ?2, cloudflare_token = ?3, wrangler_oauth = ?4, rotated_at = ?5`,
   )
-    .bind(userId, llmCipher, cfCipher, Date.now())
+    .bind(userId, llmCipher, cfCipher, wranglerCipher, Date.now())
     .run();
 }
 
@@ -76,6 +75,8 @@ export function buildCredentialPayload(env: Bindings, row: CredentialsRow | null
   if (Object.keys(llmKeys).length > 0) payload.llmKeys = llmKeys;
   const cf = decryptString(env, row.cloudflare_token);
   if (cf) payload.cloudflareToken = cf;
+  const wrangler = decryptString(env, row.wrangler_oauth);
+  if (wrangler) payload.wranglerOauth = wrangler;
   const gh = decryptString(env, row.github_token);
   if (gh) {
     payload.githubToken = gh;

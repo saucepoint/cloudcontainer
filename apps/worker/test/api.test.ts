@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { generateX25519Keypair } from "@codestation/contract";
 import { apiRoutes, validPubkey } from "../src/api.js";
+import { upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
@@ -375,15 +376,17 @@ describe("credentials endpoint", () => {
     expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
 
-  it("rejects unknown providers, non-text values, oversized secrets, and invalid auth.json", async () => {
+  it("rejects unknown providers, non-text values, oversized secrets, and pasted OAuth-only credentials", async () => {
     const { env } = makeEnv();
     const headers = await login(env, await seedUser(env));
     const invalidBodies = [
       { llmKeys: { mystery: "secret" } },
       { llmKeys: { openai: 123 } },
       { llmKeys: { openai: "x".repeat(16 * 1024 + 1) } },
-      { llmKeys: { codex_subscription_token: "not json" } },
-      { llmKeys: { codex_subscription_token: "[]" } },
+      // OAuth-only credentials enter through their sign-in flows, never a paste.
+      { llmKeys: { codex_subscription_token: '{"tokens":{"access_token":"x"}}' } },
+      { llmKeys: { github_copilot: "gho_pasted" } },
+      { wranglerOauth: '{"oauth_token":"pasted"}' },
       { cloudflareToken: { token: "not-text" } },
     ];
 
@@ -396,7 +399,33 @@ describe("credentials endpoint", () => {
     );
   });
 
-  it("accepts a valid Codex auth.json object and supports empty-string deletion", async () => {
+  it("allows empty-string disconnection of OAuth-only credentials", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    // Simulate credentials stored by the sign-in flows.
+    await upsertCredentials(env, user.id, {
+      llmKeys: { codex_subscription_token: '{"tokens":{}}', github_copilot: "gho_x" },
+      wranglerOauth: '{"oauth_token":"t"}',
+    });
+
+    expect(
+      (
+        await app().request(
+          "/api/credentials",
+          json(
+            { llmKeys: { codex_subscription_token: "", github_copilot: "" }, wranglerOauth: "" },
+            headers,
+          ),
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    const presence = await app().request("/api/credentials", { headers }, env);
+    expect(await presence.json()).toMatchObject({ llm: {}, wrangler: false });
+  });
+
+  it("accepts an OpenCode Go key and reports wrangler presence separately from the API token", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     const headers = await login(env, user);
@@ -405,22 +434,17 @@ describe("credentials endpoint", () => {
       (
         await app().request(
           "/api/credentials",
-          json({ llmKeys: { codex_subscription_token: '{"tokens":{"access_token":"x"}}' } }, headers),
+          json({ llmKeys: { opencode_go: "CANARY-ocgo" } }, headers),
           env,
         )
       ).status,
     ).toBe(200);
-    expect(
-      (
-        await app().request(
-          "/api/credentials",
-          json({ llmKeys: { codex_subscription_token: "" } }, headers),
-          env,
-        )
-      ).status,
-    ).toBe(200);
-    const presence = await app().request("/api/credentials", { headers }, env);
-    expect(await presence.json()).toMatchObject({ llm: {} });
+    await upsertCredentials(env, user.id, { wranglerOauth: '{"oauth_token":"t"}' });
+
+    const res = await app().request("/api/credentials", { headers }, env);
+    const body = await res.json();
+    expect(body).toMatchObject({ llm: { opencode_go: true }, cloudflare: false, wrangler: true });
+    expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
 });
 

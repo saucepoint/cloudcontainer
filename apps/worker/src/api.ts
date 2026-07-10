@@ -2,10 +2,13 @@ import { Hono } from "hono";
 import {
   AGENTS,
   INPUT_LIMITS,
+  LLM_PROVIDER_LABELS,
   LLM_PROVIDERS,
+  OAUTH_ONLY_LLM_PROVIDERS,
   toHex,
   type JobOp,
   type LlmKeys,
+  type LlmProvider,
 } from "@codestation/contract";
 import { requireUnrevokedSession, requireUser } from "./auth.js";
 import { revokeSession, sha256Hex } from "./sessions.js";
@@ -71,11 +74,13 @@ async function insertSshKey(
 interface CredentialInput {
   llmKeys?: Record<string, unknown>;
   cloudflareToken?: unknown;
+  wranglerOauth?: unknown;
 }
 
 interface NormalizedCredentialInput {
   llmKeys: Record<string, string>;
   cloudflareToken?: string;
+  wranglerOauth?: "";
 }
 
 /** Validate credential names, types, and sizes before encrypting user input. */
@@ -91,23 +96,20 @@ function normalizeCredentialInput(
 
   const llmKeys: Record<string, string> = {};
   for (const [provider, raw] of Object.entries(input.llmKeys ?? {})) {
-    if (!LLM_PROVIDERS.includes(provider as (typeof LLM_PROVIDERS)[number])) {
+    if (!LLM_PROVIDERS.includes(provider as LlmProvider)) {
       return { error: `unknown model provider: ${provider || "(empty)"}` };
     }
     if (typeof raw !== "string") return { error: `credential for ${provider} must be text` };
     const value = raw.trim();
-    const max =
-      provider === "codex_subscription_token"
-        ? INPUT_LIMITS.codexAuthBytes
-        : INPUT_LIMITS.tokenBytes;
-    if (value.length > max) return { error: `credential for ${provider} is too large` };
-    if (provider === "codex_subscription_token" && value) {
-      try {
-        const parsed = JSON.parse(value) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-      } catch {
-        return { error: "Codex auth.json must be a valid JSON object" };
-      }
+    // OAuth-only credentials enter through their sign-in flows; only the
+    // empty string (disconnect) is accepted here.
+    if (value && OAUTH_ONLY_LLM_PROVIDERS.includes(provider as never)) {
+      return {
+        error: `${LLM_PROVIDER_LABELS[provider as LlmProvider]} connects via its sign-in button, not a pasted value`,
+      };
+    }
+    if (value.length > INPUT_LIMITS.tokenBytes) {
+      return { error: `credential for ${provider} is too large` };
     }
     llmKeys[provider] = value;
   }
@@ -120,10 +122,16 @@ function normalizeCredentialInput(
   if (cloudflareToken && cloudflareToken.length > INPUT_LIMITS.cloudflareTokenBytes) {
     return { error: "Cloudflare token is too large" };
   }
+  // The wrangler sign-in connects via /api/wrangler/oauth; only disconnection
+  // (empty string) is accepted here.
+  if (input.wranglerOauth !== undefined && input.wranglerOauth !== "") {
+    return { error: "Cloudflare wrangler connects via its sign-in button, not a pasted value" };
+  }
   return {
     value: {
       llmKeys,
       ...(cloudflareToken !== undefined ? { cloudflareToken } : {}),
+      ...(input.wranglerOauth !== undefined ? { wranglerOauth: "" as const } : {}),
     },
   };
 }
@@ -207,6 +215,7 @@ async function credentialsView(env: Bindings, userId: string) {
   return {
     llm: Object.fromEntries(Object.keys(llm).map((key) => [key, true])),
     cloudflare: Boolean(row?.cloudflare_token),
+    wrangler: Boolean(row?.wrangler_oauth),
     github: row?.github_login ?? (row?.github_token ? "connected" : null),
     githubAvailable: githubConfigured(env),
   };
@@ -369,6 +378,9 @@ export const apiRoutes = new Hono<AppContext>()
       llmKeys: normalized.value.llmKeys as LlmKeys,
       ...(normalized.value.cloudflareToken !== undefined
         ? { cloudflareToken: normalized.value.cloudflareToken }
+        : {}),
+      ...(normalized.value.wranglerOauth !== undefined
+        ? { wranglerOauth: normalized.value.wranglerOauth }
         : {}),
     });
     // Applies live — key rotation must not wait for a reboot (§5 U5).

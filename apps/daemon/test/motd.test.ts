@@ -13,9 +13,18 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
     const motd = renderMotd(base);
     expect(motd).toContain("[ ] model access — add an API key in the dashboard");
     expect(motd).toContain("[ ] github — connect in the dashboard");
-    expect(motd).toContain("[ ] cloudflare — paste a token in the dashboard");
+    expect(motd).toContain("[ ] cloudflare — connect in the dashboard");
     expect(motd).toContain("[ ] ssh keys (0)");
     expect(motd).toContain("https://codestation.example");
+  });
+
+  it("distinguishes a wrangler sign-in from a pasted API token", () => {
+    expect(renderMotd({ ...base, credentials: { wranglerOauth: "1" } })).toContain(
+      "[x] cloudflare (wrangler signed in)",
+    );
+    expect(renderMotd({ ...base, credentials: { cloudflareToken: "1" } })).toContain(
+      "[x] cloudflare (token installed)",
+    );
   });
 
   it("checks each line once its credential is connected", () => {
@@ -51,6 +60,7 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
       credentials: {
         llmKeys: { anthropic: "CANARY-secret-key" },
         cloudflareToken: "CANARY-cf",
+        wranglerOauth: "CANARY-wrangler",
         githubToken: "CANARY-gh",
       },
     });

@@ -7,6 +7,7 @@ import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
+import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
 
 const app = new Hono<AppContext>();
@@ -47,6 +48,7 @@ app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
 app.route("/", authRoutes);
 app.route("/", githubRoutes);
 app.route("/", codexAuthRoutes);
+app.route("/", subscriptionRoutes);
 app.route("/", apiRoutes);
 
 export default {

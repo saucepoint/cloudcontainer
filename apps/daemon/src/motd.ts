@@ -35,8 +35,12 @@ export function renderMotd(opts: {
         ? `(${credentials.githubLogin ?? "connected"})`
         : "— connect in the dashboard"
     }`,
-    `  ${mark(Boolean(credentials.cloudflareToken))} cloudflare ${
-      credentials.cloudflareToken ? "(token installed)" : "— paste a token in the dashboard"
+    `  ${mark(Boolean(credentials.cloudflareToken || credentials.wranglerOauth))} cloudflare ${
+      credentials.wranglerOauth
+        ? "(wrangler signed in)"
+        : credentials.cloudflareToken
+          ? "(token installed)"
+          : "— connect in the dashboard"
     }`,
     `  ${mark(sshKeyCount > 0)} ssh keys (${sshKeyCount})`,
     "",

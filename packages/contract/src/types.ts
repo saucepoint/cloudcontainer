@@ -19,8 +19,10 @@ export const LLM_PROVIDERS = [
   "openai",
   "gemini",
   "openrouter",
+  "opencode_go",
   "claude_subscription_token",
   "codex_subscription_token",
+  "github_copilot",
 ] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
@@ -29,9 +31,33 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
   openai: "OpenAI",
   gemini: "Google (Gemini)",
   openrouter: "OpenRouter",
-  claude_subscription_token: "Claude subscription token",
-  codex_subscription_token: "Codex subscription (auth.json)",
+  opencode_go: "OpenCode Go",
+  claude_subscription_token: "Claude subscription",
+  codex_subscription_token: "ChatGPT (Codex)",
+  github_copilot: "GitHub Copilot",
 };
+
+/**
+ * Credentials that only ever enter the system through a control-plane OAuth
+ * flow (device code / PKCE). The credentials API refuses pasted values for
+ * these; an empty string (deletion) is still allowed.
+ */
+export const OAUTH_ONLY_LLM_PROVIDERS = [
+  "codex_subscription_token",
+  "github_copilot",
+] as const satisfies readonly LlmProvider[];
+
+/**
+ * Credentials backed by a paid plan rather than a metered API key. The UI
+ * groups these separately ("use a subscription you already pay for") from
+ * plain API keys.
+ */
+export const SUBSCRIPTION_LLM_PROVIDERS = [
+  "opencode_go",
+  "claude_subscription_token",
+  "codex_subscription_token",
+  "github_copilot",
+] as const satisfies readonly LlmProvider[];
 
 export const CONTAINER_STATUSES = [
   "waitlisted",
@@ -86,16 +112,35 @@ export const LlmKeysSchema = z
     anthropic: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     gemini: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     openrouter: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    opencode_go: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
+    github_copilot: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
   })
   .strict();
 export type LlmKeys = z.infer<typeof LlmKeysSchema>;
+
+/**
+ * Wrangler's on-disk login state (config/default.toml), produced by the
+ * control-plane "Sign in with Cloudflare" PKCE flow. Travels as a JSON string
+ * (like the Codex auth.json blob) so presence markers stay uniform; the
+ * daemon parses it with this schema before rendering the TOML.
+ */
+export const WranglerOauthSchema = z
+  .object({
+    oauth_token: z.string().max(INPUT_LIMITS.tokenBytes),
+    refresh_token: z.string().max(INPUT_LIMITS.tokenBytes),
+    expiration_time: z.string().max(64),
+    scopes: z.array(z.string().max(64)).max(64),
+  })
+  .strict();
+export type WranglerOauth = z.infer<typeof WranglerOauthSchema>;
 
 export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
     cloudflareToken: z.string().max(INPUT_LIMITS.cloudflareTokenBytes).optional(),
+    wranglerOauth: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubLogin: z.string().max(256).optional(),
   })

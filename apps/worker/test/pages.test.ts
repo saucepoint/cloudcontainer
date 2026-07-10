@@ -32,20 +32,60 @@ describe("inline page JS parses", () => {
   }
 });
 
-describe("ChatGPT sign-in wiring", () => {
-  it("onboarding shows the sign-in button and keeps auth.json behind Advanced options", () => {
+describe("subscription sign-in wiring", () => {
+  it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
     const html = String(OnboardingPage({}));
+    for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
+      expect(html).toContain(flow);
+    }
+    expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
-    expect(html).toContain("codexDeviceFlow");
-    const advanced = html.slice(html.indexOf("<summary>Advanced options</summary>"));
-    expect(advanced).toContain('name="llm_codex_subscription_token"');
+    expect(html).toContain("Sign in with GitHub");
+    expect(html).toContain("Sign in with Cloudflare");
+    expect(html).toContain('name="llm_opencode_go"');
+    expect(html).not.toContain("llm_codex_subscription_token");
+    expect(html).not.toContain("auth.json");
   });
 
-  it("dashboard has the codex row and no codex option in the provider dropdown", () => {
+  it("onboarding separates subscriptions from API keys inside the model card", () => {
+    const html = String(OnboardingPage({}));
+    const subscriptions = html.indexOf("Use a subscription you already pay for");
+    const apiKeys = html.indexOf("Or paste an API key");
+    expect(subscriptions).toBeGreaterThan(-1);
+    expect(apiKeys).toBeGreaterThan(subscriptions);
+    expect(html.slice(apiKeys)).toContain('name="llm_anthropic"');
+  });
+
+  it("dashboard has sign-in rows for every subscription and an API-key-only dropdown", () => {
     const html = String(DashboardPage({}));
+    for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
+      expect(html).toContain(flow);
+    }
     expect(html).toContain("Sign in with ChatGPT");
-    expect(html).toContain("codexDeviceFlow");
-    expect(html).not.toContain('<option value="codex_subscription_token">');
+    expect(html).toContain("OpenCode Go");
+    expect(html).toContain('<option value="anthropic">');
+    for (const sub of ["opencode_go", "claude_subscription_token", "codex_subscription_token", "github_copilot"]) {
+      expect(html).not.toContain(`<option value="${sub}">`);
+    }
+    expect(html).not.toContain("auth.json");
+  });
+});
+
+describe("onboarding wizard order", () => {
+  it("goes agents → model access → advanced config, with SSH keys inside Advanced", () => {
+    const html = String(OnboardingPage({}));
+    const agents = html.indexOf("1. Pick your coding agents");
+    const model = html.indexOf("2. Give your agents a model");
+    const advanced = html.indexOf("3. Advanced config");
+    expect(agents).toBeGreaterThan(-1);
+    expect(model).toBeGreaterThan(agents);
+    expect(advanced).toBeGreaterThan(model);
+    // The SSH key field lives behind the Advanced Config card, after a
+    // steer toward the agent-driven enrollment prompt.
+    expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
+    expect(html.slice(advanced)).toContain("Add an SSH public key myself");
+    expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
+    expect(html.slice(advanced)).toContain("ssh codestation");
   });
 });
 

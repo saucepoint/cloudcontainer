@@ -1,7 +1,18 @@
 import type { FC } from "hono/jsx";
-import { AGENT_LABELS, AGENTS, LLM_PROVIDERS } from "@codestation/contract";
-import { CODEX_DEVICE_JS } from "./codexdevice.js";
+import {
+  AGENT_LABELS,
+  AGENTS,
+  LLM_PROVIDERS,
+  OAUTH_ONLY_LLM_PROVIDERS,
+} from "@codestation/contract";
+import { AUTH_FLOWS_JS } from "./authflows.js";
 import { Layout } from "./layout.js";
+
+/** Providers the wizard form can submit directly; OAuth-only ones are stored
+ * server-side the moment their sign-in flow completes. */
+const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
+  (p) => !(OAUTH_ONLY_LLM_PROVIDERS as readonly string[]).includes(p),
+);
 
 const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";
 const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
@@ -146,7 +157,7 @@ form.addEventListener('submit', async (e) => {
   err.textContent = '';
   const data = new FormData(form);
   const llmKeys = {};
-  for (const k of ${JSON.stringify(LLM_PROVIDERS)}) {
+  for (const k of ${JSON.stringify(PASTEABLE_PROVIDERS)}) {
     const v = (data.get('llm_' + k) || '').toString().trim();
     if (v) llmKeys[k] = v;
   }
@@ -180,16 +191,49 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-// ChatGPT sign-in stores the credential server-side the moment it completes,
-// so it needs no field in the provision body.
-document.getElementById('codex-signin').addEventListener('click', () => {
-  codexDeviceFlow(document.getElementById('codex-flow'), () => {
-    document.getElementById('codex-flow').innerHTML = '';
-    document.getElementById('codex-signin').style.display = 'none';
-    document.getElementById('codex-connected').style.display = '';
+// Sign-in flows store their credential server-side the moment they complete,
+// so they need no field in the provision body.
+function wireSignin(id, flowFn) {
+  const btn = document.getElementById(id + '-signin');
+  btn.addEventListener('click', () => {
+    if (window.afActive) return;
+    flowFn(document.getElementById(id + '-flow'), () => {
+      document.getElementById(id + '-flow').innerHTML = '';
+      btn.style.display = 'none';
+      document.getElementById(id + '-connected').style.display = '';
+    });
   });
-});
+}
+wireSignin('claude', window.claudeOauthFlow);
+wireSignin('codex', window.codexDeviceFlow);
+wireSignin('copilot', window.copilotDeviceFlow);
+wireSignin('wrangler', window.wranglerOauthFlow);
 `;
+
+/** One "Sign in with …" subscription block, shared markup for the wizard. */
+const SigninProvider: FC<{
+  id: string;
+  title: string;
+  hint: string;
+  button: string;
+  connected: string;
+}> = ({ id, title, hint, button, connected }) => (
+  <div class="provider">
+    <div class="provider-head">
+      <div>
+        <strong>{title}</strong>
+        <small>{hint}</small>
+      </div>
+      <button type="button" id={`${id}-signin`} class="btn secondary">
+        {button}
+      </button>
+      <span id={`${id}-connected`} class="ok" style="display:none" role="status" aria-live="polite">
+        ✓ {connected}
+      </span>
+    </div>
+    <div id={`${id}-flow`} role="status" aria-live="polite"></div>
+  </div>
+);
 
 export const OnboardingPage: FC = () => (
   <Layout title="Set up" loggedIn>
@@ -224,51 +268,62 @@ export const OnboardingPage: FC = () => (
       </div>
 
       <div class="card">
-        <h2>2. SSH public key (recommended)</h2>
-        <label for="ssh-pubkey">Public key</label>
-        <textarea
-          id="ssh-pubkey"
-          name="sshPubkey"
-          placeholder="ssh-ed25519 AAAA… you@laptop"
-          spellcheck={false}
-          aria-describedby="ssh-key-help"
-        ></textarea>
-        <p id="ssh-key-help" class="muted">
-          Skip it and the dashboard will give you a copyable prompt for your local coding agent —
-          it registers a key itself. Until a key exists the container accepts no logins.
-        </p>
-        <details>
-          <summary>I want to find or create my key now</summary>
-          <p class="muted">
-            On macOS, Linux, or Windows PowerShell, run <code>ssh-keygen -t ed25519</code> if you
-            do not have a key, then copy the output of <code>cat ~/.ssh/id_ed25519.pub</code> above.
-            Never paste the private key (the file without <code>.pub</code>).
-          </p>
-        </details>
-      </div>
-
-      <div class="card">
-        <h2>3. Model access (optional)</h2>
+        <h2>2. Give your agents a model (optional)</h2>
         <p class="muted">
-          Your agents need an LLM. Sign in with your ChatGPT plan, paste an API key, or bring a
-          Claude token from <code>claude setup-token</code>. Credentials are stored encrypted;
-          code running in your server can use them, so keep API tokens narrowly scoped.
+          Agents need an LLM to work. Credentials are stored encrypted; code running in your
+          server can use them, so keep API tokens narrowly scoped.
         </p>
-        <div style="margin-bottom:0.9rem">
-          <button type="button" id="codex-signin" class="btn secondary">
-            Sign in with ChatGPT
-          </button>
-          <span id="codex-connected" class="ok" style="display:none" role="status" aria-live="polite">
-            ✓ ChatGPT connected — Codex will use your plan
-          </span>
-          <p class="muted" style="margin-top:0.5rem">
-            For Codex on a ChatGPT plan: approve a one-time code in your browser, nothing to
-            paste.
-          </p>
-          <div id="codex-flow" role="status" aria-live="polite"></div>
+
+        <h3 class="group-label">Use a subscription you already pay for</h3>
+        <SigninProvider
+          id="claude"
+          title="Claude"
+          hint="Claude Pro or Max plan — powers Claude Code."
+          button="Sign in with Claude"
+          connected="Claude connected — Claude Code will use your plan"
+        />
+        <SigninProvider
+          id="codex"
+          title="ChatGPT"
+          hint="ChatGPT plan — powers Codex. Approve a one-time code, nothing to paste."
+          button="Sign in with ChatGPT"
+          connected="ChatGPT connected — Codex will use your plan"
+        />
+        <SigninProvider
+          id="copilot"
+          title="GitHub Copilot"
+          hint="Copilot plan — usable from OpenCode."
+          button="Sign in with GitHub"
+          connected="GitHub Copilot connected"
+        />
+        <div class="provider">
+          <div class="provider-head">
+            <div>
+              <strong>OpenCode Go</strong>
+              <small>
+                OpenCode's model subscription — copy your key from{" "}
+                <a href="https://opencode.ai/auth" target="_blank" rel="noreferrer">
+                  opencode.ai/auth
+                </a>
+                .
+              </small>
+            </div>
+          </div>
+          <label for="llm-opencode-go" class="sr-only">
+            OpenCode Go API key
+          </label>
+          <input
+            id="llm-opencode-go"
+            type="password"
+            name="llm_opencode_go"
+            autocomplete="off"
+            placeholder="OpenCode Go API key"
+          />
         </div>
+
+        <h3 class="group-label">Or paste an API key</h3>
         <details>
-          <summary>Add API keys now</summary>
+          <summary>Add API keys (Anthropic, OpenAI, Gemini, OpenRouter)</summary>
           <label for="llm-anthropic">
             Anthropic API key (
             <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
@@ -301,7 +356,10 @@ export const OnboardingPage: FC = () => (
             )
           </label>
           <input id="llm-openrouter" type="password" name="llm_openrouter" autocomplete="off" />
-          <label for="llm-claude-token">Claude subscription token (claude setup-token)</label>
+          <label for="llm-claude-token">
+            Claude subscription token, if you prefer <code>claude setup-token</code> over the
+            sign-in above
+          </label>
           <input
             id="llm-claude-token"
             type="password"
@@ -309,23 +367,56 @@ export const OnboardingPage: FC = () => (
             autocomplete="off"
           />
         </details>
+      </div>
+
+      <div class="card">
+        <h2>3. Advanced config (optional)</h2>
+        <p class="muted">
+          Most people skip this: after setup, the dashboard hands you a prompt for your local
+          coding agent that creates an SSH key, registers it, and configures{" "}
+          <code>ssh codestation</code> for you.
+        </p>
         <details>
-          <summary>Advanced options</summary>
-          <label for="llm-codex-token">
-            Codex subscription without the ChatGPT sign-in above — run <code>codex login</code>{" "}
-            on your machine, then paste the contents of <code>~/.codex/auth.json</code>
-          </label>
+          <summary>Add an SSH public key myself</summary>
+          <label for="ssh-pubkey">Public key</label>
           <textarea
-            id="llm-codex-token"
-            name="llm_codex_subscription_token"
-            placeholder='{"OPENAI_API_KEY": null, "tokens": …}'
+            id="ssh-pubkey"
+            name="sshPubkey"
+            placeholder="ssh-ed25519 AAAA… you@laptop"
             spellcheck={false}
+            aria-describedby="ssh-key-help"
           ></textarea>
+          <p id="ssh-key-help" class="muted">
+            Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
+            of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
+            without <code>.pub</code>). Until a key exists the container accepts no logins.
+          </p>
         </details>
         <details>
-          <summary>Add a Cloudflare API token now</summary>
+          <summary>Connect Cloudflare for deploys</summary>
+          <div class="provider" style="border-bottom:0">
+            <div class="provider-head">
+              <div>
+                <strong>Wrangler sign-in</strong>
+                <small>Log wrangler in with your Cloudflare account — no token to create.</small>
+              </div>
+              <button type="button" id="wrangler-signin" class="btn secondary">
+                Sign in with Cloudflare
+              </button>
+              <span
+                id="wrangler-connected"
+                class="ok"
+                style="display:none"
+                role="status"
+                aria-live="polite"
+              >
+                ✓ Cloudflare connected — wrangler is signed in
+              </span>
+            </div>
+            <div id="wrangler-flow" role="status" aria-live="polite"></div>
+          </div>
           <label for="cloudflare-token">
-            Scoped API token (
+            Or paste a scoped API token (
             <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">
               create one
             </a>
@@ -340,7 +431,7 @@ export const OnboardingPage: FC = () => (
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>
-    <script dangerouslySetInnerHTML={{ __html: CODEX_DEVICE_JS }} />
+    <script dangerouslySetInnerHTML={{ __html: AUTH_FLOWS_JS }} />
     <script dangerouslySetInnerHTML={{ __html: ONBOARDING_JS }} />
   </Layout>
 );
