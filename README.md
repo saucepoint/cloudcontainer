@@ -152,14 +152,20 @@ access token.
 
 ## Repeat deployment
 
-Do not recreate D1 or KV for a normal release. From a clean checkout:
+Do not recreate D1 or KV for a normal release. From a clean checkout, the
+root deploy command runs the locked install, type checks, tests, remote D1
+migrations, Worker deployment, and a public-root smoke test:
 
-    npm ci
-    npm run typecheck
-    npm test
-    npm run db:migrate:remote -w apps/worker
+    npm run deploy
 
-Review migrations before applying them. D1 migrations do not roll back
+It asks before making remote changes. Use `npm run deploy -- --yes` in an
+intentional non-interactive release, or `npm run deploy -- --dry-run` to run
+the local release gates and print the remote actions without performing them.
+`DEPLOY_URL=https://example.com npm run deploy -- --yes` overrides the
+configured `BASE_URL` used for the smoke test. Run `./deploy.sh --help` for
+the escape hatches; skipping checks or migrations should be exceptional.
+
+Review migrations before approving the command. D1 migrations do not roll back
 automatically; prefer backward-compatible expand-first changes.
 
 If apps/daemon, packages/contract, its dependencies, the systemd unit, or host
@@ -167,10 +173,6 @@ infrastructure changed, release the daemon first using the drain, backup,
 rollback, and verification procedure in [infra/RUNBOOK.md](./infra/RUNBOOK.md).
 A daemon restart clears active in-memory jobs and replay nonces, so never
 restart it while jobs are queued or running.
-
-Then deploy the Worker:
-
-    npm run deploy
 
 Verify:
 
