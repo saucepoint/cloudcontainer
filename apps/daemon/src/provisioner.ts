@@ -37,6 +37,8 @@ const LLM_ENV_VARS: Record<LlmProvider, readonly string[]> = {
 
 /** Where the Codex CLI keeps its subscription (ChatGPT sign-in) credentials. */
 const CODEX_AUTH_PATH = "/home/dev/.codex/auth.json";
+/** Claude Code's machine-local state (separate from settings and credentials). */
+const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
 /** OpenCode's credential store; subscription entries are merged into it. */
 const OPENCODE_AUTH_PATH = "/home/dev/.local/share/opencode/auth.json";
 /** wrangler's login state. It checks the legacy ~/.wrangler location first. */
@@ -262,6 +264,28 @@ export class Provisioner {
          done`,
       ].join(" && "),
     );
+
+    // Claude Code recognizes CLAUDE_CODE_OAUTH_TOKEN as authenticated, but on
+    // a fresh home its interactive client still opens the login wizard until
+    // machine onboarding is marked complete. Merge only that marker so any
+    // existing Claude state in the persistent home volume survives refreshes.
+    if (llm.claude_subscription_token) {
+      const scriptPath = "/home/dev/.config/codestation/claude-state-merge.cjs";
+      const script = [
+        `const fs = require("fs");`,
+        `const file = ${JSON.stringify(CLAUDE_STATE_PATH)};`,
+        `let current = {};`,
+        `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
+        `current.hasCompletedOnboarding = true;`,
+        `const temp = file + ".codestation-" + process.pid;`,
+        `fs.writeFileSync(temp, JSON.stringify(current, null, 2) + "\\n", { mode: 0o600 });`,
+        `fs.renameSync(temp, file);`,
+        `fs.chmodSync(file, 0o600);`,
+        `fs.rmSync(__filename);`,
+      ].join("\n");
+      await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
+      await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
+    }
 
     // GitHub Copilot and OpenCode Go live in OpenCode's auth store. Merged in
     // by a short node script (node is baked into the base image) so providers

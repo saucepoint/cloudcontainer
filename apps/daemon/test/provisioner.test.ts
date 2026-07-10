@@ -212,6 +212,32 @@ describe("provision command construction", () => {
     }
   });
 
+  it("marks Claude onboarding complete when its subscription token is injected", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { llmKeys: { claude_subscription_token: "CANARY-oat01-claude-123" } },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    const envWrite = calls.find((c) => c.stdin?.includes("CLAUDE_CODE_OAUTH_TOKEN"));
+    expect(envWrite?.stdin).toContain("CANARY-oat01-claude-123");
+
+    const stateMerge = calls.find((c) => c.stdin?.includes("hasCompletedOnboarding"));
+    expect(stateMerge?.stdin).toContain('current.hasCompletedOnboarding = true');
+    expect(stateMerge?.stdin).toContain('/home/dev/.claude.json');
+    expect(stateMerge?.stdin).toContain('fs.renameSync(temp, file)');
+    expect(stateMerge?.stdin).toContain('fs.rmSync(__filename)');
+    expect(stateMerge?.args.join(" ")).toContain("chmod 0600");
+    expect(calls.map((c) => c.args.join(" "))).toContainEqual(
+      expect.stringContaining("claude-state-merge.cjs"),
+    );
+    for (const c of calls) {
+      expect(c.args.join(" ")).not.toContain("CANARY-");
+    }
+  });
+
   it("merges Copilot and OpenCode Go into OpenCode's auth store via a self-deleting dev-run script", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
