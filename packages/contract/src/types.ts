@@ -100,6 +100,7 @@ export const INPUT_LIMITS = {
   codexAuthBytes: 64 * 1024,
   cloudflareTokenBytes: 4096,
   sealedCredentialBytes: 256 * 1024,
+  githubReposPerProvision: 20,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -161,6 +162,18 @@ const SshKeysSchema = z
   .max(INPUT_LIMITS.sshKeysPerAccount);
 const DashboardUrlSchema = z.string().url().max(2048);
 const SealedCredentialsSchema = z.string().min(1).max(INPUT_LIMITS.sealedCredentialBytes);
+export const GithubRepoNameSchema = z
+  .string()
+  .min(3)
+  .max(201)
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+  .refine(
+    (name) => name.split("/").every((component) => component !== "." && component !== ".."),
+    "repository path components cannot be dot segments",
+  );
+const GithubReposSchema = z
+  .array(GithubRepoNameSchema)
+  .max(INPUT_LIMITS.githubReposPerProvision);
 
 export const ContainerSpecSchema = z
   .object({
@@ -182,6 +195,7 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       spec: ContainerSpecSchema,
       sshKeys: SshKeysSchema,
       dashboardUrl: DashboardUrlSchema,
+      githubRepos: GithubReposSchema.default([]),
       // base64 sealed box of CredentialPayload (may be absent if user skipped all)
       sealedCredentials: SealedCredentialsSchema.optional(),
     })
@@ -213,6 +227,7 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       spec: ContainerSpecSchema,
       sshKeys: SshKeysSchema,
       dashboardUrl: DashboardUrlSchema,
+      githubRepos: GithubReposSchema.default([]),
       sealedCredentials: SealedCredentialsSchema.optional(),
     })
     .strict(),

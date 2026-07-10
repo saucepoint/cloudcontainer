@@ -42,7 +42,7 @@
     // Set to "1" ONLY for local development: enables /auth/dev login bypass.
     "DEV_AUTH": "0",
     // GitHub App OAuth client id; leave empty to hide the GitHub connect flow.
-    "GITHUB_APP_CLIENT_ID": ""
+    "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   RP_SIGNING_KEY           — World ID 4.0 RP signing key (Developer Portal →

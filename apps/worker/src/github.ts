@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { encryptJsonAtRest, toHex } from "@codestation/contract";
 import { requireUser } from "./auth.js";
+import { decryptString, getCredentialsRow } from "./credentials.js";
 import { enqueueJobForUser } from "./jobs.js";
 import type { AppContext, Bindings } from "./types.js";
 
@@ -15,6 +16,13 @@ interface TokenResponse {
   expires_in?: number;
   refresh_token?: string;
   error?: string;
+}
+
+export interface GithubRepository {
+  fullName: string;
+  private: boolean;
+  archived: boolean;
+  description: string | null;
 }
 
 export function githubConfigured(env: Bindings): boolean {
@@ -52,6 +60,71 @@ async function fetchGithubLogin(token: string): Promise<string | null> {
   if (!res.ok) return null;
   const json = (await res.json()) as { login?: string };
   return json.login ?? null;
+}
+
+/** Return a usable access token, refreshing it control-plane-side when needed. */
+export async function githubAccessToken(env: Bindings, userId: string): Promise<string | null> {
+  const row = await getCredentialsRow(env, userId);
+  if (!row?.github_token) return null;
+  const current = decryptString(env, row.github_token) ?? null;
+  if (
+    !row.github_refresh_token ||
+    !row.github_expires_at ||
+    row.github_expires_at > Date.now() + 60_000
+  ) {
+    return current;
+  }
+
+  const refreshToken = decryptString(env, row.github_refresh_token);
+  if (!refreshToken) return current;
+  const refreshed = await exchangeGithubTokens(env, {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
+  if (refreshed.error || !refreshed.access_token) {
+    throw new Error(`github token refresh failed${refreshed.error ? `: ${refreshed.error}` : ""}`);
+  }
+  await storeGithubTokens(env, userId, refreshed);
+  return refreshed.access_token;
+}
+
+/** Repositories visible to the GitHub App user token, newest activity first. */
+export async function fetchGithubRepositories(token: string): Promise<GithubRepository[]> {
+  const repos = new Map<string, GithubRepository>();
+  for (let page = 1; page <= 5; page++) {
+    const url = new URL("https://api.github.com/user/repos");
+    url.searchParams.set("affiliation", "owner,collaborator,organization_member");
+    url.searchParams.set("sort", "updated");
+    url.searchParams.set("per_page", "100");
+    url.searchParams.set("page", String(page));
+    const res = await fetch(url, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        "user-agent": "codestation",
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`github repositories endpoint ${res.status}`);
+    const rows = (await res.json()) as Array<{
+      full_name?: string;
+      private?: boolean;
+      archived?: boolean;
+      description?: string | null;
+    }>;
+    for (const row of rows) {
+      if (!row.full_name) continue;
+      repos.set(row.full_name, {
+        fullName: row.full_name,
+        private: Boolean(row.private),
+        archived: Boolean(row.archived),
+        description: row.description ?? null,
+      });
+    }
+    if (rows.length < 100) break;
+  }
+  return [...repos.values()];
 }
 
 export async function storeGithubTokens(
@@ -94,10 +167,11 @@ export const githubRoutes = new Hono<AppContext>()
     crypto.getRandomValues(stateBytes);
     const state = toHex(stateBytes);
     const now = Date.now();
+    const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
     await c.env.DB.prepare(
-      "INSERT INTO oauth_states (state, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO oauth_states (state, user_id, created_at, expires_at, return_to) VALUES (?, ?, ?, ?, ?)",
     )
-      .bind(state, c.get("user").id, now, now + 10 * 60 * 1000)
+      .bind(state, c.get("user").id, now, now + 10 * 60 * 1000, returnTo)
       .run();
     const params = new URLSearchParams({
       client_id: c.env.GITHUB_APP_CLIENT_ID,
@@ -111,10 +185,10 @@ export const githubRoutes = new Hono<AppContext>()
     const state = c.req.query("state");
     if (!code || !state) return c.text("Invalid GitHub callback", 400);
     const row = await c.env.DB.prepare(
-      "SELECT user_id, expires_at FROM oauth_states WHERE state = ?",
+      "SELECT user_id, expires_at, return_to FROM oauth_states WHERE state = ?",
     )
       .bind(state)
-      .first<{ user_id: string; expires_at: number }>();
+      .first<{ user_id: string; expires_at: number; return_to: string }>();
     await c.env.DB.prepare("DELETE FROM oauth_states WHERE state = ?").bind(state).run();
     if (!row || row.expires_at < Date.now() || row.user_id !== c.get("user").id) {
       return c.text("Expired or invalid state", 400);
@@ -129,5 +203,16 @@ export const githubRoutes = new Hono<AppContext>()
       console.log(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
       return c.text("GitHub authorization failed. Please retry from the dashboard.", 502);
     }
-    return c.redirect("/dashboard");
+    return c.redirect(row.return_to === "/onboarding" ? "/onboarding" : "/dashboard");
+  })
+  .get("/api/github/repos", requireUser, async (c) => {
+    if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
+    try {
+      const token = await githubAccessToken(c.env, c.get("user").id);
+      if (!token) return c.json({ error: "connect GitHub first" }, 409);
+      return c.json({ repositories: await fetchGithubRepositories(token) });
+    } catch (err) {
+      console.log(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
+      return c.json({ error: "Could not load GitHub repositories. Reconnect GitHub and retry." }, 502);
+    }
   });

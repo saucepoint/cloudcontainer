@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { generateX25519Keypair } from "@codestation/contract";
+import { encryptJsonAtRest, generateX25519Keypair } from "@codestation/contract";
 import { apiRoutes, validPubkey } from "../src/api.js";
 import { upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
@@ -124,6 +124,89 @@ describe("POST /api/provision", () => {
     );
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
     expect(JSON.stringify(daemon.submitted)).not.toContain("CANARY-");
+  });
+
+  it("verifies and carries selected GitHub repositories into provisioning", async () => {
+    const { env, headers, daemon } = await setup();
+    await env.DB.prepare(
+      `INSERT INTO credentials_encrypted (user_id, github_token, github_expires_at, github_login)
+       VALUES (?, ?, ?, ?)`,
+    )
+      .bind(
+        "user-1",
+        encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY),
+        Date.now() + 3_600_000,
+        "octocat",
+      )
+      .run();
+    stubFetch(
+      daemon.route,
+      (url) =>
+        url.hostname === "api.github.com" && url.pathname === "/user/repos"
+          ? Response.json([
+              { full_name: "octocat/hello-world", private: false, archived: false },
+              { full_name: "acme/private", private: true, archived: false },
+            ])
+          : null,
+      (url) =>
+        url.hostname === "api.cloudflare.com" ? Response.json({ success: true }) : null,
+    );
+
+    const response = await app().request(
+      "/api/provision",
+      json(
+        {
+          agents: ["codex"],
+          githubRepos: ["octocat/hello-world", "acme/private"],
+        },
+        headers,
+      ),
+      env,
+    );
+    expect(response.status).toBe(202);
+    expect(daemon.submitted[0]).toMatchObject({
+      op: "provision",
+      githubRepos: ["octocat/hello-world", "acme/private"],
+    });
+    const container = await env.DB.prepare("SELECT github_repos FROM containers").first<{
+      github_repos: string;
+    }>();
+    expect(JSON.parse(container!.github_repos)).toEqual([
+      "octocat/hello-world",
+      "acme/private",
+    ]);
+  });
+
+  it("rejects repositories that the connected GitHub token cannot access", async () => {
+    const { env, headers, daemon } = await setup();
+    await env.DB.prepare(
+      `INSERT INTO credentials_encrypted (user_id, github_token, github_expires_at)
+       VALUES (?, ?, ?)`,
+    )
+      .bind(
+        "user-1",
+        encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY),
+        Date.now() + 3_600_000,
+      )
+      .run();
+    stubFetch(
+      daemon.route,
+      (url) =>
+        url.hostname === "api.github.com" && url.pathname === "/user/repos"
+          ? Response.json([{ full_name: "octocat/allowed", private: true, archived: false }])
+          : null,
+    );
+
+    const response = await app().request(
+      "/api/provision",
+      json({ agents: ["codex"], githubRepos: ["octocat/not-allowed"] }, headers),
+      env,
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string }).toMatchObject({
+      error: expect.stringContaining("no longer available"),
+    });
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
 
   it("refuses a second container (one per account)", async () => {

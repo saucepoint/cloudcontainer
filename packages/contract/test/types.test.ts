@@ -10,6 +10,7 @@ import {
   INPUT_LIMITS,
   JobRequestSchema,
   JobStatusResponseSchema,
+  GithubRepoNameSchema,
   LlmKeysSchema,
 } from "../src/types.js";
 
@@ -103,6 +104,15 @@ describe("LlmKeysSchema", () => {
         codex_subscription_token: "x".repeat(INPUT_LIMITS.codexAuthBytes + 1),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("GithubRepoNameSchema", () => {
+  it("accepts owner/name and rejects path traversal or extra path components", () => {
+    expect(GithubRepoNameSchema.safeParse("octocat/hello-world").success).toBe(true);
+    for (const name of ["../secret", "owner/..", "owner/repo/extra", "/repo", "owner/"]) {
+      expect(GithubRepoNameSchema.safeParse(name).success).toBe(false);
+    }
   });
 });
 

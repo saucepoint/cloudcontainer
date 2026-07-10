@@ -39,7 +39,7 @@ function fakeExec(calls: Call[], respond?: (args: string[]) => string): ExecFn {
   };
 }
 
-function provisionRequest(sealed?: string): JobRequest {
+function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision" }> {
   return {
     op: "provision",
     jobId: "job-1",
@@ -47,6 +47,7 @@ function provisionRequest(sealed?: string): JobRequest {
     spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 8, sshPort: 30500 },
     sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test@laptop"],
     dashboardUrl: "https://codestation.example",
+    githubRepos: [],
     ...(sealed ? { sealedCredentials: sealed } : {}),
   };
 }
@@ -120,6 +121,41 @@ describe("provision command construction", () => {
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
     }
+  });
+
+  it("preconfigures gh and clones selected repositories into stable owner/name paths", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { githubToken: "CANARY-gh-access", githubLogin: "octocat" },
+      hostKeys.publicKey,
+    );
+    const request = provisionRequest(sealed);
+    request.githubRepos = ["octocat/hello-world", "acme/private-repo"];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(request);
+
+    const ghConfig = calls.find((call) => call.stdin?.includes("oauth_token"));
+    expect(ghConfig?.stdin).toContain("CANARY-gh-access");
+    expect(ghConfig?.stdin).toContain("user: octocat");
+    const commands = calls.map((call) => call.args.join(" "));
+    const ghDirectoryChown = commands.findIndex((command) =>
+      command.includes("chown dev:dev /home/dev/.config/gh"),
+    );
+    const firstClone = commands.findIndex((command) => command.includes("gh repo clone"));
+    expect(ghDirectoryChown).toBeGreaterThanOrEqual(0);
+    expect(firstClone).toBeGreaterThan(ghDirectoryChown);
+    expect(commands.some((command) =>
+      command.includes("gh repo clone") &&
+      command.includes("octocat/hello-world") &&
+      command.includes("/home/dev/repos/octocat/hello-world"),
+    )).toBe(true);
+    expect(commands.some((command) =>
+      command.includes("gh repo clone") &&
+      command.includes("acme/private-repo") &&
+      command.includes("/home/dev/repos/acme/private-repo"),
+    )).toBe(true);
+    expect(commands.filter((command) => command.includes("gh repo clone"))).toHaveLength(2);
+    for (const command of commands) expect(command).not.toContain("CANARY-");
   });
 
   it("installs every selected agent in one idempotent script", async () => {

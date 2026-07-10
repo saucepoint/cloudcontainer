@@ -81,6 +81,12 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .provider:last-of-type { border-bottom: 0; }
 .provider-head { display: flex; gap: 1rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .provider small { display: block; color: var(--muted); margin-top: 0.15rem; }
+.repo-list { display: grid; gap: 0.55rem; margin-top: 0.8rem; max-height: 22rem; overflow-y: auto; }
+.repo-choice { display: flex; gap: 0.7rem; align-items: flex-start; margin: 0; padding: 0.7rem;
+  color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.repo-choice:has(input:checked) { border-color: var(--accent); background: var(--accent-dim); }
+.repo-choice:has(input:disabled) { opacity: 0.55; cursor: default; }
+.repo-choice small { display: block; color: var(--muted); font-weight: 400; }
 details { margin-top: 1rem; } summary { cursor: pointer; color: var(--muted); font-size: 0.92rem; }
 .row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
 .notice { border-radius: 8px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; background: var(--panel2); }

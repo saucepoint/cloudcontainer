@@ -63,6 +63,10 @@ function specOf(container: ContainerRow) {
   };
 }
 
+function githubReposOf(container: ContainerRow): string[] {
+  return JSON.parse(container.github_repos || "[]") as string[];
+}
+
 /** Home and disposable rootfs each receive the advertised disk cap. */
 export function diskReservationGb(homeDiskGb: number): number {
   return homeDiskGb * 2;
@@ -93,6 +97,7 @@ export async function buildJobRequest(
         spec: specOf(container),
         sshKeys: await userSshKeys(env, container.user_id),
         dashboardUrl: env.BASE_URL,
+        githubRepos: githubReposOf(container),
         ...(sealed ? { sealedCredentials: sealed } : {}),
       };
     }
@@ -346,6 +351,7 @@ export async function pickHost(
 
 export interface ProvisionInput {
   agents: Agent[];
+  githubRepos?: string[];
 }
 
 /**
@@ -362,6 +368,7 @@ export async function startProvision(
   const containerId = crypto.randomUUID();
   const now = Date.now();
   const agents = JSON.stringify(input.agents);
+  const githubRepos = JSON.stringify(input.githubRepos ?? []);
   const reservedDiskGb = diskReservationGb(tier.diskGb);
 
   // D1 batches are transactional. Capacity is checked in the INSERT itself,
@@ -376,8 +383,8 @@ export async function startProvision(
       const results = (await env.DB.batch([
         env.DB.prepare(
           `INSERT INTO containers
-             (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
-           SELECT ?, ?, h.id, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
+             (id, user_id, host_id, ssh_port, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
+           SELECT ?, ?, h.id, ?, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
            FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
@@ -387,6 +394,7 @@ export async function startProvision(
           user.id,
           port,
           agents,
+          githubRepos,
           tier.cpu,
           tier.ramMb,
           tier.diskGb,
@@ -419,9 +427,9 @@ export async function startProvision(
   try {
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO containers (id, user_id, agents, tier, cpu, ram_mb, disk_gb, status, created_at)
-         VALUES (?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
-      ).bind(containerId, user.id, agents, tier.cpu, tier.ramMb, tier.diskGb, now),
+        `INSERT INTO containers (id, user_id, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
+         VALUES (?, ?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
+      ).bind(containerId, user.id, agents, githubRepos, tier.cpu, tier.ramMb, tier.diskGb, now),
       env.DB.prepare(
         `INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, NULL)
          ON CONFLICT(user_id) DO UPDATE SET requested_at = excluded.requested_at, admitted_at = NULL`,

@@ -2,6 +2,7 @@ import type { FC } from "hono/jsx";
 import {
   AGENT_LABELS,
   AGENTS,
+  INPUT_LIMITS,
   LLM_PROVIDERS,
   OAUTH_ONLY_LLM_PROVIDERS,
 } from "@codestation/contract";
@@ -179,6 +180,7 @@ form.addEventListener('submit', async (e) => {
     sshPubkey: (data.get('sshPubkey') || '').toString().trim(),
     llmKeys,
     cloudflareToken: (data.get('cloudflareToken') || '').toString().trim() || undefined,
+    githubRepos: data.getAll('githubRepo').map((repo) => repo.toString()),
   };
   if (body.agents.length === 0) {
     err.textContent = 'Pick at least one agent first.';
@@ -221,6 +223,67 @@ wireSignin('claude', window.claudeOauthFlow);
 wireSignin('codex', window.codexDeviceFlow);
 wireSignin('copilot', window.copilotDeviceFlow);
 wireSignin('wrangler', window.wranglerOauthFlow);
+
+const githubConnect = document.getElementById('github-connect');
+if (githubConnect) {
+  let savedAgents = [];
+  try { savedAgents = JSON.parse(sessionStorage.getItem('codestation-github-agents') || '[]'); }
+  catch (_) { savedAgents = []; }
+  sessionStorage.removeItem('codestation-github-agents');
+  for (const agent of savedAgents) {
+    const input = form.querySelector('input[name="agent"][value="' + CSS.escape(agent) + '"]');
+    if (input) input.checked = true;
+  }
+  githubConnect.addEventListener('click', () => {
+    sessionStorage.setItem('codestation-github-agents', JSON.stringify(
+      new FormData(form).getAll('agent').map((agent) => agent.toString())
+    ));
+  });
+}
+
+async function loadGithubRepositories() {
+  const list = document.getElementById('github-repos');
+  if (!list) return;
+  const status = document.getElementById('github-status');
+  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking GitHub…';
+  try {
+    const res = await fetch('/api/github/repos');
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 409) {
+        status.textContent = 'Connect GitHub to choose repositories.';
+        return;
+      }
+      throw new Error(json.error || 'Could not load repositories');
+    }
+    const repositories = Array.isArray(json.repositories) ? json.repositories : [];
+    status.textContent = repositories.length
+      ? 'GitHub connected. Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.'
+      : 'GitHub connected, but this app cannot access any repositories yet.';
+    if (!repositories.length) return;
+    list.innerHTML = repositories.map((repo, index) => {
+      const visibility = repo.private ? 'private' : 'public';
+      const archived = repo.archived ? ' · archived' : '';
+      const description = repo.description ? '<small>' + onEsc(repo.description) + '</small>' : '';
+      return '<label class="repo-choice" for="github-repo-' + index + '">' +
+        '<input type="checkbox" id="github-repo-' + index + '" name="githubRepo" value="' +
+          onEsc(repo.fullName) + '">' +
+        '<span><strong>' + onEsc(repo.fullName) + '</strong>' +
+          '<small>' + visibility + archived + '</small>' + description + '</span></label>';
+    }).join('');
+    list.addEventListener('change', () => {
+      const checked = list.querySelectorAll('input:checked').length;
+      for (const input of list.querySelectorAll('input:not(:checked)')) {
+        input.disabled = checked >= ${INPUT_LIMITS.githubReposPerProvision};
+      }
+    });
+  } catch (error) {
+    status.textContent = error.message || 'Could not load GitHub repositories.';
+  }
+}
+
+const onEsc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+loadGithubRepositories();
 `;
 
 /** One "Sign in with …" subscription block, shared markup for the wizard. */
@@ -248,7 +311,7 @@ const SigninProvider: FC<{
   </div>
 );
 
-export const OnboardingPage: FC = () => (
+export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvailable = false }) => (
   <Layout title="Set up" loggedIn>
     <h1>Set up your coding server</h1>
     <p class="lead">
@@ -280,8 +343,27 @@ export const OnboardingPage: FC = () => (
         </fieldset>
       </div>
 
+      {githubAvailable ? (
+        <div class="card">
+          <h2>2. Connect GitHub and clone repositories (optional)</h2>
+          <p class="muted">
+            Authorize GitHub to preconfigure <code>gh</code> and Git. Selected repositories are
+            cloned into <code>~/repos/owner/name</code> while your server is created.
+          </p>
+          <div class="row">
+            <a id="github-connect" class="btn secondary" href="/auth/github?return_to=/onboarding">
+              Connect or reconnect GitHub
+            </a>
+          </div>
+          <p id="github-status" class="muted" role="status" aria-live="polite">
+            Checking GitHub…
+          </p>
+          <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
+        </div>
+      ) : null}
+
       <div class="card">
-        <h2>2. Give your agents a model (optional)</h2>
+        <h2>{githubAvailable ? "3" : "2"}. Give your agents a model (optional)</h2>
         <p class="muted">
           Agents need an LLM to work. Credentials are stored encrypted; code running in your
           server can use them, so keep API tokens narrowly scoped.
@@ -383,7 +465,7 @@ export const OnboardingPage: FC = () => (
       </div>
 
       <div class="card">
-        <h2>3. Advanced config (optional)</h2>
+        <h2>{githubAvailable ? "4" : "3"}. Advanced config (optional)</h2>
         <p class="muted">
           Most people skip this: after setup, the dashboard hands you a prompt for your local
           coding agent that creates an SSH key, registers it, and configures{" "}
