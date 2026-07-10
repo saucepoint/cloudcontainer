@@ -1,0 +1,19 @@
+[Unit]
+Description=Codestation host control daemon
+After=network-online.target incus.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=CS_DAEMON_CONFIG=/etc/codestation/daemon.json
+WorkingDirectory=/opt/codestation/apps/daemon
+ExecStart=/usr/bin/node /opt/codestation/node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=3
+# The daemon holds decrypted credentials in memory only; keep core dumps off.
+LimitCORE=0
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

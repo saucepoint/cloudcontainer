@@ -31,14 +31,16 @@ Marketed as **"cloud containers,"** not VPS. The product is Incus **system conta
 
 ### World ID role: two distinct functions
 
-World ID serves **two separate purposes**, and the spec treats them separately:
+World ID serves **two separate purposes**. As originally spec'd they were two separate proofs (a `signup`-action verify plus OIDC Sign in with World ID); the implementation collapses them into one World ID 4.0 **Session proof** (via IDKit) instead — see the note below.
 
-1. **Uniqueness gate (signup only).** At signup the user completes a World ID **verify** with an incognito action (`signup`). The resulting **nullifier** is stored (uniquely) against the account; duplicate nullifiers are rejected. This is a **one-time proof** — it prevents the same human creating multiple accounts. There is no fallback proof-of-personhood path.
-2. **Authentication (every session).** Returning users authenticate via **Sign in with World ID (OIDC)**. The OIDC `sub` is bound to the account at signup. Verify proofs are *not* reused for login — a one-per-action incognito proof cannot serve as a repeatable auth factor.
+1. **Uniqueness gate (signup only).** The `session_id` returned by IDKit's session proof is stable per (RP, human) — the same person always gets the same `session_id` against this app. Stored uniquely against the account, it prevents the same human creating multiple accounts, same guarantee a dedicated incognito-action nullifier would have given.
+2. **Authentication (every session).** Returning users re-prove the same session (`IDKit.proveSession`); the resulting `session_id` matches the one bound at signup. Unlike a one-per-action incognito proof, a session proof *is* a repeatable auth factor by design (World ID 4.0), so no separate OIDC leg is needed.
 
 World ID gates *both* tiers. It prevents the same human making multiple free accounts; it does **not** stop a single legit account being abused (handled via caps + ToS + monitoring, §11/§13).
 
-> **Design rule:** the World ID nullifier is stored as a `UNIQUE` column, **never as a primary key or foreign key**. Nullifiers are derived per app/action — rotating the World ID app ID or action string would otherwise strand every account. All internal references use an internal `user_id` UUID.
+> **Design rule:** the World ID identifier (`session_id`) is stored as a `UNIQUE` column, **never as a primary key or foreign key**. It's derived per app — rotating the World ID app ID would otherwise strand every account. All internal references use an internal `user_id` UUID.
+>
+> **Implementation note:** this spec's original text (below, largely unedited) describes a separate `verify` (incognito-action nullifier) + **Sign in with World ID (OIDC/SIWO)** pair. World ID has since moved to the 4.0 protocol; the shipped implementation uses IDKit **Session proofs** for both jobs at once — see `apps/worker/src/worldid.ts` and the README's "Deviations from SPEC.md". Treat "verify nullifier" and "OIDC sub" mentions elsewhere in this doc as historical design intent, superseded by `session_id`.
 
 ---
 
@@ -53,14 +55,14 @@ World ID gates *both* tiers. It prevents the same human making multiple free acc
 
 ## 4. Core Use Cases (MVP)
 
-- **U1 — Signup & launch.** World ID verify (uniqueness) + SIWO (auth) → setup wizard (pick agent → agent auth → optional SSH pubkey / GitHub / Cloudflare) → container provisioned asynchronously → connection details shown. **Only the agent pick is a hard requirement**; every credential step is skippable and completable later from the dashboard — the happy path from signup to "Provision" is two decisions.
+- **U1 — Signup & launch.** World ID verify (uniqueness) + SIWO (auth) → setup wizard (pick agents → agent auth → optional SSH pubkey / GitHub / Cloudflare) → container provisioned asynchronously → connection details shown. **Only the agent pick is a hard requirement**; every credential step is skippable and completable later from the dashboard — the happy path from signup to "Provision" is two decisions.
 - **U2 — Upgrade in place.** Free user checks out via Stripe (email captured from Checkout — required for paid) → container CPU/RAM/disk limits raised live, home dir kept, identity unchanged. One-way in v1.
 - **U3 — SSH access.** User SSHes in with their pubkey over a host-NAT'd forwarded port and lands in a Debian shell as a non-root `dev` user, agent preinstalled.
 - **U4 — No-key enrollment.** User with no pubkey completes the wizard anyway. The dashboard shows a one-time, short-lived **enrollment token** plus a copy-paste instruction block for their local agent: *generate an SSH keypair, `POST` the public key to the enrollment endpoint with the token, then `ssh -p <port> dev@<host>`*. The token is single-use, expires in 1 hour, and can be re-minted from the dashboard. Until a key is enrolled, the container has **no** authorized keys and is unreachable by design.
 - **U5 — Account & keys management.** Add/remove SSH pubkeys, rotate LLM keys, replace the Cloudflare token, reauthorize GitHub from the dashboard. Changes apply **live**: the control plane issues a `refresh-credentials` (or `sync-keys`) job to the host daemon, which rewrites the in-container credential files without a restart. (Containers are always-on; "applies on next boot" would mean never.)
 - **U6 — Payment failure.** Stripe dunning runs its retries; if unrecovered, status → `past_due`, container **suspended** (stopped, distinguishable from a user-initiated stop), disk kept **7 days**, then destroyed. The user is emailed at each stage (email is guaranteed to exist for paid users — captured at Checkout).
 - **U7 — Voluntary cancellation.** Paid service runs to the end of the billing period. Because paid→free downgrade is not offered in v1, cancellation then enters the same 7-day grace: container suspended, and the dashboard offers a one-time **48-hour export window** (container started so the user can `rsync`/`scp` their data off) before destruction. Re-subscribing during grace resumes service.
-- **U8 — Account deletion.** Self-serve from the dashboard: container destroyed, all credentials and keys purged, user row deleted. If the account was banned, an HMAC of the nullifier is retained solely to enforce the ban at re-signup (§13).
+- **U8 — Account deletion.** Self-serve from the dashboard, but only once the container has been destroyed (the dashboard disables the button and says so while one exists): all credentials and keys purged, user row deleted. If the account was banned, an HMAC of the nullifier is retained solely to enforce the ban at re-signup (§13).
 
 ---
 
@@ -70,10 +72,10 @@ The interface is a **World ID login followed by a setup wizard.**
 
 1. **Signup:** World ID verify (`signup` action; nullifier stored; duplicates rejected with a clear message) + Sign in with World ID binding for future sessions.
 2. **Setup wizard** (multi-step; **only step one is required** — every other step has a prominent "Skip — set up later" and can be completed from the dashboard afterward. Time-to-first-SSH is the metric the wizard is designed around):
-   - **Pick agent (required)** — choose exactly one of: **Pi, Claude Code, Codex, OpenCode.** Fixed at creation. (Users may always SSH in and install another agent manually afterward; the wizard's job is to streamline a working default.) The pick tailors the rest of the wizard: only credentials relevant to the chosen agent are emphasized.
-   - **Agent authentication — strongly encouraged, skippable.** The agent needs model access; three paths:
+   - **Pick agents (required)** — choose one or more of: **Pi, Claude Code, Codex, OpenCode.** Fixed at creation. (Users may always SSH in and install another agent manually afterward; the wizard's job is to streamline a working default.) The picks tailor the rest of the wizard: only credentials relevant to the chosen agents are emphasized.
+   - **Agent authentication — strongly encouraged, skippable.** The agents need model access; three paths:
      - **Paste an API key** — OpenAI / Anthropic / Google (Gemini) / OpenRouter; encrypted server-side.
-     - **Bring an existing subscription** where the agent supports it — e.g. Claude Code accepts a long-lived token minted via `claude setup-token` (Claude Pro/Max); pasted subscription tokens are stored and injected exactly like API keys. Agents whose subscription auth is interactive-only (e.g. Codex ChatGPT sign-in) are flagged "sign in in-shell on first SSH."
+     - **Bring an existing subscription** where the agent supports it — e.g. Claude Code accepts a long-lived token minted via `claude setup-token` (Claude Pro/Max), and Codex accepts the pasted contents of `~/.codex/auth.json` produced by `codex login` (ChatGPT plan); pasted subscription credentials are stored and injected exactly like API keys. Any agent whose subscription auth remains interactive-only can still sign in in-shell on first SSH.
      - **Skip** — allowed; the first-login checklist (below) shows the agent as not yet authenticated.
    - **SSH public key — optional.** User may paste one or skip.
      - If provided: container is configured for SSH-key auth with that pubkey.
@@ -98,8 +100,8 @@ The interface is a **World ID login followed by a setup wizard.**
 - World ID uniqueness gate (verify) + Sign in with World ID (OIDC) sessions.
 - Cloudflare Pages + Workers dashboard; D1 state; KV sessions (revocation list in D1); mTLS + signed-request per-host daemon with **async job model**.
 - **Workers Cron Trigger reconciler** driving all time-based transitions (grace expiry, waitlist admission, job timeouts, D1↔host state reconciliation).
-- Incus system containers on Debian 13, one agent pick fixed at creation (Pi/Claude/Codex/OpenCode).
-- GitHub App authorization with **reconciler-driven token refresh** (refresh token never leaves the control plane); pasted Cloudflare API token; pasted LLM keys (OpenAI, Anthropic, Gemini, OpenRouter) or agent-subscription tokens (e.g. `claude setup-token`) — all encrypted at rest, **sealed to the destination host's key in transit**, injected at boot, **re-injectable live** via `refresh-credentials`. **All credential steps skippable at onboarding**, completable later from the dashboard.
+- Incus system containers on Debian 13, one or more agent picks fixed at creation (Pi/Claude/Codex/OpenCode).
+- GitHub App authorization with **reconciler-driven token refresh** (refresh token never leaves the control plane); pasted Cloudflare API token; pasted LLM keys (OpenAI, Anthropic, Gemini, OpenRouter) or agent-subscription credentials (e.g. `claude setup-token`, Codex `~/.codex/auth.json`) — all encrypted at rest, **sealed to the destination host's key in transit**, injected at boot, **re-injectable live** via `refresh-credentials`. **All credential steps skippable at onboarding**, completable later from the dashboard.
 - **First-login checklist (MOTD)**: in-shell status block showing connected vs. missing credentials, kept current by the daemon.
 - No-key **enrollment token** path.
 - Free (1/2GB/8GB) and Paid $5 (2/4GB/32GB) tiers; in-place upgrade with **host headroom reserve**; one-way paid; 7-day grace + export window.
@@ -144,8 +146,8 @@ The interface is a **World ID login followed by a setup wizard.**
 Landing page → "Sign in with World ID" → World ID verify (Orb / device path) → on success, nullifier stored (unique) and OIDC identity bound; duplicate nullifiers rejected with a clear message; **banned nullifier HMACs rejected** (§13).
 
 ### Setup wizard
-1. **Pick agent (required)** — radio: Pi / Claude Code / Codex / OpenCode. Tailors the remaining steps to the chosen agent.
-2. **Agent auth (skippable)** — API-key fields for OpenAI / Anthropic / Google (Gemini) / OpenRouter, with the chosen agent's providers surfaced first; or a subscription-token paste where the agent supports it (e.g. `claude setup-token`); or skip ("sign in in-shell later").
+1. **Pick agents (required)** — checkboxes, at least one: Pi / Claude Code / Codex / OpenCode. Tailors the remaining steps to the chosen agents.
+2. **Agent auth (skippable)** — a **"Sign in with ChatGPT"** button (device-code flow, see §9) for Codex subscriptions; API-key fields for OpenAI / Anthropic / Google (Gemini) / OpenRouter, with the chosen agents' providers surfaced first; a subscription-credential paste where the agent supports it (`claude setup-token`; the Codex `~/.codex/auth.json` paste lives under **Advanced options** as the fallback to the sign-in button); or skip ("sign in in-shell later").
 3. **SSH public key (optional)** — text area; "Skip — I'll enroll my agent's key instead" option.
    - Skip path: after provisioning, render the **enrollment instruction block**: a single copy-paste prompt for a local agent containing (a) the enrollment endpoint + one-time token, (b) instructions to generate a keypair and register the pubkey, (c) the eventual `ssh -p <port> dev@<host>` command. Token: single-use, 1-hour TTL, re-mintable.
 4. **GitHub (skippable)** — "Connect GitHub" (GitHub App authorization).
@@ -153,7 +155,7 @@ Landing page → "Sign in with World ID" → World ID verify (Orb / device path)
 6. **Review & launch** — summary (skipped steps listed as "set up later") → "Provision" → async job + progress → connection details incl. host-key fingerprints (or `error` + retry).
 
 ### Steady-state dashboard
-- Container card: status, SSH command + host-key fingerprints, agent, tier, created date.
+- Container card: status, SSH command + host-key fingerprints, agents, tier, created date.
 - Start / stop container (user-initiated stop is distinct from `suspended`).
 - Credential checklist mirroring the in-container MOTD: connected vs. missing (agent auth / GitHub / Cloudflare), with one-click completion of any skipped wizard step.
 - Upgrade button (free only) → Stripe Checkout (collects email) → webhook confirms → status flips to paid, resources live-resized (or `upgrade_pending` if the host lacks headroom — see §10 scheduler; ops-alerted, expected rare).
@@ -172,7 +174,7 @@ Landing page → "Sign in with World ID" → World ID verify (Orb / device path)
 users
   id                   TEXT PRIMARY KEY   -- UUID, internal identity
   world_id_nullifier   TEXT UNIQUE NOT NULL
-  world_id_oidc_sub    TEXT UNIQUE NOT NULL  -- SIWO subject for login
+  world_id_session_id  TEXT UNIQUE NOT NULL  -- IDKit v4 session_id: signup uniqueness + login
   email                TEXT NULL          -- optional while free; REQUIRED once paid
   status               TEXT               -- active|banned|deleted
   subscription_status  TEXT               -- free|paid|past_due|canceled
@@ -192,7 +194,7 @@ containers
   user_id          TEXT UNIQUE REFERENCES users(id)   -- UNIQUE: one container per account
   host_id          TEXT REFERENCES hosts(id)
   ssh_port         INTEGER               -- UNIQUE(host_id, ssh_port)
-  agent            TEXT                  -- pi|claude|codex|opencode
+  agents           TEXT                  -- JSON array of pi|claude|codex|opencode
   tier             TEXT                  -- free|paid
   cpu              INTEGER               -- 1|2
   ram_mb           INTEGER               -- 2048|4096
@@ -217,7 +219,8 @@ credentials_encrypted             -- per-user secrets, all server-side encrypted
   github_expires_at    INTEGER
   cloudflare_token     BLOB       -- user-pasted scoped API token
   llm_keys             BLOB       -- JSON map {openai,anthropic,gemini,openrouter,
-                                  --           claude_subscription_token,...}; any/all NULL
+                                  --           claude_subscription_token,
+                                  --           codex_subscription_token,...}; any/all NULL
                                   -- (all credentials are optional at onboarding)
   rotated_at           INTEGER
 
@@ -293,7 +296,8 @@ KV stores signed session data (session **revocations** are written to D1 and che
 - **GitHub** — **GitHub App** (not a classic OAuth app): fine-grained, repo-scoped user-to-server tokens. These expire (~8 h), so the **reconciler runs the refresh loop control-plane-side**: before expiry it exchanges the stored refresh token (which is D1-encrypted and **never leaves the control plane**) for a fresh user-to-server token and pushes it to the host via a `refresh-credentials` job; the daemon rewrites the in-container `gh` config + git credential file. In-container, `gh` CLI + a git credential helper read from that daemon-managed file. Hosts only ever hold the ~8 h short-lived token — a compromised host cannot mint new ones. (A classic OAuth app with long-lived broad tokens was rejected: worse blast radius when — not if — a container is compromised, §13.)
 - **Cloudflare** — **user-pasted scoped API token** (guided creation, validated at paste time). Cloudflare has no public third-party OAuth program; the earlier "Cloudflare OAuth" plan was unbuildable. Surfaced in-container for Workers deploys / DNS.
 - **OpenAI / Anthropic / Google (Gemini) / OpenRouter** — user-supplied API keys; injected to agents via per-agent config files (preferred) or env vars where the agent requires it. Each provider is implemented behind a small per-provider **shim** so additional providers can be added later without core changes.
-- **Agent subscription auth** — where an agent supports a paste-able long-lived credential (e.g. Claude Code's `claude setup-token` for Claude Pro/Max), it is stored and injected through the same shim path as an API key. Interactive-only subscription sign-ins (e.g. Codex ChatGPT login) are done in-shell on first SSH; the wizard and MOTD say so explicitly. Devs with existing agent subscriptions should not need a separate API key to get value.
+- **Agent subscription auth** — where an agent supports a paste-able long-lived credential (e.g. Claude Code's `claude setup-token` for Claude Pro/Max, or Codex's `~/.codex/auth.json` written by `codex login` on the user's machine and injected as that same file in-container), it is stored and injected through the same shim path as an API key. The Codex auth file is write-only from the control plane: when no pasted credential exists the daemon leaves `~/.codex/auth.json` alone, so an in-shell `codex login` survives credential refreshes. Devs with existing agent subscriptions should not need a separate API key to get value.
+- **Codex "Sign in with ChatGPT"** — the primary Codex-subscription UX: the Worker drives OpenAI's **device-code flow** (the same one behind `codex login --device-auth`) using the Codex CLI's public PKCE client id. The wizard/dashboard shows a one-time code, the user approves it at auth.openai.com from any browser, the Worker polls, exchanges the authorization code for tokens, and assembles the same auth.json blob a paste would produce — storage, sealing, live refresh, and rebuild behavior are identical to the paste path, and the in-container CLI owns token refresh thereafter. Each attempt is bound to the initiating user in `oauth_states` (single-use, 15-min TTL) so no other session can poll it into their account. *Risk accepted:* OpenAI offers no third-party OAuth registration for ChatGPT-plan auth; reusing the CLI's client id is unblessed (OpenCode does the same) and could stop working, in which case the Advanced-options paste remains the fallback. Enterprise workspaces may require an admin to enable device-code auth.
 - **Stripe** — Checkout (subscribe; **collects email**, which we store — paid users must be reachable for dunning/grace notices), Webhooks (idempotent via `stripe_events`), Customer Portal (manage billing). PCI scope fully handled by Stripe.
 - **Transactional email** — a sending provider (e.g. Cloudflare Email Service, Postmark, Resend) with SPF/DKIM configured on the product domain. Required for dunning/suspension/grace notices (U6/U7), waitlist admission, and export-window mails. Template set is small (~6 mails); provider is swappable behind a thin send interface.
 - **Hetzner** — dedicated hosts (MVP: 1, Falkenstein).
@@ -412,7 +416,7 @@ Disk is scheduled explicitly too: placements and upgrades check `disk_allocated_
 - Users retain root-ish control of their container (passwordless `sudo`); they accept responsibility for what runs.
 - Stripe handles PCI scope; we never see card numbers.
 - **GDPR / data protection** (EU host, Falkenstein — GDPR squarely applies):
-  - **Account deletion (U8, in MVP):** self-serve; destroys the container and disk, purges all credentials/keys/SSH keys, deletes the user row. Hard to retrofit, so in v1.
+  - **Account deletion (U8, in MVP):** self-serve; requires the container and disk to be destroyed first, then purges all credentials/keys/SSH keys and deletes the user row. Hard to retrofit, so in v1.
   - **Ban retention:** for banned accounts only, a keyed **HMAC of the nullifier** is retained post-deletion (lawful basis: legitimate interest in abuse prevention; documented in the privacy policy). Non-banned deletions retain nothing.
   - **Retention schedule:** grace-period disks 7 days; operational logs 30 days; Stripe retains billing records per its own obligations.
   - **Monitoring disclosure:** resource-pattern telemetry (not content inspection) is disclosed in the privacy policy; SSH-session activity metrics (§14) come from auth-log counters, also disclosed.
@@ -477,9 +481,9 @@ A Hetzner dedicated host (~64 GB / 8-16 vCPU, Falkenstein) splits into ~24-28 fr
 A build is releasable when it satisfies **all** of the following. Each criterion is backed by automated tests where possible (traceability table in §18); the few genuinely manual checks are called out there explicitly.
 
 1. **World ID gating.** A new human can sign up with World ID verify; the same nullifier cannot sign up twice; a banned nullifier (HMAC match) cannot sign up; the nullifier is stored uniquely in D1; the user can log out and log back in via Sign in with World ID.
-2. **Setup wizard.** A user can complete the wizard end-to-end: pick one of four agents (the only required step), optionally add agent auth (API key or supported subscription token), SSH pubkey (or skip via the enrollment-token path), GitHub App authorization, and Cloudflare token (validated live) — and receive an immediate "provisioning started" response with a pollable job. **A user who skips every optional step still reaches a running container**, and every skipped step is completable afterward from the dashboard, applying live.
+2. **Setup wizard.** A user can complete the wizard end-to-end: pick one or more of four agents (the only required step), optionally add agent auth (API key or supported subscription credential), SSH pubkey (or skip via the enrollment-token path), GitHub App authorization, and Cloudflare token (validated live) — and receive an immediate "provisioning started" response with a pollable job. **A user who skips every optional step still reaches a running container**, and every skipped step is completable afterward from the dashboard, applying live.
 3. **Provisioning.** Within ≤ 3 minutes the user sees a running container with an assigned SSH port; can `ssh -p <port> dev@<host>` in with their pubkey and land in a Debian 13 shell as `dev` with passwordless sudo. A deliberately failed provision surfaces an `error` state with a working retry — no stuck spinner.
-4. **Tools preinstalled.** `git`, `gh`, `build-essential`, `python3`, `uv`, `node` (via nvm), `curl`, `zsh`, `tmux`, `ripgrep`, `fd-find`, `jq`, `unzip`, `sqlite3` are present; the chosen agent is installed to its default location and runnable as `dev`. The first-login MOTD checklist accurately reflects which credentials are connected and updates after a `refresh-credentials` job.
+4. **Tools preinstalled.** `git`, `gh`, `build-essential`, `python3`, `uv`, `node` (via nvm), `curl`, `zsh`, `tmux`, `ripgrep`, `fd-find`, `jq`, `unzip`, `sqlite3` are present; every chosen agent is installed to its default location and runnable as `dev`. The first-login MOTD checklist accurately reflects which credentials are connected and updates after a `refresh-credentials` job.
 5. **Credentials live and stay live.** For a user who connected credentials (in the wizard or later from the dashboard): after boot, `gh auth status` shows the user's GitHub identity **and still does 24 h later** (refresh loop verified); the Cloudflare token is usable from the agent context; pasted LLM keys are available to the agent. Rotating an LLM key in the dashboard updates the running container **without a restart**. No credential value appears in `jobs` rows, daemon logs, or Worker logs for any of these operations (verified by grepping logs after the test run).
 6. **Free limits enforced.** Free container is hard-capped at 2048 MB RAM and 8 GB disk; CPU bursts to 1 vCPU but sustained 100 % usage is throttled per the ceiling; outbound port 25 is blocked; egress and connection-rate limits are measurable.
 7. **Upgrade is in-place.** After Stripe payment (email captured), the existing container's limits are raised to 2 vCPU / 4096 MB / 32 GB; **home directory preserved**; container UUID unchanged; host disk/RAM accounting updated.

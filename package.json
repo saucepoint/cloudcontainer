@@ -1,0 +1,15 @@
+{
+  "name": "codestation",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:worker": "npm run dev -w apps/worker",
+    "dev:daemon": "npm run dev -w apps/daemon",
+    "deploy": "npm run deploy -w apps/worker"
+  }
+}

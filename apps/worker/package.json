@@ -1,0 +1,25 @@
+{
+  "name": "@codestation/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply codestation --local",
+    "db:migrate:remote": "wrangler d1 migrations apply codestation --remote"
+  },
+  "dependencies": {
+    "@codestation/contract": "*",
+    "@worldcoin/idkit-core": "^4.2.1",
+    "hono": "^4.7.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5",
+    "wrangler": "^4.4.0"
+  }
+}
