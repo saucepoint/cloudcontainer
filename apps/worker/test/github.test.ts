@@ -35,6 +35,7 @@ describe("GitHub OAuth", () => {
     const authorize = new URL(start.headers.get("location")!);
     expect(authorize.origin).toBe("https://github.com");
     expect(authorize.searchParams.get("client_id")).toBe("client-id");
+    expect(authorize.searchParams.get("prompt")).toBe("select_account");
     const state = authorize.searchParams.get("state")!;
     const stateRow = await env.DB.prepare("SELECT return_to FROM oauth_states WHERE state = ?")
       .bind(state)
@@ -89,10 +90,67 @@ describe("GitHub OAuth", () => {
       .first<{ return_to: string }>();
     expect(row?.return_to).toBe("/dashboard");
   });
+
+  it("revokes an existing GitHub authorization before starting a fresh account selection", async () => {
+    const { env } = makeEnv({
+      GITHUB_APP_CLIENT_ID: "client-id",
+      GITHUB_APP_CLIENT_SECRET: "client-secret",
+    });
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    await env.DB.prepare(
+      `INSERT INTO credentials_encrypted
+         (user_id, github_token, github_refresh_token, github_expires_at, github_login)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        user.id,
+        encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY),
+        encryptJsonAtRest("CANARY-gh-refresh", env.CREDENTIAL_MASTER_KEY),
+        Date.now() + 3_600_000,
+        "octocat",
+      )
+      .run();
+    stubFetch((url, init) => {
+      if (
+        url.hostname !== "api.github.com" ||
+        url.pathname !== "/applications/client-id/grant"
+      ) {
+        return null;
+      }
+      expect(init.method).toBe("DELETE");
+      expect(new Headers(init.headers).get("authorization")).toBe(
+        `Basic ${btoa("client-id:client-secret")}`,
+      );
+      expect(init.body).toBe(JSON.stringify({ access_token: "CANARY-gh-access" }));
+      return new Response(null, { status: 204 });
+    });
+
+    const response = await app().request(
+      "/auth/github/reauth?return_to=/onboarding",
+      { method: "POST", headers },
+      env,
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authorizationUrl: string };
+    const authorize = new URL(body.authorizationUrl);
+    expect(authorize.searchParams.get("prompt")).toBe("select_account");
+    const credentials = await env.DB.prepare(
+      "SELECT github_token, github_refresh_token, github_expires_at, github_login FROM credentials_encrypted WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first();
+    expect(credentials).toEqual({
+      github_token: null,
+      github_refresh_token: null,
+      github_expires_at: null,
+      github_login: null,
+    });
+  });
 });
 
 describe("GET /api/github/repos", () => {
-  it("returns only non-secret repository metadata visible to the connected token", async () => {
+  it("searches repositories visible to the user token without requiring an app installation", async () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-id",
       GITHUB_APP_CLIENT_SECRET: "client-secret",
@@ -112,27 +170,35 @@ describe("GET /api/github/repos", () => {
       )
       .run();
     stubFetch((url, init) => {
-      if (url.hostname !== "api.github.com" || url.pathname !== "/user/repos") return null;
+      if (url.hostname !== "api.github.com") return null;
       expect(new Headers(init.headers).get("authorization")).toBe("Bearer CANARY-gh-access");
-      expect(url.searchParams.get("per_page")).toBe("100");
-      return Response.json([
-        {
-          full_name: "octocat/hello-world",
-          private: false,
-          archived: false,
-          description: "A sample repository",
-          clone_url: "https://github.com/octocat/hello-world.git",
-        },
-        {
-          full_name: "acme/private",
-          private: true,
-          archived: true,
-          description: null,
-        },
-      ]);
+      if (url.pathname === "/user/repos") {
+        expect(url.searchParams.get("per_page")).toBe("100");
+        return Response.json([
+          {
+            full_name: "octocat/hello-world",
+            private: false,
+            archived: false,
+            description: "A sample repository",
+          },
+          {
+            full_name: "octocat/private",
+            private: true,
+            archived: true,
+            description: null,
+          },
+          {
+            full_name: "acme/unrelated",
+            private: true,
+            archived: false,
+            description: "Must be filtered out",
+          },
+        ]);
+      }
+      return null;
     });
 
-    const response = await app().request("/api/github/repos", { headers }, env);
+    const response = await app().request("/api/github/repos?q=octocat", { headers }, env);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       repositories: [
@@ -143,7 +209,7 @@ describe("GET /api/github/repos", () => {
           description: "A sample repository",
         },
         {
-          fullName: "acme/private",
+          fullName: "octocat/private",
           private: true,
           archived: true,
           description: null,

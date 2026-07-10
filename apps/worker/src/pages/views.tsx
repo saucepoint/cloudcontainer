@@ -225,7 +225,8 @@ wireSignin('copilot', window.copilotDeviceFlow);
 wireSignin('wrangler', window.wranglerOauthFlow);
 
 const githubConnect = document.getElementById('github-connect');
-if (githubConnect) {
+const githubReauthorize = document.getElementById('github-reauthorize');
+if (githubConnect || githubReauthorize) {
   let savedAgents = [];
   try { savedAgents = JSON.parse(sessionStorage.getItem('codestation-github-agents') || '[]'); }
   catch (_) { savedAgents = []; }
@@ -234,56 +235,99 @@ if (githubConnect) {
     const input = form.querySelector('input[name="agent"][value="' + CSS.escape(agent) + '"]');
     if (input) input.checked = true;
   }
-  githubConnect.addEventListener('click', () => {
+  const saveGithubAgents = () => {
     sessionStorage.setItem('codestation-github-agents', JSON.stringify(
       new FormData(form).getAll('agent').map((agent) => agent.toString())
     ));
+  };
+  if (githubConnect) githubConnect.addEventListener('click', saveGithubAgents);
+  if (githubReauthorize) githubReauthorize.addEventListener('click', async () => {
+    saveGithubAgents();
+    githubReauthorize.disabled = true;
+    try {
+      const res = await fetch('/auth/github/reauth?return_to=/onboarding', { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.authorizationUrl) throw new Error(json.error || 'Could not reset GitHub authorization.');
+      location.href = json.authorizationUrl;
+    } catch (error) {
+      const status = document.getElementById('github-status');
+      status.textContent = error.message || 'Could not reset GitHub authorization.';
+      githubReauthorize.disabled = false;
+    }
   });
 }
 
-async function loadGithubRepositories() {
+const selectedGithubRepositories = new Set();
+const knownGithubRepositories = new Map();
+
+function renderGithubRepositories(repositories) {
+  const list = document.getElementById('github-repos');
+  const visible = new Map(repositories.map((repo) => [repo.fullName, repo]));
+  for (const fullName of selectedGithubRepositories) {
+    const repo = knownGithubRepositories.get(fullName);
+    if (repo) visible.set(fullName, repo);
+  }
+  list.innerHTML = [...visible.values()].map((repo, index) => {
+    const visibility = repo.private ? 'private' : 'public';
+    const archived = repo.archived ? ' · archived' : '';
+    const description = repo.description ? '<small>' + onEsc(repo.description) + '</small>' : '';
+    const checked = selectedGithubRepositories.has(repo.fullName) ? ' checked' : '';
+    return '<label class="repo-choice" for="github-repo-' + index + '">' +
+      '<input type="checkbox" id="github-repo-' + index + '" name="githubRepo" value="' +
+        onEsc(repo.fullName) + '"' + checked + '>' +
+      '<span><strong>' + onEsc(repo.fullName) + '</strong>' +
+        '<small>' + visibility + archived + '</small>' + description + '</span></label>';
+  }).join('');
+}
+
+async function loadGithubRepositories(query) {
   const list = document.getElementById('github-repos');
   if (!list) return;
   const status = document.getElementById('github-status');
-  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking GitHub…';
+  if (!query.trim()) {
+    renderGithubRepositories([]);
+    status.textContent = 'Search for a repository by owner or name.';
+    return;
+  }
+  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>Searching GitHub…';
   try {
-    const res = await fetch('/api/github/repos');
+    const res = await fetch('/api/github/repos?q=' + encodeURIComponent(query));
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 409) {
-        status.textContent = 'Connect GitHub to choose repositories.';
+        status.textContent = 'Connect GitHub to search repositories.';
         return;
       }
       throw new Error(json.error || 'Could not load repositories');
     }
     const repositories = Array.isArray(json.repositories) ? json.repositories : [];
+    for (const repo of repositories) knownGithubRepositories.set(repo.fullName, repo);
     status.textContent = repositories.length
-      ? 'GitHub connected. Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.'
-      : 'GitHub connected, but this app cannot access any repositories yet.';
-    if (!repositories.length) return;
-    list.innerHTML = repositories.map((repo, index) => {
-      const visibility = repo.private ? 'private' : 'public';
-      const archived = repo.archived ? ' · archived' : '';
-      const description = repo.description ? '<small>' + onEsc(repo.description) + '</small>' : '';
-      return '<label class="repo-choice" for="github-repo-' + index + '">' +
-        '<input type="checkbox" id="github-repo-' + index + '" name="githubRepo" value="' +
-          onEsc(repo.fullName) + '">' +
-        '<span><strong>' + onEsc(repo.fullName) + '</strong>' +
-          '<small>' + visibility + archived + '</small>' + description + '</span></label>';
-    }).join('');
-    list.addEventListener('change', () => {
-      const checked = list.querySelectorAll('input:checked').length;
-      for (const input of list.querySelectorAll('input:not(:checked)')) {
-        input.disabled = checked >= ${INPUT_LIMITS.githubReposPerProvision};
-      }
-    });
+      ? 'Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.'
+      : 'No accessible repositories match your search.';
+    renderGithubRepositories(repositories);
   } catch (error) {
     status.textContent = error.message || 'Could not load GitHub repositories.';
   }
 }
 
 const onEsc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-loadGithubRepositories();
+const githubSearch = document.getElementById('github-repo-search');
+const githubRepoList = document.getElementById('github-repos');
+if (githubRepoList) githubRepoList.addEventListener('change', (event) => {
+  if (!event.target.matches('input[name="githubRepo"]')) return;
+  if (event.target.checked) selectedGithubRepositories.add(event.target.value);
+  else selectedGithubRepositories.delete(event.target.value);
+  const checked = selectedGithubRepositories.size;
+  for (const input of githubRepoList.querySelectorAll('input:not(:checked)')) {
+    input.disabled = checked >= ${INPUT_LIMITS.githubReposPerProvision};
+  }
+});
+let githubSearchTimer;
+if (githubSearch) githubSearch.addEventListener('input', () => {
+  clearTimeout(githubSearchTimer);
+  githubSearchTimer = setTimeout(() => loadGithubRepositories(githubSearch.value), 250);
+});
 `;
 
 /** One "Sign in with …" subscription block, shared markup for the wizard. */
@@ -348,16 +392,26 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
           <h2>2. Connect GitHub and clone repositories (optional)</h2>
           <p class="muted">
             Authorize GitHub to preconfigure <code>gh</code> and Git. Selected repositories are
-            cloned into <code>~/repos/owner/name</code> while your server is created.
+            cloned into <code>~/repos/repository-name</code> while your server is created.
           </p>
           <div class="row">
             <a id="github-connect" class="btn secondary" href="/auth/github?return_to=/onboarding">
-              Connect or reconnect GitHub
+              Connect GitHub
             </a>
+            <button id="github-reauthorize" class="btn secondary" type="button">
+              Reauthorize GitHub
+            </button>
           </div>
-          <p id="github-status" class="muted" role="status" aria-live="polite">
-            Checking GitHub…
+          <p class="muted">Reauthorize removes this app's current GitHub authorization before letting you choose an account again.</p>
+          <p class="muted">
+            Private and organization repositories are available when this GitHub App is installed
+            for that account and granted access to those repositories.
           </p>
+          <p id="github-status" class="muted" role="status" aria-live="polite">
+            Search for a repository by owner or name.
+          </p>
+          <label for="github-repo-search">Search repositories</label>
+          <input id="github-repo-search" type="search" placeholder="owner or repository name" autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
         </div>
       ) : null}

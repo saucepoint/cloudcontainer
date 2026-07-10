@@ -123,7 +123,7 @@ describe("provision command construction", () => {
     }
   });
 
-  it("preconfigures gh and clones selected repositories into stable owner/name paths", async () => {
+  it("preconfigures gh and clones selected repositories directly under ~/repos", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
       { githubToken: "CANARY-gh-access", githubLogin: "octocat" },
@@ -147,12 +147,12 @@ describe("provision command construction", () => {
     expect(commands.some((command) =>
       command.includes("gh repo clone") &&
       command.includes("octocat/hello-world") &&
-      command.includes("/home/dev/repos/octocat/hello-world"),
+      command.includes("/home/dev/repos/hello-world"),
     )).toBe(true);
     expect(commands.some((command) =>
       command.includes("gh repo clone") &&
       command.includes("acme/private-repo") &&
-      command.includes("/home/dev/repos/acme/private-repo"),
+      command.includes("/home/dev/repos/private-repo"),
     )).toBe(true);
     expect(commands.filter((command) => command.includes("gh repo clone"))).toHaveLength(2);
     for (const command of commands) expect(command).not.toContain("CANARY-");

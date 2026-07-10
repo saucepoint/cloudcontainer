@@ -30,7 +30,7 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
-   into `~/repos/owner/name`.
+   into `~/repos/<repo-name>`.
 3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
