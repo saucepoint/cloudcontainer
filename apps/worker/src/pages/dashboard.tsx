@@ -132,9 +132,8 @@ function renderContainer(c) {
   const el = $('container');
   if (!c) {
     el.setAttribute('aria-busy', 'false');
-    el.innerHTML = '<h2>No coding server yet</h2>' +
-      '<p class="muted">Create one to get a ready-to-use Debian environment.</p>' +
-      '<a class="btn" href="/onboarding">Set one up</a>';
+    el.innerHTML = '<h2>No server yet</h2>' +
+      '<a class="btn" href="/onboarding">Set one up →</a>';
     return;
   }
 
@@ -146,21 +145,21 @@ function renderContainer(c) {
     esc(statusLabel) + '">' + (busy ? '<span class="spinner" aria-hidden="true"></span>' : '') +
     esc(statusLabel) + '</span></div>';
   html += '<p class="muted">' + c.cpu + ' vCPU · ' + Math.round(c.ramMb / 1024) +
-    ' GB RAM · ' + c.diskGb + ' GB home + ' + (c.rootDiskGb || c.diskGb) +
-    ' GB system disk · ' + esc(c.tier) + ' tier</p>';
+    ' GB RAM · ' + (c.diskGb + (c.rootDiskGb || c.diskGb)) +
+    ' GB disk · ' + esc(c.tier) + '</p>';
 
   if (c.status === 'provisioning') {
-    html += '<p><span class="spinner" aria-hidden="true"></span>Building your coding server — usually under 3 minutes. You can safely leave this page.</p>';
+    html += '<p><span class="spinner" aria-hidden="true"></span>Building. Usually under 3 minutes.</p>';
   } else if (c.status === 'waitlisted') {
-    html += '<p>Every host is full right now. Your place is saved and this page checks for capacity automatically.</p>';
+    html += '<p>All hosts are full. Your place is saved.</p>';
   } else if (c.status === 'stopped') {
-    html += '<p>Your files are safe, but SSH is unavailable until you start the server.</p>';
+    html += '<p>Files are safe. Start the server to use SSH.</p>';
   } else if (c.status === 'suspended') {
     html += '<p class="notice error">This server is suspended. Your files are not currently accessible.</p>';
   } else if (c.status === 'upgrade_pending') {
     html += '<p class="notice warning">Your upgrade is waiting for host capacity. No action is needed.</p>';
   } else if (c.status === 'destroying') {
-    html += '<p><span class="spinner" aria-hidden="true"></span>Deleting the server and its data…</p>';
+    html += '<p><span class="spinner" aria-hidden="true"></span>Deleting…</p>';
   } else if (c.status === 'error') {
     html += '<p class="notice error">The last operation did not finish successfully.</p>';
     if (c.statusDetail) {
@@ -277,7 +276,7 @@ function renderCreds(cr) {
   '<div id="cfform" hidden>' +
     '<div class="row" style="margin-top:0.2rem">' +
     '<button type="button" class="btn secondary" onclick="wranglerStart()">Sign in with Cloudflare (wrangler)</button>' +
-    (cr.wrangler ? '<button type="button" class="link-btn" style="color:var(--danger)" onclick="wranglerDisconnect(this)">Disconnect wrangler</button>' : '') +
+    (cr.wrangler ? '<button type="button" class="link-btn" onclick="wranglerDisconnect(this)">Disconnect wrangler</button>' : '') +
     '</div>' +
     '<div id="wranglerflow" role="status" aria-live="polite"></div>' +
     '<label for="cftok">Or paste a Cloudflare API token</label><input type="password" id="cftok" autocomplete="off">' +
@@ -290,17 +289,17 @@ function renderKeys(keys) {
   knownKeys = Array.isArray(keys) ? keys : [];
   let html = '';
   if (knownKeys.length === 0) {
-    html += '<p class="notice warning"><strong>SSH is locked until you add a public key.</strong> The guided option lets your local coding agent do this for you.</p>';
+    html += '<p class="notice warning"><strong>Add a public key to use SSH.</strong></p>';
   } else {
     html += '<ul class="check">' + knownKeys.map((key) =>
       '<li><span style="font-family:var(--mono);font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:75%">' +
       esc(key.pubkey.slice(0, 60)) + '…</span>' +
-      '<button type="button" class="link-btn" style="color:var(--danger)" onclick="delKey(' + key.id + ', this)">Remove</button></li>'
+      '<button type="button" class="link-btn" onclick="delKey(' + key.id + ', this)">Remove</button></li>'
     ).join('') + '</ul>';
   }
   html += '<div class="row">' +
     '<button type="button" class="btn" onclick="mintToken(this)">' +
-      (knownKeys.length ? 'Enroll another device with my agent' : 'Set up SSH with my coding agent') + '</button>' +
+      (knownKeys.length ? 'Enroll another device' : 'Set up SSH with an agent') + '</button>' +
     '<button type="button" class="btn secondary" onclick="showAddKey()">' +
       (knownKeys.length ? 'Add another key manually' : 'Add a key manually') + '</button></div>' +
     '<div id="enroll"></div>' +
@@ -390,8 +389,21 @@ window.act = async (op, btn) => {
   }
 };
 
+function askConfirmation(title, description, confirmLabel, onConfirm) {
+  if (window.requestConfirmation) {
+    window.requestConfirmation({ title, description, confirmLabel, onConfirm });
+  } else if (confirm(description)) {
+    onConfirm();
+  }
+}
+
 window.confirmAct = (op, message, btn) => {
-  if (confirm(message)) act(op, btn);
+  askConfirmation(
+    op === 'destroy' ? 'Destroy server?' : 'Rebuild server?',
+    message,
+    op === 'destroy' ? 'Destroy server' : 'Rebuild server',
+    () => act(op, btn),
+  );
 };
 
 window.showAddKey = () => {
@@ -425,8 +437,7 @@ window.addKey = async (btn) => {
   }
 };
 
-window.delKey = async (id, btn) => {
-  if (!confirm('Remove this key? It stops working on the server within a minute.')) return;
+async function removeKey(id, btn) {
   const restore = setButtonBusy(btn, 'Removing…');
   showKeyError('');
   try {
@@ -437,7 +448,14 @@ window.delKey = async (id, btn) => {
     showKeyError(errorMessage(error, 'Could not remove that SSH key.'));
     restore();
   }
-};
+}
+
+window.delKey = (id, btn) => askConfirmation(
+  'Remove SSH key?',
+  'This device will lose access within a minute.',
+  'Remove key',
+  () => removeKey(id, btn),
+);
 
 window.mintToken = async (btn) => {
   const restore = setButtonBusy(btn, 'Creating prompt…');
@@ -527,8 +545,7 @@ window.wranglerStart = () => {
   wranglerOauthFlow($('wranglerflow'), refreshCreds);
 };
 
-window.wranglerDisconnect = async (btn) => {
-  if (!confirm('Disconnect wrangler? The signed-in state is removed from your server within a minute.')) return;
+async function disconnectWrangler(btn) {
   const restore = setButtonBusy(btn, 'Removing…');
   showCredentialError('');
   try {
@@ -539,7 +556,14 @@ window.wranglerDisconnect = async (btn) => {
     showCredentialError(errorMessage(error, 'Could not disconnect wrangler.'));
     restore();
   }
-};
+}
+
+window.wranglerDisconnect = (btn) => askConfirmation(
+  'Disconnect Wrangler?',
+  'The signed-in state will be removed from the server within a minute.',
+  'Disconnect',
+  () => disconnectWrangler(btn),
+);
 
 async function saveLlmKey(btn, provider, value, failMessage) {
   const restore = setButtonBusy(btn, 'Saving…');
@@ -575,9 +599,7 @@ window.saveCf = async (btn) => {
   }
 };
 
-window.deleteAccount = async (btn) => {
-  if (!confirm('Delete your account? All credentials and keys are purged. This cannot be undone.')) return;
-  if (!confirm('Really sure? There is no grace period for account deletion.')) return;
+async function deleteAccount(btn) {
   const restore = setButtonBusy(btn, 'Deleting…');
   showActionError('');
   try {
@@ -587,7 +609,14 @@ window.deleteAccount = async (btn) => {
     showActionError(errorMessage(error, 'Could not delete the account.'));
     restore();
   }
-};
+}
+
+window.deleteAccount = (btn) => askConfirmation(
+  'Delete account?',
+  'This permanently deletes your credentials, keys, and account. There is no grace period.',
+  'Delete account',
+  () => deleteAccount(btn),
+);
 
 function renderDanger(c) {
   const blocked = !!c && c.status !== 'waitlisted';
@@ -633,7 +662,7 @@ loadDashboard();
 
 export const DashboardPage: FC = () => (
   <Layout title="Dashboard" loggedIn>
-    <h1>Dashboard</h1>
+    <h1>Your server.</h1>
     <div id="page-error" class="notice error" role="alert" aria-live="assertive" hidden>
       <span id="page-error-message"></span>{" "}
       <button type="button" class="link-btn" onclick="loadDashboard(this)">
@@ -658,16 +687,12 @@ export const DashboardPage: FC = () => (
 
     <section class="card" aria-labelledby="credentials-heading">
       <h2 id="credentials-heading">Optional credentials</h2>
-      <p class="muted">
-        Add model, GitHub, or Cloudflare access now or later. Updates apply to the running server
-        without a restart. Code running in your server can use these credentials, so keep them
-        narrowly scoped.
-      </p>
+      <p class="muted">Model, GitHub, and Cloudflare access. Changes apply without a restart.</p>
       <div id="creds" aria-live="polite"></div>
     </section>
 
     <section class="card" aria-labelledby="danger-heading">
-      <h2 id="danger-heading">Danger zone</h2>
+      <h2 id="danger-heading">Account</h2>
       <button
         type="button"
         class="btn danger"
