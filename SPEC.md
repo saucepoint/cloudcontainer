@@ -23,8 +23,10 @@ only two decisions:
 2. choose one or more coding agents.
 
 SSH keys, model credentials, GitHub, and Cloudflare credentials are optional
-during onboarding and can be added later. The provisioning request returns
-immediately and the dashboard explains every intermediate state.
+during onboarding. Model, GitHub, and Cloudflare credentials must be chosen
+before the server is created; later changes use manual terminal commands. SSH
+key management unlocks only after a successful build. The provisioning request
+returns immediately and the dashboard explains every intermediate state.
 
 ### Product principles
 
@@ -64,7 +66,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 1. Create a ready-to-use coding environment in minutes.
 2. Connect from a terminal or let a local coding agent enroll an SSH key.
-3. Add or rotate model, GitHub, and Cloudflare credentials without rebuilding.
+3. Choose optional model, GitHub, and Cloudflare credentials during setup, then
+   use terminal commands for later changes.
 4. Stop, start, rebuild, or destroy the environment with clear data-loss
    boundaries.
 5. Understand whether the environment is waiting, building, ready, stopped, or
@@ -88,8 +91,9 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
   credential-refresh jobs.
 - Automatic FIFO waitlist admission when host capacity becomes available.
-- Dashboard status, SSH command, host-key fingerprints, key management,
-  credential presence, lifecycle controls, and account deletion.
+- Dashboard status, SSH command, host-key fingerprints, post-ready key
+  management, read-only credential presence, lifecycle controls, and account
+  deletion.
 - One deployed control-plane Worker and one small development Incus host.
 
 ### Explicitly not in the current release
@@ -192,17 +196,19 @@ bootstrap:
 - transient failures retry without clearing useful content;
 - polling pauses while the document is hidden and resumes immediately when it
   becomes visible;
-- editing credentials, enrolling a key, or opening a form must not reset the
-  poll loop or erase in-progress user input; and
+- enrolling a key or opening a key form must not reset the poll loop or erase
+  in-progress user input; and
 - a page reload reconstructs the correct state from D1 and the daemon.
 
 Poll updates render only container status, connection details, and dependent
 danger-zone state. They do not rerender the credential section, SSH-key list,
-inline forms, or an enrollment prompt. The dashboard orders the environment
-summary first, SSH Access second, and optional credentials after access. SSH
-Access always offers both manual-key guidance and agent-assisted enrollment,
-even when another key already exists. The SSH command and enrollment prompt
-have explicit copy controls.
+inline forms, or an enrollment prompt, except when a successful build unlocks
+SSH-key controls. The dashboard orders the environment summary first, SSH
+Access second, and credentials after access. Credential presence is read-only:
+the dashboard directs users to manual terminal commands for changes. SSH Access
+offers manual-key guidance and agent-assisted enrollment only when the server
+is Ready. The SSH command and the then-available enrollment prompt have
+explicit copy controls.
 
 Machine states are rendered with human labels: Ready, Building, Waiting for
 capacity, Stopped, Suspended, Upgrade pending, Needs attention, and Deleting.
@@ -340,18 +346,19 @@ It also displays the generated host-key fingerprints for first-connection
 verification. Released ports stay quarantined for 30 days to reduce stale
 known_hosts confusion.
 
-When the user has no key, the authenticated dashboard can mint a random
-single-use enrollment token:
+When the server is Ready and the user has no key, the authenticated dashboard
+can mint a random single-use enrollment token:
 
 - only its SHA-256 hash is stored;
 - it expires after one hour;
-- the public enrollment endpoint accepts the token and a valid SSH public key;
+- the public enrollment endpoint accepts the token and a valid SSH public key
+  while the server remains Ready;
 - redemption is atomic and can happen only once; and
 - successful redemption enqueues a live key-sync job when a container exists.
 
-The dashboard supplies a copyable prompt that tells a local coding agent to
-create an ed25519 keypair, transmit only the public key, add a Host codestation
-entry to the local SSH config, and verify the connection.
+Once the server is Ready, the dashboard supplies a copyable prompt that tells a
+local coding agent to create an ed25519 keypair, transmit only the public key,
+add a Host codestation entry to the local SSH config, and verify the connection.
 
 ---
 
@@ -389,10 +396,10 @@ paths.
 - The daemon opens the payload in memory and writes only the required
   in-container files.
 - Managed files are owned by dev with mode 0600.
-- Key and credential changes use sync-keys or refresh-credentials and do not
-  require a container restart.
-- Changes made while stopped remain encrypted in D1; the next start job sends a
-  full key/credential snapshot and applies it before SSH is available again.
+- SSH key changes use sync-keys and are available only while the server is
+  Ready. Model, GitHub, and Cloudflare credentials are selected during setup;
+  the dashboard does not modify them after a server row exists. Later changes
+  require manual terminal commands.
 - Presence APIs return booleans or account labels, never stored secret values.
 
 Code run by the user or a coding agent inside the environment can read the
@@ -626,7 +633,7 @@ public release, an operator must record:
 4. provision to SSH using enrollment;
 5. command availability for all four agents and base tools;
 6. fingerprint agreement between dashboard and SSH;
-7. live key and credential refresh;
+7. post-ready SSH key enrollment and terminal-based credential guidance;
 8. stop, start, rebuild with /home/dev preserved, and destroy;
 9. forced provision failure and retry;
 10. automatic FIFO waitlist admission;
@@ -658,22 +665,23 @@ manual checks above have been completed for affected areas.
    enforced RAM/CPU/home/root limits, a persistent home volume, a copyable SSH
    command, matching host-key fingerprints, and any selected GitHub repositories
    cloned under `~/repos/name` with `gh` authenticated.
-5. **No-key safety:** without a key, SSH fails closed. A one-hour, single-use
-   enrollment token can add a public key and allow SSH.
+5. **No-key safety:** without a key, SSH fails closed. After a successful build,
+   a one-hour, single-use enrollment token can add a public key and allow SSH.
 6. **Waitlist:** insufficient capacity produces a clear waitlisted state.
    Capacity release admits users automatically in deterministic FIFO order
    without double allocation.
 7. **Dashboard efficiency:** initial load uses one aggregate request. Only the
    container view polls during transitional or waitlisted states using
    non-overlapping five-second or thirty-second schedules; one timeout is
-   active, polling resumes after visibility/network interruptions, and user
-   input, key lists, credential forms, and enrollment output are preserved.
+   active, polling resumes after visibility/network interruptions, and key
+   forms and enrollment output are preserved while available.
 8. **Lifecycle clarity:** failures become error with useful sanitized detail
    and retry. Stop/start work, rebuild preserves /home/dev, and destroy removes
    the environment and volume.
-9. **Live configuration:** adding/removing SSH keys and adding/rotating supported
-   credentials update a running environment without restart; APIs never return
-   secret values.
+9. **Configuration boundaries:** SSH keys can be added or removed after a
+   successful build. Credentials are set during onboarding and are read-only in
+   the dashboard after server creation; later changes require manual terminal
+   commands. APIs never return secret values.
 10. **Accessibility:** the core flow is keyboard operable, labels and state are
     programmatic, asynchronous changes are announced without poll spam, focus
     remains predictable, and reduced-motion/contrast requirements hold.

@@ -12,7 +12,7 @@
  * carries the PKCE verifier, so no verifier state is held here.
  */
 import { Hono } from "hono";
-import { requireUser } from "./auth.js";
+import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
 import { checkOauthState, deleteOauthState, putOauthState } from "./oauthstate.js";
@@ -161,7 +161,7 @@ const stateKey = (deviceAuthId: string) => `codex:${deviceAuthId}`;
 
 export const codexAuthRoutes = new Hono<AppContext>()
 
-  .post("/api/codex/device", requireUser, async (c) => {
+  .post("/api/codex/device", requireUser, requireCredentialSetup, async (c) => {
     let start: DeviceAuthStart;
     try {
       start = await requestDeviceCode();
@@ -175,7 +175,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
     return c.json(start);
   })
 
-  .post("/api/codex/device/poll", requireUser, async (c) => {
+  .post("/api/codex/device/poll", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJson<{ deviceAuthId?: string; userCode?: string }>(c);
     if (!body?.deviceAuthId || !body.userCode) return c.json({ error: "bad request" }, 400);
     if (!(await checkOauthState(c.env, stateKey(body.deviceAuthId), c.get("user").id))) {
@@ -196,7 +196,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
     await upsertCredentials(c.env, c.get("user").id, {
       llmKeys: { codex_subscription_token: result.authJson },
     });
-    // Applies live, same as any credential rotation (§5 U5).
+    // This onboarding-only credential is included in the initial provision.
     await pushCredentialsToContainer(c.env, c.get("user").id);
     return c.json({ status: "connected" });
   });

@@ -20,7 +20,7 @@
  */
 import { Hono } from "hono";
 import { type WranglerOauth, WranglerOauthSchema } from "@codestation/contract";
-import { requireUser } from "./auth.js";
+import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
 import { checkOauthState, deleteOauthState, putOauthState } from "./oauthstate.js";
@@ -110,7 +110,7 @@ function logFailure(event: string, err: unknown): void {
 export const subscriptionRoutes = new Hono<AppContext>()
 
   // ---------------------------------------------------------------- Claude
-  .post("/api/claude/oauth/start", requireUser, async (c) => {
+  .post("/api/claude/oauth/start", requireUser, requireCredentialSetup, async (c) => {
     const verifier = newVerifier();
     await putOauthState(c.env, `claude:${verifier}`, c.get("user").id, ATTEMPT_TTL_MS);
     const params = new URLSearchParams({
@@ -129,7 +129,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/claude/oauth/finish", requireUser, async (c) => {
+  .post("/api/claude/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJson<{ code?: string }>(c);
     const pasted = typeof body?.code === "string" ? body.code.trim() : "";
     const [code, state] = pasted.split("#");
@@ -174,7 +174,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   // ---------------------------------------------------------------- Copilot
-  .post("/api/copilot/device", requireUser, async (c) => {
+  .post("/api/copilot/device", requireUser, requireCredentialSetup, async (c) => {
     let start: { device_code?: string; user_code?: string; verification_uri?: string; expires_in?: number; interval?: number };
     try {
       const res = await fetch(GITHUB_DEVICE_CODE_URL, {
@@ -208,7 +208,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/copilot/device/poll", requireUser, async (c) => {
+  .post("/api/copilot/device/poll", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJson<{ deviceCode?: string }>(c);
     if (typeof body?.deviceCode !== "string" || !body.deviceCode || body.deviceCode.length > 256) {
       return c.json({ error: "bad request" }, 400);
@@ -254,7 +254,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   // ---------------------------------------------------------------- wrangler
-  .post("/api/wrangler/oauth/start", requireUser, async (c) => {
+  .post("/api/wrangler/oauth/start", requireUser, requireCredentialSetup, async (c) => {
     const verifier = newVerifier();
     await putOauthState(c.env, `wrangler:${verifier}`, c.get("user").id, ATTEMPT_TTL_MS);
     const params = new URLSearchParams({
@@ -272,7 +272,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/wrangler/oauth/finish", requireUser, async (c) => {
+  .post("/api/wrangler/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJson<{ callbackUrl?: string }>(c);
     const raw = typeof body?.callbackUrl === "string" ? body.callbackUrl.trim() : "";
     let code = "";

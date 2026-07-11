@@ -11,7 +11,11 @@ import {
   type LlmKeys,
   type LlmProvider,
 } from "@codestation/contract";
-import { requireUnrevokedSession, requireUser } from "./auth.js";
+import {
+  requireCredentialSetup,
+  requireUnrevokedSession,
+  requireUser,
+} from "./auth.js";
 import { revokeSession, sha256Hex } from "./sessions.js";
 import {
   decryptLlmKeys,
@@ -40,9 +44,16 @@ import type { AppContext, Bindings, ContainerRow, JobRow } from "./types.js";
 
 const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?$/;
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
+const SSH_SETUP_NOT_READY_ERROR =
+  "Wait for your server to finish building before changing SSH keys or creating an SSH setup prompt.";
 
 export function validPubkey(key: string): boolean {
   return SSH_KEY_RE.test(key.trim()) && key.trim().length < INPUT_LIMITS.sshKeyBytes;
+}
+
+/** SSH key changes need a ready container so they can be applied immediately. */
+async function sshSetupReady(env: Bindings, userId: string): Promise<boolean> {
+  return (await getContainerForUser(env, userId))?.status === "running";
 }
 
 /** Parse a JSON request body; null (never a throw) on malformed input. */
@@ -371,6 +382,9 @@ export const apiRoutes = new Hono<AppContext>()
     return c.json({ keys: await sshKeysView(c.env, c.get("user").id) });
   })
   .post("/api/keys", requireUser, async (c) => {
+    if (!(await sshSetupReady(c.env, c.get("user").id))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
+    }
     const body = await readJson<{ pubkey?: string; label?: string }>(c);
     if (body?.label !== undefined && typeof body.label !== "string") {
       return c.json({ error: "key label must be text" }, 400);
@@ -385,6 +399,9 @@ export const apiRoutes = new Hono<AppContext>()
     return c.json({ ok: true, duplicate: inserted === "duplicate" });
   })
   .delete("/api/keys/:id", requireUser, async (c) => {
+    if (!(await sshSetupReady(c.env, c.get("user").id))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
+    }
     await c.env.DB.prepare("DELETE FROM ssh_keys WHERE id = ? AND user_id = ?")
       .bind(Number(c.req.param("id")), c.get("user").id)
       .run();
@@ -396,7 +413,7 @@ export const apiRoutes = new Hono<AppContext>()
   .get("/api/credentials", requireUser, async (c) => {
     return c.json(await credentialsView(c.env, c.get("user").id));
   })
-  .post("/api/credentials", requireUser, async (c) => {
+  .post("/api/credentials", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJson<CredentialInput>(c);
     if (!body) return c.json({ error: "bad request" }, 400);
     const normalized = normalizeCredentialInput(body);
@@ -419,7 +436,8 @@ export const apiRoutes = new Hono<AppContext>()
         ? { wranglerOauth: normalized.value.wranglerOauth }
         : {}),
     });
-    // Applies live — key rotation must not wait for a reboot (§5 U5).
+    // Credential setup is only available before provisioning; the provision
+    // request carries the stored values to the initial container build.
     await pushCredentialsToContainer(c.env, c.get("user").id);
     return c.json({ ok: true });
   })
@@ -427,6 +445,9 @@ export const apiRoutes = new Hono<AppContext>()
   // ------------------------------------------------------------------ enrollment (no-key path, U4)
   .post("/api/enrollment", requireUser, async (c) => {
     const user = c.get("user");
+    if (!(await sshSetupReady(c.env, user.id))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
+    }
     const tokenBytes = new Uint8Array(32);
     crypto.getRandomValues(tokenBytes);
     const token = toHex(tokenBytes);
@@ -460,6 +481,9 @@ export const apiRoutes = new Hono<AppContext>()
       .first<{ user_id: string; expires_at: number; used_at: number | null }>();
     if (!row || row.used_at || row.expires_at < Date.now()) {
       return c.json({ error: "invalid or expired token" }, 403);
+    }
+    if (!(await sshSetupReady(c.env, row.user_id))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
     }
     // Single-use: guard against a concurrent redeem racing this request.
     const marked = await c.env.DB.prepare(

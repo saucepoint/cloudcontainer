@@ -64,18 +64,15 @@ describe("subscription sign-in wiring", () => {
     expect(html.slice(apiKeys)).toContain('name="llm_anthropic"');
   });
 
-  it("dashboard has sign-in rows for every subscription and an API-key-only dropdown", () => {
+  it("dashboard keeps credentials read-only after server creation", () => {
     const html = String(DashboardPage({}));
     for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
-      expect(html).toContain(flow);
+      expect(html).not.toContain(flow);
     }
-    expect(html).toContain("Sign in with ChatGPT");
-    expect(html).toContain("OpenCode Go");
-    expect(html).toContain('<option value="anthropic">');
-    for (const sub of ["opencode_go", "claude_subscription_token", "codex_subscription_token", "github_copilot"]) {
-      expect(html).not.toContain(`<option value="${sub}">`);
-    }
-    expect(html).not.toContain("auth.json");
+    expect(html).toContain("Set during setup");
+    expect(html).toContain("manual terminal commands");
+    expect(html).not.toContain("/api/credentials");
+    expect(html).not.toContain("Changes apply without a restart");
   });
 });
 
@@ -92,7 +89,13 @@ describe("onboarding wizard order", () => {
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key myself");
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
-    expect(html.slice(advanced)).toContain("Add SSH or Cloudflare now");
+    expect(html.slice(advanced)).toContain("Cloudflare credentials must be set now");
+  });
+
+  it("warns that credentials can only be changed from the server terminal after setup", () => {
+    const html = String(OnboardingPage({ githubAvailable: true }));
+    expect(html).toContain("Credentials are set during setup");
+    expect(html).toContain("After creating your server, changes require manual terminal commands");
   });
 });
 
@@ -144,9 +147,9 @@ describe("dashboard loading and polling", () => {
 });
 
 describe("beginner-friendly provisioning UI", () => {
-  it("puts SSH access before optional credentials and provides copyable guided setup", () => {
+  it("puts SSH access before credentials and only unlocks key setup after a successful build", () => {
     const html = String(DashboardPage({}));
-    expect(html.indexOf("SSH access")).toBeLessThan(html.indexOf("Optional credentials"));
+    expect(html.indexOf("SSH access")).toBeLessThan(html.indexOf("Credentials"));
     expect(html).toContain("Copy SSH command");
     expect(html).toContain("Set up SSH with an agent");
     expect(html).toContain("Enroll another device");
@@ -156,6 +159,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("waitlisted: 'Waiting for capacity'");
     expect(html).toContain("running: 'Ready'");
     expect(html).toContain("statusRefreshNeeded");
+    expect(html).toContain("function canManageSshKeys(c)");
+    expect(html).toContain("c.status === 'running'");
+    expect(html).toContain("SSH setup unlocks after the server is ready");
+    expect(html).toContain("Finish building your server before creating an SSH setup prompt");
   });
 
   it("explains agent choices and gives beginners a recommendation", () => {

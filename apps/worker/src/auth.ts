@@ -13,6 +13,16 @@ import {
 import { signSessionRequest, verifySessionProof } from "./worldid.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
+export const CREDENTIALS_LOCKED_ERROR =
+  "Credentials are set during server setup. To change them after creating your server, use manual terminal commands.";
+
+export async function credentialsCanBeChanged(env: Bindings, userId: string): Promise<boolean> {
+  const container = await env.DB.prepare("SELECT 1 FROM containers WHERE user_id = ? LIMIT 1")
+    .bind(userId)
+    .first();
+  return !container;
+}
+
 async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
@@ -137,6 +147,15 @@ export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
   if (!user || user.status !== "active") return deny();
   c.set("user", user);
   c.set("sessionId", sid);
+  await next();
+};
+
+/** Credential changes are an onboarding-only action. Check again on OAuth
+ * completion so a flow begun in another tab cannot update a new server. */
+export const requireCredentialSetup: MiddlewareHandler<AppContext> = async (c, next) => {
+  if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
+    return c.json({ error: CREDENTIALS_LOCKED_ERROR }, 409);
+  }
   await next();
 };
 

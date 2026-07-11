@@ -28,24 +28,24 @@ export function renderMotd(opts: {
     `  agents: ${agentList}`,
     "",
     `  ${mark(llmProviders.length > 0)} model access ${
-      llmProviders.length > 0 ? `(${llmProviders.join(", ")})` : "— add an API key in the dashboard"
+      llmProviders.length > 0 ? `(${llmProviders.join(", ")})` : "— configure manually in this terminal"
     }`,
     `  ${mark(Boolean(credentials.githubToken))} github ${
       credentials.githubToken
         ? `(${credentials.githubLogin ?? "connected"})`
-        : "— connect in the dashboard"
+        : "— configure manually in this terminal"
     }`,
     `  ${mark(Boolean(credentials.cloudflareToken || credentials.wranglerOauth))} cloudflare ${
       credentials.wranglerOauth
         ? "(wrangler signed in)"
         : credentials.cloudflareToken
           ? "(token installed)"
-          : "— connect in the dashboard"
+          : "— configure manually in this terminal"
     }`,
     `  ${mark(sshKeyCount > 0)} ssh keys (${sshKeyCount})`,
     "",
     `  dashboard: ${dashboardUrl}`,
-    "  credentials are injected live — no restart needed after changes.",
+    "  change credentials with manual terminal commands; dashboard credentials are setup-only.",
     "",
   ];
   return lines.join("\n");
