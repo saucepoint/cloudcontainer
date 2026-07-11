@@ -82,18 +82,17 @@ describe("subscription sign-in wiring", () => {
 describe("onboarding wizard order", () => {
   it("goes agents → model access → advanced config, with SSH keys inside Advanced", () => {
     const html = String(OnboardingPage({}));
-    const agents = html.indexOf("1. Pick your coding agents");
-    const model = html.indexOf("2. Give your agents a model");
-    const advanced = html.indexOf("3. Advanced config");
+    const agents = html.indexOf("1. Coding agents");
+    const model = html.indexOf("2. Model access");
+    const advanced = html.indexOf("3. Advanced");
     expect(agents).toBeGreaterThan(-1);
     expect(model).toBeGreaterThan(agents);
     expect(advanced).toBeGreaterThan(model);
-    // The SSH key field lives behind the Advanced Config card, after a
-    // steer toward the agent-driven enrollment prompt.
+    // The SSH key field stays behind the Advanced section.
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key myself");
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
-    expect(html.slice(advanced)).toContain("ssh codestation");
+    expect(html.slice(advanced)).toContain("Add SSH or Cloudflare now");
   });
 });
 
@@ -106,7 +105,7 @@ describe("GitHub repository onboarding", () => {
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).toContain("/api/github/repos");
     expect(enabled).toContain('name=\"githubRepo\"');
-    expect(enabled).toContain("~/repos/repository-name");
+    expect(enabled).toContain("~/repos");
     expect(enabled).toContain('id=\"github-repo-search\"');
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
@@ -149,8 +148,8 @@ describe("beginner-friendly provisioning UI", () => {
     const html = String(DashboardPage({}));
     expect(html.indexOf("SSH access")).toBeLessThan(html.indexOf("Optional credentials"));
     expect(html).toContain("Copy SSH command");
-    expect(html).toContain("Set up SSH with my coding agent");
-    expect(html).toContain("Enroll another device with my agent");
+    expect(html).toContain("Set up SSH with an agent");
+    expect(html).toContain("Enroll another device");
     expect(html).toContain("ssh-keygen -t ed25519");
     expect(html).toContain("Never paste your private key");
     expect(html).toContain('id="enroll"');
@@ -161,10 +160,10 @@ describe("beginner-friendly provisioning UI", () => {
 
   it("explains agent choices and gives beginners a recommendation", () => {
     const html = String(OnboardingPage({}));
-    expect(html).toContain("Easiest start if you already have a ChatGPT plan");
-    expect(html).toContain("works with several model providers");
-    expect(html).toContain("easy start");
-    expect(html).toContain("Not sure? Pick Codex if you have ChatGPT");
+    expect(html).toContain("For ChatGPT plans or OpenAI keys");
+    expect(html).toContain("Terminal agent for several model providers");
+    expect(html).toContain("common choice");
+    expect(html).toContain("Choose at least one. You can run several");
   });
 });
 
@@ -178,7 +177,7 @@ describe("page accessibility and recovery affordances", () => {
   it("groups onboarding choices, associates the SSH field, and announces errors", () => {
     const html = String(OnboardingPage({}));
     expect(html).toContain("<fieldset");
-    expect(html).toContain("<legend>1. Pick your coding agents");
+    expect(html).toContain("<legend>1. Coding agents");
     expect(html).toContain('for="ssh-pubkey"');
     expect(html).toContain('id="err" class="err" role="alert" aria-live="assertive"');
   });
@@ -192,5 +191,20 @@ describe("page accessibility and recovery affordances", () => {
     expect(html).toContain("Try again");
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
+  });
+});
+
+describe("interface foundation", () => {
+  it.each(pages)("%s loads the shared Base UI and Motion client", (_name, render) => {
+    const html = String(render());
+    expect(html).toContain('<div id="ui-root"></div>');
+    expect(html).toContain('<script type="module" src="/ui.js"></script>');
+  });
+
+  it("uses the light, borderless action system", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html).toContain("color-scheme: light");
+    expect(html).toContain(".btn.secondary, .btn.danger { border: 0");
+    expect(html).toContain("color: var(--accent)");
   });
 });

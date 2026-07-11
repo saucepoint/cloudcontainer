@@ -20,10 +20,10 @@ const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 const WORLD_ID_SESSION_KEY = "cs_world_id_session";
 
 const AGENT_GUIDANCE: Record<(typeof AGENTS)[number], string> = {
-  pi: "Flexible terminal agent; works with several model providers.",
-  claude: "Best if you use Claude Pro/Max or an Anthropic API key.",
-  codex: "Easiest start if you already have a ChatGPT plan.",
-  opencode: "Open-source interface with broad model-provider support.",
+  pi: "Terminal agent for several model providers.",
+  claude: "For Claude plans or Anthropic keys.",
+  codex: "For ChatGPT plans or OpenAI keys.",
+  opencode: "Open source, with broad provider support.",
 };
 
 const worldIdJs = (environment: "production" | "staging") => `
@@ -110,18 +110,11 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
   worldIdEnvironment,
 }) => (
   <Layout>
-    <h1>
-      Your ready-to-code cloud server,
-      <br />
-      set up in minutes.
-    </h1>
-    <p class="lead">
-      Pick a coding agent and we install the Debian environment, developer tools, and secure SSH
-      access for you. One World ID-verified human gets one free server.
-    </p>
-    <div class="card">
+    <h1 class="landing-title">A cloud machine for coding.</h1>
+    <p class="lead">Debian, your coding agents, and SSH. Free for one verified person.</p>
+    <div class="card landing-signin">
       <button id="worldid-btn" class="btn" type="button">
-        Sign in with World ID
+        Continue with World ID →
       </button>
       {devAuth ? (
         <span style="margin-left:0.75rem">
@@ -131,31 +124,26 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
         </span>
       ) : null}
       <p id="worldid-status" class="muted" style="margin-top:1rem" role="status" aria-live="polite">
-        World ID proves you're a unique human — it's the only signup requirement. No credit
-        card, no email.
+        No email or card. World ID only verifies that you are one person.
       </p>
       <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
       <script src={IDKIT_SRC}></script>
       <script type="module" dangerouslySetInnerHTML={{ __html: worldIdJs(worldIdEnvironment) }} />
     </div>
     <div class="card">
-      <h2>What you get</h2>
-      <ul class="check">
+      <h2>Included</h2>
+      <ul class="check spec-list">
         <li>
-          Debian 13, 1 vCPU / 2 GB RAM / 8 GB persistent home + 8 GB system disk
+          Debian 13 · 1 vCPU · 2 GB RAM · 16 GB disk
           <span class="ok">free</span>
         </li>
         <li>
-          Any mix of Pi, Claude Code, Codex, and OpenCode preinstalled
-          <span class="ok">✓</span>
+          Pi, Claude Code, Codex, and OpenCode
+          <span class="ok">included</span>
         </li>
         <li>
-          git, gh, node, python + uv, tmux, ripgrep and friends
-          <span class="ok">✓</span>
-        </li>
-        <li>
-          SSH-key access; bring your own LLM API keys
-          <span class="ok">✓</span>
+          SSH, git, gh, Node, Python, tmux, ripgrep
+          <span class="ok">included</span>
         </li>
       </ul>
     </div>
@@ -357,15 +345,12 @@ const SigninProvider: FC<{
 
 export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvailable = false }) => (
   <Layout title="Set up" loggedIn>
-    <h1>Set up your coding server</h1>
-    <p class="lead">
-      One required choice, everything else optional — you can add credentials later from the
-      dashboard.
-    </p>
+    <h1>Set up a server.</h1>
+    <p class="lead">Pick an agent. Everything else can wait.</p>
     <form id="wizard">
       <div class="card">
         <fieldset aria-describedby="agent-help">
-          <legend>1. Pick your coding agents (at least one)</legend>
+          <legend>1. Coding agents</legend>
           <div class="agents">
             {AGENTS.map((a) => (
               <div class="agent">
@@ -373,7 +358,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
                 <label for={`agent-${a}`}>
                   <span class="agent-title">
                     {AGENT_LABELS[a]}
-                    {a === "codex" ? <span class="recommend">easy start</span> : null}
+                    {a === "codex" ? <span class="recommend">common choice</span> : null}
                   </span>
                   <small>{AGENT_GUIDANCE[a]}</small>
                 </label>
@@ -381,18 +366,16 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
             ))}
           </div>
           <p id="agent-help" class="muted" style="margin-top:0.9rem">
-            Not sure? Pick Codex if you have ChatGPT, Claude Code if you use Claude, or Pi/OpenCode
-            if you want to choose among API providers. You can pick more than one.
+            Choose at least one. You can run several.
           </p>
         </fieldset>
       </div>
 
       {githubAvailable ? (
         <div class="card">
-          <h2>2. Connect GitHub and clone repositories (optional)</h2>
+          <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
-            Authorize GitHub to preconfigure <code>gh</code> and Git. Selected repositories are
-            cloned into <code>~/repos/repository-name</code> while your server is created.
+            Connect <code>gh</code> and clone selected repositories into <code>~/repos</code>.
           </p>
           <div class="row">
             <a id="github-connect" class="btn secondary" href="/auth/github?return_to=/onboarding">
@@ -402,10 +385,8 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
               Reauthorize GitHub
             </button>
           </div>
-          <p class="muted">Reauthorize removes this app's current GitHub authorization before letting you choose an account again.</p>
           <p class="muted">
-            Private and organization repositories are available when this GitHub App is installed
-            for that account and granted access to those repositories.
+            Private repositories appear when this app has access to them.
           </p>
           <p id="github-status" class="muted" role="status" aria-live="polite">
             Search for a repository by owner or name.
@@ -417,31 +398,28 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
       ) : null}
 
       <div class="card">
-        <h2>{githubAvailable ? "3" : "2"}. Give your agents a model (optional)</h2>
-        <p class="muted">
-          Agents need an LLM to work. Credentials are stored encrypted; code running in your
-          server can use them, so keep API tokens narrowly scoped.
-        </p>
+        <h2>{githubAvailable ? "3" : "2"}. Model access <span class="muted">optional</span></h2>
+        <p class="muted">Use a subscription or key. Credentials are encrypted.</p>
 
         <h3 class="group-label">Use a subscription you already pay for</h3>
         <SigninProvider
           id="claude"
           title="Claude"
-          hint="Claude Pro or Max plan — powers Claude Code."
+          hint="Claude Pro or Max."
           button="Sign in with Claude"
-          connected="Claude connected — Claude Code will use your plan"
+          connected="Claude connected"
         />
         <SigninProvider
           id="codex"
           title="ChatGPT"
-          hint="ChatGPT plan — powers Codex. Approve a one-time code, nothing to paste."
+          hint="For Codex."
           button="Sign in with ChatGPT"
-          connected="ChatGPT connected — Codex will use your plan"
+          connected="ChatGPT connected"
         />
         <SigninProvider
           id="copilot"
           title="GitHub Copilot"
-          hint="Copilot plan — usable from OpenCode."
+          hint="For OpenCode."
           button="Sign in with GitHub"
           connected="GitHub Copilot connected"
         />
@@ -450,7 +428,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
             <div>
               <strong>OpenCode Go</strong>
               <small>
-                OpenCode's model subscription — copy your key from{" "}
+                Copy a key from{" "}
                 <a href="https://opencode.ai/auth" target="_blank" rel="noreferrer">
                   opencode.ai/auth
                 </a>
@@ -519,12 +497,8 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
       </div>
 
       <div class="card">
-        <h2>{githubAvailable ? "4" : "3"}. Advanced config (optional)</h2>
-        <p class="muted">
-          Most people skip this: after setup, the dashboard hands you a prompt for your local
-          coding agent that creates an SSH key, registers it, and configures{" "}
-          <code>ssh codestation</code> for you.
-        </p>
+        <h2>{githubAvailable ? "4" : "3"}. Advanced <span class="muted">optional</span></h2>
+        <p class="muted">Add SSH or Cloudflare now, or do it later from the dashboard.</p>
         <details>
           <summary>Add an SSH public key myself</summary>
           <label for="ssh-pubkey">Public key</label>
@@ -576,7 +550,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
       </div>
 
       <button id="go" class="btn" type="submit">
-        Create my coding server
+        Create server →
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>

@@ -4,20 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:client": "esbuild client/ui.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --outfile=public/ui.js",
+    "predev": "npm run build:client",
     "dev": "wrangler dev",
+    "predeploy": "npm run build:client",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "typecheck": "wrangler types && tsc --noEmit",
+    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
     "test": "vitest run",
     "db:migrate:local": "wrangler d1 migrations apply codestation --local",
     "db:migrate:remote": "wrangler d1 migrations apply codestation --remote"
   },
   "dependencies": {
+    "@base-ui/react": "^1.6.0",
     "@codestation/contract": "*",
     "@worldcoin/idkit-core": "^4.2.1",
-    "hono": "^4.7.4"
+    "hono": "^4.7.4",
+    "motion": "^12.42.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.28.1",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5",
     "wrangler": "^4.4.0"
