@@ -151,6 +151,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.3rem; }
 @media (max-width: 600px) {
   .wrap { width: min(100% - 2rem, 860px); padding-bottom: 3rem; }
+  input[type=text], input[type=password], input[type=search], textarea, select { font-size: 16px; }
   header.site { min-height: 58px; margin-bottom: 2.5rem; }
   h1 { font-size: clamp(2.4rem, 13vw, 3.5rem); }
   p.lead { margin-bottom: 2.5rem; }

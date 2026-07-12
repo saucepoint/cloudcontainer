@@ -232,4 +232,12 @@ describe("interface foundation", () => {
       "input:focus, textarea:focus, select:focus { border-color: var(--focus); box-shadow: 0 1px 0 var(--focus); }",
     );
   });
+
+  it("keeps iOS Safari from zooming when mobile text fields receive focus", () => {
+    const html = String(OnboardingPage({}));
+    expect(html).toContain("@media (max-width: 600px)");
+    expect(html).toContain(
+      "input[type=text], input[type=password], input[type=search], textarea, select { font-size: 16px; }",
+    );
+  });
 });
