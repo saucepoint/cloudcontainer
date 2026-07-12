@@ -51,6 +51,7 @@ describe("subscription sign-in wiring", () => {
     expect(html).toContain("Sign in with GitHub");
     expect(html).toContain("Sign in with Cloudflare");
     expect(html).toContain('name="llm_opencode_go"');
+    expect(html).not.toContain("llm_claude_subscription_token");
     expect(html).not.toContain("llm_codex_subscription_token");
     expect(html).not.toContain("auth.json");
   });
@@ -89,13 +90,12 @@ describe("onboarding wizard order", () => {
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key myself");
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
-    expect(html.slice(advanced)).toContain("Cloudflare credentials must be set now");
   });
 
   it("warns that credentials can only be changed from the server terminal after setup", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("Credentials are set during setup");
-    expect(html).toContain("After creating your server, changes require manual terminal commands");
+    expect(html).toContain("Preconfigure your workbench now");
+    expect(html).toContain("Once its provisioned, modifications require manual terminal commands");
   });
 });
 
@@ -177,7 +177,8 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("For ChatGPT plans or OpenAI keys");
     expect(html).toContain("Terminal agent for several model providers");
     expect(html).toContain("common choice");
-    expect(html).toContain("Choose at least one. You can run several");
+    expect(html).toContain("1. Coding agents");
+    expect(html).toContain("required");
   });
 });
 

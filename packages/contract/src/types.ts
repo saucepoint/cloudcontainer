@@ -43,6 +43,7 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
  * these; an empty string (deletion) is still allowed.
  */
 export const OAUTH_ONLY_LLM_PROVIDERS = [
+  "claude_subscription_token",
   "codex_subscription_token",
   "github_copilot",
 ] as const satisfies readonly LlmProvider[];

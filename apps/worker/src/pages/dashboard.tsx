@@ -130,8 +130,8 @@ function renderContainer(c) {
     esc(statusLabel) + '">' + (busy ? '<span class="spinner" aria-hidden="true"></span>' : '') +
     esc(statusLabel) + '</span></div>';
   html += '<p class="muted">' + c.cpu + ' vCPU · ' + Math.round(c.ramMb / 1024) +
-    ' GB RAM · ' + (c.diskGb + (c.rootDiskGb || c.diskGb)) +
-    ' GB disk · ' + esc(c.tier) + '</p>';
+    ' GB RAM · ' + c.diskGb +
+    ' GB persistent disk · ' + esc(c.tier) + '</p>';
 
   if (c.status === 'provisioning') {
     html += '<p><span class="spinner" aria-hidden="true"></span>Building. Usually under 3 minutes.</p>';

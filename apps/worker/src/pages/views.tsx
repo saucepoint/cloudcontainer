@@ -111,7 +111,7 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
 }) => (
   <Layout>
     <h1 class="landing-title">A cloud machine for coding.</h1>
-    <p class="lead">Debian, your coding agents, and SSH. Free for one verified person.</p>
+    <p class="lead">Linux, your coding agents, and SSH. Free for one verified person.</p>
     <div class="card landing-signin">
       <button id="worldid-btn" class="btn" type="button">
         Continue with World ID →
@@ -134,11 +134,11 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
       <h2>Included</h2>
       <ul class="check spec-list">
         <li>
-          Debian 13 · 1 vCPU · 2 GB RAM · 16 GB disk
+          Debian 13 · 1 vCPU · 2 GB RAM · 8 GB persistent disk
           <span class="ok">free</span>
         </li>
         <li>
-          Pi, Claude Code, Codex, and OpenCode
+          Pi, Claude Code, Codex, and/or OpenCode
           <span class="ok">included</span>
         </li>
         <li>
@@ -348,13 +348,12 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
     <h1>Set up a server.</h1>
     <p class="lead">Pick an agent. Everything else can wait.</p>
     <p class="notice">
-      <strong>Credentials are set during setup.</strong> Add any model, GitHub, or Cloudflare
-      credentials now. After creating your server, changes require manual terminal commands.
+      Preconfigure your workbench now. Once its provisioned, modifications require manual terminal commands
     </p>
     <form id="wizard">
       <div class="card">
-        <fieldset aria-describedby="agent-help">
-          <legend>1. Coding agents</legend>
+        <fieldset>
+          <legend>1. Coding agents <span class="muted">required</span></legend>
           <div class="agents">
             {AGENTS.map((a) => (
               <div class="agent">
@@ -369,9 +368,6 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
               </div>
             ))}
           </div>
-          <p id="agent-help" class="muted" style="margin-top:0.9rem">
-            Choose at least one. You can run several.
-          </p>
         </fieldset>
       </div>
 
@@ -379,7 +375,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
-            Connect <code>gh</code> and clone selected repositories into <code>~/repos</code>.
+            Connect and clone repositories into <code>~/repos</code>
           </p>
           <div class="row">
             <a id="github-connect" class="btn secondary" href="/auth/github?return_to=/onboarding">
@@ -429,16 +425,10 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
         />
         <div class="provider">
           <div class="provider-head">
-            <div>
-              <strong>OpenCode Go</strong>
-              <small>
-                Copy a key from{" "}
-                <a href="https://opencode.ai/auth" target="_blank" rel="noreferrer">
-                  opencode.ai/auth
-                </a>
-                .
-              </small>
-            </div>
+            <strong>OpenCode Go</strong>
+            <a class="btn secondary" href="https://opencode.ai/auth" target="_blank" rel="noreferrer">
+              Get key from OpenCode
+            </a>
           </div>
           <label for="llm-opencode-go" class="sr-only">
             OpenCode Go API key
@@ -487,25 +477,11 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
             )
           </label>
           <input id="llm-openrouter" type="password" name="llm_openrouter" autocomplete="off" />
-          <label for="llm-claude-token">
-            Claude subscription token, if you prefer <code>claude setup-token</code> over the
-            sign-in above
-          </label>
-          <input
-            id="llm-claude-token"
-            type="password"
-            name="llm_claude_subscription_token"
-            autocomplete="off"
-          />
         </details>
       </div>
 
       <div class="card">
         <h2>{githubAvailable ? "4" : "3"}. Advanced <span class="muted">optional</span></h2>
-        <p class="muted">
-          Add an SSH key now or after the server is ready. Cloudflare credentials must be set now;
-          later changes require manual terminal commands.
-        </p>
         <details>
           <summary>Add an SSH public key myself</summary>
           <label for="ssh-pubkey">Public key</label>
