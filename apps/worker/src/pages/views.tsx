@@ -19,13 +19,6 @@ const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist
 const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 const WORLD_ID_SESSION_KEY = "cs_world_id_session";
 
-const AGENT_GUIDANCE: Record<(typeof AGENTS)[number], string> = {
-  pi: "Terminal agent for several model providers.",
-  claude: "For Claude plans or Anthropic keys.",
-  codex: "For ChatGPT plans or OpenAI keys.",
-  opencode: "Open source, with broad provider support.",
-};
-
 const worldIdJs = (environment: "production" | "staging") => `
 const btn = document.getElementById('worldid-btn');
 const status = document.getElementById('worldid-status');
@@ -346,7 +339,6 @@ const SigninProvider: FC<{
 export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvailable = false }) => (
   <Layout title="Set up" loggedIn>
     <h1>Set up a server.</h1>
-    <p class="lead">Pick an agent. Everything else can wait.</p>
     <p class="notice">
       Preconfigure your workbench now. Once its provisioned, modifications require manual terminal commands
     </p>
@@ -363,7 +355,6 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
                     {AGENT_LABELS[a]}
                     {a === "codex" ? <span class="recommend">common choice</span> : null}
                   </span>
-                  <small>{AGENT_GUIDANCE[a]}</small>
                 </label>
               </div>
             ))}
@@ -399,9 +390,8 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
 
       <div class="card">
         <h2>{githubAvailable ? "3" : "2"}. Model access <span class="muted">optional</span></h2>
-        <p class="muted">Use a subscription or key. Credentials are encrypted.</p>
+        <p class="muted">Authenticate your model provider. (Credentials encrypted!)</p>
 
-        <h3 class="group-label">Use a subscription you already pay for</h3>
         <SigninProvider
           id="claude"
           title="Claude"
@@ -532,7 +522,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
         </details>
       </div>
 
-      <button id="go" class="btn" type="submit">
+      <button id="go" class="btn create-server-btn" type="submit">
         Create server →
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>

@@ -56,12 +56,11 @@ describe("subscription sign-in wiring", () => {
     expect(html).not.toContain("auth.json");
   });
 
-  it("onboarding separates subscriptions from API keys inside the model card", () => {
+  it("keeps API keys inside the model card", () => {
     const html = String(OnboardingPage({}));
-    const subscriptions = html.indexOf("Use a subscription you already pay for");
     const apiKeys = html.indexOf("Or paste an API key");
-    expect(subscriptions).toBeGreaterThan(-1);
-    expect(apiKeys).toBeGreaterThan(subscriptions);
+    expect(html).not.toContain("Use a subscription you already pay for");
+    expect(apiKeys).toBeGreaterThan(-1);
     expect(html.slice(apiKeys)).toContain('name="llm_anthropic"');
   });
 
@@ -174,8 +173,6 @@ describe("beginner-friendly provisioning UI", () => {
 
   it("explains agent choices and gives beginners a recommendation", () => {
     const html = String(OnboardingPage({}));
-    expect(html).toContain("For ChatGPT plans or OpenAI keys");
-    expect(html).toContain("Terminal agent for several model providers");
     expect(html).toContain("common choice");
     expect(html).toContain("1. Coding agents");
     expect(html).toContain("required");

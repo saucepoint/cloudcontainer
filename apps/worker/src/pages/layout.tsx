@@ -122,6 +122,8 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 details { margin-top: 0.8rem; padding: 0.2rem 0; }
 summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
+.create-server-btn { display: flex; width: fit-content; margin: 1.5rem auto 0; padding: 0.65rem 1.2rem; background: var(--accent); color: #fff; border-radius: 999px; font-size: 1.15rem; }
+.create-server-btn:hover { background: #123f87; color: #fff; text-decoration: none; }
 .notice { margin: 0.75rem 0; padding: 0.65rem 0 0.65rem 0.8rem; background: transparent;
   border-left: 2px solid var(--line-strong); border-radius: 0; }
 .notice.error { color: var(--danger); border-left-color: var(--danger); }
