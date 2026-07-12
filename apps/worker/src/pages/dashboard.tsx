@@ -168,18 +168,19 @@ function renderContainer(c) {
 
 function renderConnection(c) {
   const el = $('connection');
-  currentSshCommand = c && c.sshCommand ? c.sshCommand : '';
+  currentSshCommand = c && c.sshCommand && knownKeys.length > 0 ? c.sshCommand : '';
   if (!c) {
     el.innerHTML = '<p class="muted">Connection details appear after you create a server.</p>';
     return;
   }
-  if (c.sshCommand) {
+  if (c.status === 'running' && knownKeys.length === 0) {
+    el.innerHTML = '<p class="notice warning"><strong>Add an SSH key to reveal your connection command.</strong> You cannot see the SSH host or port until a key has been added. Choose “Set up SSH with an agent” below for a copyable coding-agent prompt, or add a public key manually.</p>';
+    return;
+  }
+  if (currentSshCommand) {
     let html = '<p><strong>Run this in your terminal</strong></p>' +
-      '<div class="command-row"><pre class="ssh">' + esc(c.sshCommand) + '</pre>' +
+      '<div class="command-row"><pre class="ssh">' + esc(currentSshCommand) + '</pre>' +
       '<button type="button" class="btn secondary" onclick="copySsh(this)">Copy SSH command</button></div>';
-    if (knownKeys.length === 0) {
-      html += '<p class="notice warning"><strong>One more step:</strong> add an SSH key below before this command can connect.</p>';
-    }
     const fingerprints = c.hostKeyFingerprints || [];
     if (fingerprints.length) {
       html += '<details><summary>Verify this server on your first connection</summary>' +
@@ -369,12 +370,20 @@ window.showAddKey = () => {
   $('newkey').focus();
 };
 
+async function refreshKeysAndConnection() {
+  const [keys, container] = await Promise.all([
+    api('/api/keys'),
+    api('/api/container'),
+  ]);
+  applyContainer(container.container);
+  renderKeys(keys.keys);
+}
+
 window.refreshKeys = async (btn) => {
   const restore = setButtonBusy(btn, 'Refreshing…');
   showKeyError('');
   try {
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not refresh SSH keys.'));
     restore();
@@ -391,8 +400,7 @@ window.addKey = async (btn) => {
   try {
     await api('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pubkey: $('newkey').value }) });
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not save that SSH key.'));
     restore();
@@ -408,8 +416,7 @@ async function removeKey(id, btn) {
   showKeyError('');
   try {
     await api('/api/keys/' + id, { method: 'DELETE' });
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not remove that SSH key.'));
     restore();

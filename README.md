@@ -42,9 +42,10 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    All four agents are baked into the image; a missing-only fallback installer
    runs only for a selected binary that is unexpectedly absent. The selected
    set drives dashboard and MOTD guidance even though every binary is available.
-5. The dashboard displays clear waiting/building/ready/error states, the SSH
-   command, and host-key fingerprints. If capacity is full, the FIFO waitlist
-   is admitted automatically by the reconciler.
+5. The dashboard displays clear waiting/building/ready/error states. It reveals
+   the SSH command and host-key fingerprints only after an SSH key is added. If
+   capacity is full, the FIFO waitlist is admitted automatically by the
+   reconciler.
 6. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh codestation.
