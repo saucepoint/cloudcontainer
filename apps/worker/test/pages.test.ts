@@ -222,9 +222,11 @@ describe("interface foundation", () => {
     expect(html).toContain("color: var(--accent)");
   });
 
-  it("keeps text fields quiet until they are interacted with", () => {
+  it("uses understated underline text fields", () => {
     const html = String(OnboardingPage({}));
-    expect(html).toContain("background: transparent; color: var(--ink); border: 1px solid var(--line);");
+    expect(html).toContain(
+      "background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid var(--line);",
+    );
     expect(html).toContain("input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }");
     expect(html).toContain(
       "input:focus, textarea:focus, select:focus { border-color: var(--focus); box-shadow: 0 1px 0 var(--focus); }",
