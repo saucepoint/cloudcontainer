@@ -163,6 +163,13 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("c.status === 'running'");
     expect(html).toContain("SSH setup unlocks after the server is ready");
     expect(html).toContain("Finish building your server before creating an SSH setup prompt");
+    expect(html).toContain("c.status === 'running' && knownKeys.length === 0");
+    expect(html).toContain("Add an SSH key to reveal your connection command");
+    expect(html).toContain("You cannot see the SSH host or port until a key has been added");
+    expect(html.indexOf("c.status === 'running' && knownKeys.length === 0")).toBeLessThan(
+      html.indexOf("if (currentSshCommand)"),
+    );
+    expect(html).toContain("refreshKeysAndConnection");
   });
 
   it("explains agent choices and gives beginners a recommendation", () => {

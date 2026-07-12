@@ -91,9 +91,9 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
   credential-refresh jobs.
 - Automatic FIFO waitlist admission when host capacity becomes available.
-- Dashboard status, SSH command, host-key fingerprints, post-ready key
-  management, read-only credential presence, lifecycle controls, and account
-  deletion.
+- Dashboard status, a key-gated SSH command and host-key fingerprints,
+  post-ready key management, read-only credential presence, lifecycle controls,
+  and account deletion.
 - One deployed control-plane Worker and one small development Incus host.
 
 ### Explicitly not in the current release
@@ -175,7 +175,9 @@ does not wait for Incus or package installation.
   must leave the user waitlisted rather than oversubscribe a host.
 - The dashboard explains that admission is automatic and keeps checking without
   requiring a reload.
-- Success shows the exact SSH command and SSH host-key fingerprints.
+- Success shows the exact SSH command and SSH host-key fingerprints once an
+  authorized key exists; without a key, it guides the user to manual or
+  agent-assisted key setup without exposing the endpoint.
 - Failure shows a short, non-secret error and a Retry action.
 
 The provisioning target is three minutes from submit to SSH-ready on a healthy
@@ -338,13 +340,15 @@ the container and its home volume permanently.
 ## 7. SSH and enrollment
 
 Each placed environment receives one host TCP port forwarded to port 22 in the
-container. The dashboard displays:
+container. Once the user has an authorized key, the dashboard displays:
 
     ssh -p PORT dev@HOST
 
 It also displays the generated host-key fingerprints for first-connection
-verification. Released ports stay quarantined for 30 days to reduce stale
-known_hosts confusion.
+verification. Without an authorized key, the dashboard withholds the host,
+port, and connection command, and directs the user to add a public key manually
+or generate an agent-assisted enrollment prompt. Released ports stay quarantined
+for 30 days to reduce stale known_hosts confusion.
 
 When the server is Ready and the user has no key, the authenticated dashboard
 can mint a random single-use enrollment token:
@@ -662,9 +666,10 @@ manual checks above have been completed for affected areas.
    four agents. Normal provisioning performs no agent package install; an
    intentionally missing selected binary triggers only its fallback installer.
 4. **Provisioning:** successful provisioning produces a Debian 13 environment,
-   enforced RAM/CPU/home/root limits, a persistent home volume, a copyable SSH
-   command, matching host-key fingerprints, and any selected GitHub repositories
-   cloned under `~/repos/name` with `gh` authenticated.
+   enforced RAM/CPU/home/root limits, a persistent home volume, and any selected
+   GitHub repositories cloned under `~/repos/name` with `gh` authenticated. A
+   copyable SSH command and matching host-key fingerprints appear only after an
+   authorized key exists.
 5. **No-key safety:** without a key, SSH fails closed. After a successful build,
    a one-hour, single-use enrollment token can add a public key and allow SSH.
 6. **Waitlist:** insufficient capacity produces a clear waitlisted state.

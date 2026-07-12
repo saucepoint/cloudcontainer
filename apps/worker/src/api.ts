@@ -160,6 +160,15 @@ async function sshCommandFor(env: Bindings, container: ContainerRow): Promise<st
   return host ? `ssh -p ${container.ssh_port} dev@${host.ssh_hostname}` : null;
 }
 
+/** Do not expose a container's SSH endpoint until the user has a key that can use it. */
+async function hasSshKey(env: Bindings, userId: string): Promise<boolean> {
+  return Boolean(
+    await env.DB.prepare("SELECT 1 FROM ssh_keys WHERE user_id = ? LIMIT 1")
+      .bind(userId)
+      .first(),
+  );
+}
+
 interface ContainerView {
   id: string;
   status: string;
@@ -183,7 +192,9 @@ async function containerView(
   job: JobRow | null,
 ): Promise<ContainerView> {
   const sshCommand =
-    container.status === "running" ? await sshCommandFor(env, container) : null;
+    container.status === "running" && (await hasSshKey(env, container.user_id))
+      ? await sshCommandFor(env, container)
+      : null;
   return {
     id: container.id,
     status: container.status,

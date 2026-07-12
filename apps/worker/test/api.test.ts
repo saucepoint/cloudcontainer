@@ -262,11 +262,30 @@ describe("GET /api/container", () => {
     expect(await res.json()).toEqual({ container: null });
   });
 
-  it("exposes the ssh command and allowed ops for a running container", async () => {
+  it("withholds the SSH endpoint when the running container has no authorized keys", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await seedHost(env);
     await seedContainer(env, { status: "running", host_key_fingerprints: '["fp1"]' });
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/container", { headers }, env);
+    const body = await res.json();
+    expect(body).toMatchObject({ container: { status: "running", sshCommand: null } });
+    expect(JSON.stringify(body)).not.toContain("30500");
+    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+  });
+
+  it("exposes the ssh command and allowed ops for a running container with an authorized key", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running", host_key_fingerprints: '["fp1"]' });
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, 'laptop', ?, ?)",
+    )
+      .bind(user.id, PUBKEY, Date.now())
+      .run();
     const headers = await login(env, user);
 
     const res = await app().request("/api/container", { headers }, env);
@@ -280,6 +299,20 @@ describe("GET /api/container", () => {
 });
 
 describe("GET /api/dashboard", () => {
+  it("keeps connection details hidden until an SSH key exists", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/dashboard", { headers }, env);
+    const body = await res.json();
+    expect(body).toMatchObject({ container: { sshCommand: null }, keys: [] });
+    expect(JSON.stringify(body)).not.toContain("30500");
+    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+  });
+
   it("returns the initial container, credential-presence, and key state together", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -428,6 +461,9 @@ describe("SSH key management", () => {
       { op: "sync-keys", sshKeys: [PUBKEY] },
       { op: "sync-keys", sshKeys: [] },
     ]);
+
+    const container = await app().request("/api/container", { headers }, env);
+    expect(await container.json()).toMatchObject({ container: { sshCommand: null } });
   });
 
   it("rejects invalid keys", async () => {
