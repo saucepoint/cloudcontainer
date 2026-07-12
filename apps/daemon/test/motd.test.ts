@@ -11,11 +11,12 @@ const base = {
 describe("renderMotd (first-login checklist, §5.4)", () => {
   it("shows everything unchecked for a bare container", () => {
     const motd = renderMotd(base);
-    expect(motd).toContain("[ ] model access — add an API key in the dashboard");
-    expect(motd).toContain("[ ] github — connect in the dashboard");
-    expect(motd).toContain("[ ] cloudflare — connect in the dashboard");
+    expect(motd).toContain("[ ] model access — configure manually in this terminal");
+    expect(motd).toContain("[ ] github — configure manually in this terminal");
+    expect(motd).toContain("[ ] cloudflare — configure manually in this terminal");
     expect(motd).toContain("[ ] ssh keys (0)");
     expect(motd).toContain("https://codestation.example");
+    expect(motd).toContain("dashboard credentials are setup-only");
   });
 
   it("distinguishes a wrangler sign-in from a pasted API token", () => {

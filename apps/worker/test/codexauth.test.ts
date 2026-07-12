@@ -5,12 +5,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { generateX25519Keypair } from "@codestation/contract";
 import { buildCodexAuthJson, codexAuthRoutes } from "../src/codexauth.js";
 import { decryptLlmKeys, getCredentialsRow } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { makeEnv, seedContainer, seedHost, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
+import { makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -200,30 +199,32 @@ describe("POST /api/codex/device/poll", () => {
     expect(state).toBeNull(); // single-use
   });
 
-  it("pushes refresh-credentials to a running container on approval", async () => {
+  it("refuses a device flow after a server has been created", async () => {
     const openai = fakeOpenAI({ approved: true });
     const { env } = makeEnv();
     const user = await seedUser(env);
-    await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });
-    await seedContainer(env);
+    await seedContainer(env, { host_id: null, ssh_port: null });
     const headers = await login(env, user);
-    const jobs: string[] = [];
-    stubFetch(openai.route, (url, init) => {
-      if (url.pathname === "/jobs" && init.method === "POST") {
-        const request = JSON.parse(String(init.body)) as { jobId: string; op: string };
-        jobs.push(request.op);
-        return Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 });
-      }
-      return null;
-    });
+    stubFetch(openai.route);
+
+    const res = await app().request("/api/codex/device", { method: "POST", headers }, env);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("manual terminal commands") });
+    expect(await getCredentialsRow(env, user.id)).toBeNull();
+  });
+
+  it("does not complete a device flow if the server is created while it is pending", async () => {
+    const { env, headers } = await setup(fakeOpenAI({ approved: true }));
     const start = await startDevice(env, headers);
+    await seedContainer(env, { host_id: null, ssh_port: null });
+
     const res = await app().request(
       "/api/codex/device/poll",
       json({ deviceAuthId: start.deviceAuthId, userCode: start.userCode }, headers),
       env,
     );
-    expect(res.status).toBe(200);
-    expect(jobs).toContain("refresh-credentials");
+    expect(res.status).toBe(409);
+    expect(await getCredentialsRow(env, "user-1")).toBeNull();
   });
 
   it("rejects polls from a different user", async () => {

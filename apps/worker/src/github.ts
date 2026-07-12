@@ -6,7 +6,12 @@
  */
 import { Hono } from "hono";
 import { encryptJsonAtRest, toHex } from "@codestation/contract";
-import { requireUser } from "./auth.js";
+import {
+  CREDENTIALS_LOCKED_ERROR,
+  credentialsCanBeChanged,
+  requireCredentialSetup,
+  requireUser,
+} from "./auth.js";
 import { decryptString, getCredentialsRow } from "./credentials.js";
 import { enqueueJobForUser } from "./jobs.js";
 import type { AppContext, Bindings } from "./types.js";
@@ -228,10 +233,13 @@ async function revokeGithubAuthorization(env: Bindings, token: string): Promise<
 export const githubRoutes = new Hono<AppContext>()
   .get("/auth/github", requireUser, async (c) => {
     if (!githubConfigured(c.env)) return c.text("GitHub App not configured", 404);
+    if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
+      return c.text(CREDENTIALS_LOCKED_ERROR, 409);
+    }
     const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
     return c.redirect(await beginGithubAuthorization(c.env, c.get("user").id, returnTo));
   })
-  .post("/auth/github/reauth", requireUser, async (c) => {
+  .post("/auth/github/reauth", requireUser, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
     const userId = c.get("user").id;
     try {
@@ -265,6 +273,9 @@ export const githubRoutes = new Hono<AppContext>()
     if (!row || row.expires_at < Date.now() || row.user_id !== c.get("user").id) {
       return c.text("Expired or invalid state", 400);
     }
+    if (!(await credentialsCanBeChanged(c.env, row.user_id))) {
+      return c.text(CREDENTIALS_LOCKED_ERROR, 409);
+    }
     try {
       const tokens = await exchangeGithubTokens(c.env, { code });
       if (tokens.error) throw new Error(`github oauth error: ${tokens.error}`);
@@ -277,7 +288,7 @@ export const githubRoutes = new Hono<AppContext>()
     }
     return c.redirect(row.return_to === "/onboarding" ? "/onboarding" : "/dashboard");
   })
-  .get("/api/github/repos", requireUser, async (c) => {
+  .get("/api/github/repos", requireUser, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
     try {
       const token = await githubAccessToken(c.env, c.get("user").id);

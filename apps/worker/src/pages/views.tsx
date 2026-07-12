@@ -347,6 +347,10 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
   <Layout title="Set up" loggedIn>
     <h1>Set up a server.</h1>
     <p class="lead">Pick an agent. Everything else can wait.</p>
+    <p class="notice">
+      <strong>Credentials are set during setup.</strong> Add any model, GitHub, or Cloudflare
+      credentials now. After creating your server, changes require manual terminal commands.
+    </p>
     <form id="wizard">
       <div class="card">
         <fieldset aria-describedby="agent-help">
@@ -498,7 +502,10 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
 
       <div class="card">
         <h2>{githubAvailable ? "4" : "3"}. Advanced <span class="muted">optional</span></h2>
-        <p class="muted">Add SSH or Cloudflare now, or do it later from the dashboard.</p>
+        <p class="muted">
+          Add an SSH key now or after the server is ready. Cloudflare credentials must be set now;
+          later changes require manual terminal commands.
+        </p>
         <details>
           <summary>Add an SSH public key myself</summary>
           <label for="ssh-pubkey">Public key</label>

@@ -28,7 +28,9 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 1. The user completes one World ID 4.0 Session proof. The RP-scoped
    session_id provides both one-human/one-account uniqueness and repeat login.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
-   model/developer credentials are optional. When GitHub is configured, users
+   model/developer credentials are optional, but model, GitHub, and Cloudflare
+   credentials must be selected before creating the server. Later credential
+   changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
 3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
@@ -40,12 +42,13 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    All four agents are baked into the image; a missing-only fallback installer
    runs only for a selected binary that is unexpectedly absent. The selected
    set drives dashboard and MOTD guidance even though every binary is available.
-5. The dashboard displays clear waiting/building/ready/error states, the SSH
-   command, and host-key fingerprints. If capacity is full, the FIFO waitlist
-   is admitted automatically by the reconciler.
-6. A user without a key can copy an enrollment prompt to a local coding agent.
-   The agent creates a local keypair, sends only the public key with a
-   single-use one-hour token, and configures ssh codestation.
+5. The dashboard displays clear waiting/building/ready/error states. It reveals
+   the SSH command and host-key fingerprints only after an SSH key is added. If
+   capacity is full, the FIFO waitlist is admitted automatically by the
+   reconciler.
+6. After the server is ready, a user without a key can copy an enrollment prompt
+   to a local coding agent. The agent creates a local keypair, sends only the
+   public key with a single-use one-hour token, and configures ssh codestation.
 
 The dashboard loads container, credential-presence, and SSH-key data with one
 aggregate request. While work is active, it polls only container state: every

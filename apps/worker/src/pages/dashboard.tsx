@@ -1,28 +1,12 @@
 import type { FC } from "hono/jsx";
-import {
-  AGENT_LABELS,
-  LLM_PROVIDER_LABELS,
-  LLM_PROVIDERS,
-  SUBSCRIPTION_LLM_PROVIDERS,
-} from "@codestation/contract";
-import { AUTH_FLOWS_JS } from "./authflows.js";
+import { AGENT_LABELS, LLM_PROVIDER_LABELS } from "@codestation/contract";
 import { Layout } from "./layout.js";
-
-// Subscriptions each get their own sign-in row; the dropdown is API keys only.
-const API_KEY_PROVIDERS = LLM_PROVIDERS.filter(
-  (p) => !(SUBSCRIPTION_LLM_PROVIDERS as readonly string[]).includes(p),
-);
-const PROVIDER_OPTIONS = API_KEY_PROVIDERS.map(
-  (p) => `<option value="${p}">${LLM_PROVIDER_LABELS[p]}</option>`,
-).join("");
 
 const DASHBOARD_JS = `
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const AGENT_LABELS = ${JSON.stringify(AGENT_LABELS)};
 const PROVIDER_LABELS = ${JSON.stringify(LLM_PROVIDER_LABELS)};
-const API_KEY_PROVIDERS = ${JSON.stringify(API_KEY_PROVIDERS)};
-const CRED_BOXES = ['credform', 'claudebox', 'codexbox', 'copilotbox', 'opencodeform', 'cfform'];
 const STATUS_LABELS = {
   waitlisted: 'Waiting for capacity', provisioning: 'Building', running: 'Ready',
   stopped: 'Stopped', suspended: 'Suspended', upgrade_pending: 'Upgrade pending',
@@ -37,6 +21,8 @@ let currentContainer = null;
 let knownKeys = [];
 let currentSshCommand = '';
 let enrollPrompt = '';
+let sshSetupAvailable = false;
+let keysRendered = false;
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -81,11 +67,6 @@ function showKeyError(message) {
   if (el) el.textContent = message || '';
 }
 
-function showCredentialError(message) {
-  const el = $('crederr');
-  if (el) el.textContent = message || '';
-}
-
 function setButtonBusy(btn, label) {
   if (!btn) return () => {};
   const original = btn.innerHTML;
@@ -107,6 +88,10 @@ function setContainerButtonsDisabled(disabled) {
 function isBusy(c) {
   return !!c && (c.status === 'provisioning' || c.status === 'destroying' ||
     (c.job && (c.job.status === 'queued' || c.job.status === 'running')));
+}
+
+function canManageSshKeys(c) {
+  return !!c && c.status === 'running';
 }
 
 function pollDelay(c) {
@@ -183,18 +168,19 @@ function renderContainer(c) {
 
 function renderConnection(c) {
   const el = $('connection');
-  currentSshCommand = c && c.sshCommand ? c.sshCommand : '';
+  currentSshCommand = c && c.sshCommand && knownKeys.length > 0 ? c.sshCommand : '';
   if (!c) {
     el.innerHTML = '<p class="muted">Connection details appear after you create a server.</p>';
     return;
   }
-  if (c.sshCommand) {
+  if (c.status === 'running' && knownKeys.length === 0) {
+    el.innerHTML = '<p class="notice warning"><strong>Add an SSH key to reveal your connection command.</strong> You cannot see the SSH host or port until a key has been added. Choose “Set up SSH with an agent” below for a copyable coding-agent prompt, or add a public key manually.</p>';
+    return;
+  }
+  if (currentSshCommand) {
     let html = '<p><strong>Run this in your terminal</strong></p>' +
-      '<div class="command-row"><pre class="ssh">' + esc(c.sshCommand) + '</pre>' +
+      '<div class="command-row"><pre class="ssh">' + esc(currentSshCommand) + '</pre>' +
       '<button type="button" class="btn secondary" onclick="copySsh(this)">Copy SSH command</button></div>';
-    if (knownKeys.length === 0) {
-      html += '<p class="notice warning"><strong>One more step:</strong> add an SSH key below before this command can connect.</p>';
-    }
     const fingerprints = c.hostKeyFingerprints || [];
     if (fingerprints.length) {
       html += '<details><summary>Verify this server on your first connection</summary>' +
@@ -207,95 +193,58 @@ function renderConnection(c) {
   if (c.status === 'stopped') {
     el.innerHTML = '<p class="muted">Start the server to see its SSH command.</p>';
   } else if (c.status === 'provisioning' || c.status === 'waitlisted') {
-    el.innerHTML = '<p class="muted">Your SSH command will appear here when the server is ready. You can set up your key now.</p>';
+    el.innerHTML = '<p class="muted">Your SSH command and SSH setup options will appear here when the server is ready.</p>';
   } else {
     el.innerHTML = '<p class="muted">SSH is not available in the current server state.</p>';
   }
 }
 
 function applyContainer(c) {
+  const nextSshSetupAvailable = canManageSshKeys(c);
+  const sshSetupChanged = nextSshSetupAvailable !== sshSetupAvailable;
   currentContainer = c;
+  sshSetupAvailable = nextSshSetupAvailable;
   renderContainer(c);
   renderConnection(c);
+  if (keysRendered && sshSetupChanged) renderKeys(knownKeys);
   renderDanger(c);
-}
-
-function credRow([name, ok, fn, cta]) {
-  return '<li><span>' + esc(name) + '</span>' + (ok
-    ? '<span><span class="ok">✓ ' + esc(ok) + '</span> · ' +
-      '<button type="button" class="link-btn" onclick="' + fn + '">Update</button></span>'
-    : '<span class="missing">not set · <button type="button" class="link-btn" onclick="' + fn + '">' + esc(cta) + '</button></span>') +
-    '</li>';
 }
 
 function renderCreds(cr) {
   const llm = cr.llm || {};
-  const subscriptions = [
-    ['Claude', llm.claude_subscription_token ? 'connected' : null, 'claudeStart()', 'Sign in with Claude'],
-    ['ChatGPT (Codex)', llm.codex_subscription_token ? 'connected' : null, 'codexStart()', 'Sign in with ChatGPT'],
-    ['GitHub Copilot', llm.github_copilot ? 'connected' : null, 'copilotStart()', 'Sign in with GitHub'],
-    ['OpenCode Go', llm.opencode_go ? 'connected' : null, 'addOpencode()', 'Add key'],
-  ];
-  const apiKeys = API_KEY_PROVIDERS.filter((k) => llm[k]);
-  const cfKinds = [cr.wrangler ? 'wrangler' : null, cr.cloudflare ? 'API token' : null].filter(Boolean);
-  const rows = [
-    ['Model API keys', apiKeys.length ? 'connected (' + apiKeys.map(providerName).join(', ') + ')' : null,
-      'addCreds()', 'Add API key'],
-    ['Cloudflare', cfKinds.length ? 'connected (' + cfKinds.join(' + ') + ')' : null, 'addCf()', 'Connect'],
-  ];
-  if (cr.githubAvailable) {
-    rows.push(['GitHub', cr.github ? 'connected (' + cr.github + ')' : null,
-      "location.href='/auth/github'", 'Connect']);
-  }
-  $('creds').innerHTML =
-  '<h3 class="group-label">Subscriptions</h3>' +
-  '<ul class="check">' + subscriptions.map(credRow).join('') + '</ul>' +
-  '<h3 class="group-label">API keys &amp; tokens</h3>' +
-  '<ul class="check">' + rows.map(credRow).join('') + '</ul>' +
-  '<div id="credform" hidden>' +
-    '<label for="prov">Provider</label><select id="prov">${PROVIDER_OPTIONS}</select>' +
-    '<label for="provkey">Key or token</label><input type="password" id="provkey" autocomplete="off">' +
-    '<p class="muted">Save an empty value to remove the selected managed credential.</p>' +
-    '<div class="row"><button type="button" class="btn" onclick="saveCred(this)">Save</button></div></div>' +
-  '<div id="claudebox" hidden>' +
-    '<div id="claudeflow" role="status" aria-live="polite"></div>' +
-    '<details><summary>Advanced: paste a token from claude setup-token instead</summary>' +
-    '<label for="claudetok">Run claude setup-token on your machine, then paste the token</label>' +
-    '<input type="password" id="claudetok" autocomplete="off">' +
-    '<div class="row"><button type="button" class="btn" onclick="saveClaudeToken(this)">Save</button></div></details></div>' +
-  '<div id="codexbox" hidden>' +
-    '<div id="codexflow" role="status" aria-live="polite"></div></div>' +
-  '<div id="copilotbox" hidden>' +
-    '<div id="copilotflow" role="status" aria-live="polite"></div></div>' +
-  '<div id="opencodeform" hidden>' +
-    '<label for="opencodekey">OpenCode Go API key — copy it from ' +
-    '<a href="https://opencode.ai/auth" target="_blank" rel="noreferrer">opencode.ai/auth</a></label>' +
-    '<input type="password" id="opencodekey" autocomplete="off">' +
-    '<p class="muted">Save an empty value to remove it.</p>' +
-    '<div class="row"><button type="button" class="btn" onclick="saveOpencode(this)">Save</button></div></div>' +
-  '<div id="cfform" hidden>' +
-    '<div class="row" style="margin-top:0.2rem">' +
-    '<button type="button" class="btn secondary" onclick="wranglerStart()">Sign in with Cloudflare (wrangler)</button>' +
-    (cr.wrangler ? '<button type="button" class="link-btn" onclick="wranglerDisconnect(this)">Disconnect wrangler</button>' : '') +
-    '</div>' +
-    '<div id="wranglerflow" role="status" aria-live="polite"></div>' +
-    '<label for="cftok">Or paste a Cloudflare API token</label><input type="password" id="cftok" autocomplete="off">' +
-    '<p class="muted">Use a narrowly scoped token. Save an empty value to remove it.</p>' +
-    '<div class="row"><button type="button" class="btn" onclick="saveCf(this)">Save</button></div></div>' +
-  '<div id="crederr" class="err" role="alert" aria-live="assertive"></div>';
+  const modelProviders = Object.keys(llm).filter((provider) => llm[provider]).map(providerName);
+  const configured = [];
+  if (modelProviders.length) configured.push('Model access: ' + modelProviders.join(', '));
+  if (cr.github) configured.push('GitHub: ' + cr.github);
+  const cloudflare = [cr.wrangler ? 'wrangler' : null, cr.cloudflare ? 'API token' : null]
+    .filter(Boolean);
+  if (cloudflare.length) configured.push('Cloudflare: ' + cloudflare.join(' + '));
+  $('creds').innerHTML = (configured.length
+    ? '<ul class="check">' + configured.map((item) => '<li><span class="ok">✓ ' + esc(item) + '</span></li>').join('') + '</ul>'
+    : '<p class="muted">No credentials were selected during setup.</p>') +
+    '<p class="notice"><strong>Set during setup.</strong> To add, remove, or rotate credentials, use manual terminal commands in your server.</p>';
 }
 
 function renderKeys(keys) {
   knownKeys = Array.isArray(keys) ? keys : [];
+  keysRendered = true;
+  const ready = canManageSshKeys(currentContainer);
   let html = '';
-  if (knownKeys.length === 0) {
+  if (knownKeys.length === 0 && ready) {
     html += '<p class="notice warning"><strong>Add a public key to use SSH.</strong></p>';
   } else {
     html += '<ul class="check">' + knownKeys.map((key) =>
       '<li><span style="font-family:var(--mono);font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:75%">' +
       esc(key.pubkey.slice(0, 60)) + '…</span>' +
-      '<button type="button" class="link-btn" onclick="delKey(' + key.id + ', this)">Remove</button></li>'
+      (ready ? '<button type="button" class="link-btn" onclick="delKey(' + key.id + ', this)">Remove</button>' : '') +
+      '</li>'
     ).join('') + '</ul>';
+  }
+  if (!ready) {
+    enrollPrompt = '';
+    html += '<p class="notice"><strong>SSH setup unlocks after the server is ready.</strong> Finish building the server before adding keys or creating an agent setup prompt.</p>';
+    $('keys').innerHTML = html;
+    return;
   }
   html += '<div class="row">' +
     '<button type="button" class="btn" onclick="mintToken(this)">' +
@@ -337,7 +286,13 @@ async function copyValue(value, btn, restoredLabel) {
 }
 
 window.copySsh = (btn) => copyValue(currentSshCommand, btn, 'Copy SSH command');
-window.copyPrompt = (btn) => copyValue(enrollPrompt, btn, 'Copy prompt');
+window.copyPrompt = (btn) => {
+  if (!canManageSshKeys(currentContainer) || !enrollPrompt) {
+    showKeyError('Finish building your server before using an SSH setup prompt.');
+    return;
+  }
+  copyValue(enrollPrompt, btn, 'Copy prompt');
+};
 window.copyKeyCommands = (btn) => copyValue(KEY_HELP, btn, 'Copy commands');
 
 async function pollContainer() {
@@ -407,16 +362,28 @@ window.confirmAct = (op, message, btn) => {
 };
 
 window.showAddKey = () => {
+  if (!canManageSshKeys(currentContainer)) {
+    showKeyError('Finish building your server before changing SSH keys.');
+    return;
+  }
   $('keyform').hidden = false;
   $('newkey').focus();
 };
+
+async function refreshKeysAndConnection() {
+  const [keys, container] = await Promise.all([
+    api('/api/keys'),
+    api('/api/container'),
+  ]);
+  applyContainer(container.container);
+  renderKeys(keys.keys);
+}
 
 window.refreshKeys = async (btn) => {
   const restore = setButtonBusy(btn, 'Refreshing…');
   showKeyError('');
   try {
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not refresh SSH keys.'));
     restore();
@@ -424,13 +391,16 @@ window.refreshKeys = async (btn) => {
 };
 
 window.addKey = async (btn) => {
+  if (!canManageSshKeys(currentContainer)) {
+    showKeyError('Finish building your server before changing SSH keys.');
+    return;
+  }
   const restore = setButtonBusy(btn, 'Saving…');
   showKeyError('');
   try {
     await api('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pubkey: $('newkey').value }) });
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not save that SSH key.'));
     restore();
@@ -438,12 +408,15 @@ window.addKey = async (btn) => {
 };
 
 async function removeKey(id, btn) {
+  if (!canManageSshKeys(currentContainer)) {
+    showKeyError('Finish building your server before changing SSH keys.');
+    return;
+  }
   const restore = setButtonBusy(btn, 'Removing…');
   showKeyError('');
   try {
     await api('/api/keys/' + id, { method: 'DELETE' });
-    const result = await api('/api/keys');
-    renderKeys(result.keys);
+    await refreshKeysAndConnection();
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not remove that SSH key.'));
     restore();
@@ -458,6 +431,10 @@ window.delKey = (id, btn) => askConfirmation(
 );
 
 window.mintToken = async (btn) => {
+  if (!canManageSshKeys(currentContainer)) {
+    showKeyError('Finish building your server before creating an SSH setup prompt.');
+    return;
+  }
   const restore = setButtonBusy(btn, 'Creating prompt…');
   showKeyError('');
   try {
@@ -480,7 +457,6 @@ window.mintToken = async (btn) => {
       '4. Verify the connection: ssh codestation "echo connected"',
       '5. Confirm to me that connecting is now just: ssh codestation',
       '',
-      'If "sshCommand" is null the server is still being built — the key is registered. Tell me to check the dashboard in a few minutes.',
       'The token is single-use and expires in 1 hour. If the API returns 403, stop and tell me to mint a fresh token.',
     ].join('\\n');
     $('enroll').innerHTML =
@@ -494,107 +470,6 @@ window.mintToken = async (btn) => {
   } catch (error) {
     showKeyError(errorMessage(error, 'Could not create an enrollment prompt. Please try again.'));
   } finally {
-    restore();
-  }
-};
-
-function showCredBox(id) {
-  for (const box of CRED_BOXES) $(box).hidden = box !== id;
-  showCredentialError('');
-}
-
-window.addCreds = () => {
-  showCredBox('credform');
-  $('prov').focus();
-};
-
-window.addOpencode = () => {
-  showCredBox('opencodeform');
-  $('opencodekey').focus();
-};
-
-window.addCf = () => {
-  showCredBox('cfform');
-};
-
-async function refreshCreds() {
-  const result = await api('/api/credentials');
-  renderCreds(result);
-}
-
-window.claudeStart = () => {
-  if (window.afActive) return;
-  showCredBox('claudebox');
-  claudeOauthFlow($('claudeflow'), refreshCreds);
-};
-
-window.codexStart = () => {
-  if (window.afActive) return;
-  showCredBox('codexbox');
-  codexDeviceFlow($('codexflow'), refreshCreds);
-};
-
-window.copilotStart = () => {
-  if (window.afActive) return;
-  showCredBox('copilotbox');
-  copilotDeviceFlow($('copilotflow'), refreshCreds);
-};
-
-window.wranglerStart = () => {
-  if (window.afActive) return;
-  wranglerOauthFlow($('wranglerflow'), refreshCreds);
-};
-
-async function disconnectWrangler(btn) {
-  const restore = setButtonBusy(btn, 'Removing…');
-  showCredentialError('');
-  try {
-    await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ wranglerOauth: '' }) });
-    await refreshCreds();
-  } catch (error) {
-    showCredentialError(errorMessage(error, 'Could not disconnect wrangler.'));
-    restore();
-  }
-}
-
-window.wranglerDisconnect = (btn) => askConfirmation(
-  'Disconnect Wrangler?',
-  'The signed-in state will be removed from the server within a minute.',
-  'Disconnect',
-  () => disconnectWrangler(btn),
-);
-
-async function saveLlmKey(btn, provider, value, failMessage) {
-  const restore = setButtonBusy(btn, 'Saving…');
-  showCredentialError('');
-  const body = { llmKeys: {} };
-  body.llmKeys[provider] = value;
-  try {
-    await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    await refreshCreds();
-  } catch (error) {
-    showCredentialError(errorMessage(error, failMessage));
-    restore();
-  }
-}
-
-window.saveCred = (btn) => saveLlmKey(btn, $('prov').value, $('provkey').value.trim(),
-  'Could not save that credential.');
-window.saveOpencode = (btn) => saveLlmKey(btn, 'opencode_go', $('opencodekey').value.trim(),
-  'Could not save that OpenCode Go key.');
-window.saveClaudeToken = (btn) => saveLlmKey(btn, 'claude_subscription_token', $('claudetok').value.trim(),
-  'Could not save that Claude token.');
-
-window.saveCf = async (btn) => {
-  const restore = setButtonBusy(btn, 'Saving…');
-  showCredentialError('');
-  try {
-    await api('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cloudflareToken: $('cftok').value.trim() }) });
-    await refreshCreds();
-  } catch (error) {
-    showCredentialError(errorMessage(error, 'Could not save that Cloudflare token.'));
     restore();
   }
 };
@@ -635,9 +510,9 @@ window.loadDashboard = async (btn) => {
     const snapshot = await api('/api/dashboard');
     statusRefreshNeeded = false;
     knownKeys = Array.isArray(snapshot.keys) ? snapshot.keys : [];
+    applyContainer(snapshot.container);
     renderCreds(snapshot.credentials);
     renderKeys(knownKeys);
-    applyContainer(snapshot.container);
     schedulePoll(snapshot.container);
   } catch (error) {
     if (!redirectIfSignedOut(error)) {
@@ -686,8 +561,11 @@ export const DashboardPage: FC = () => (
     </section>
 
     <section class="card" aria-labelledby="credentials-heading">
-      <h2 id="credentials-heading">Optional credentials</h2>
-      <p class="muted">Model, GitHub, and Cloudflare access. Changes apply without a restart.</p>
+      <h2 id="credentials-heading">Credentials</h2>
+      <p class="muted">
+        Model, GitHub, and Cloudflare access selected during setup. To make changes, use manual
+        terminal commands in your server.
+      </p>
       <div id="creds" aria-live="polite"></div>
     </section>
 
@@ -706,7 +584,6 @@ export const DashboardPage: FC = () => (
         Your server must be destroyed before your account can be deleted.
       </p>
     </section>
-    <script dangerouslySetInnerHTML={{ __html: AUTH_FLOWS_JS }} />
     <script dangerouslySetInnerHTML={{ __html: DASHBOARD_JS }} />
   </Layout>
 );

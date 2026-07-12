@@ -6,12 +6,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { generateX25519Keypair } from "@codestation/contract";
 import { decryptLlmKeys, decryptString, getCredentialsRow } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import { subscriptionRoutes } from "../src/subscriptions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { makeEnv, seedContainer, seedHost, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
+import { makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -282,15 +281,7 @@ async function startWrangler(env: Bindings, headers: Record<string, string>): Pr
 describe("Cloudflare wrangler OAuth", () => {
   it("exchanges the pasted callback URL and stores the wrangler login encrypted", async () => {
     const cloudflare = fakeCloudflare();
-    const { env, headers } = await setup(cloudflare.route, (url, init) => {
-      // refresh-credentials push for a running container
-      if (url.pathname === "/jobs" && init.method === "POST") {
-        return Response.json({ jobId: "j", status: "queued" }, { status: 202 });
-      }
-      return null;
-    });
-    await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });
-    await seedContainer(env);
+    const { env, headers } = await setup(cloudflare.route);
     const state = await startWrangler(env, headers);
 
     const res = await app().request(
@@ -365,5 +356,35 @@ describe("Cloudflare wrangler OAuth", () => {
       env,
     );
     expect(retry.status).toBe(403);
+  });
+});
+
+describe("credential setup lock", () => {
+  it.each([
+    "/api/claude/oauth/start",
+    "/api/copilot/device",
+    "/api/wrangler/oauth/start",
+  ])("refuses %s after a server has been created", async (path) => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { host_id: null, ssh_port: null });
+    const res = await app().request(path, { method: "POST", headers: await login(env, user) }, env);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("manual terminal commands") });
+  });
+
+  it("does not finish a subscription sign-in if a server is created while it is pending", async () => {
+    const { env, headers } = await setup(fakeAnthropic().route);
+    const state = await startClaude(env, headers);
+    await seedContainer(env, { host_id: null, ssh_port: null });
+
+    const res = await app().request(
+      "/api/claude/oauth/finish",
+      json({ code: `authcode-1#${state}` }, headers),
+      env,
+    );
+    expect(res.status).toBe(409);
+    expect(await getCredentialsRow(env, "user-1")).toBeNull();
   });
 });

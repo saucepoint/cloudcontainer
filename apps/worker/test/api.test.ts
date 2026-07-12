@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest, generateX25519Keypair } from "@codestation/contract";
 import { apiRoutes, validPubkey } from "../src/api.js";
-import { upsertCredentials } from "../src/credentials.js";
+import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
@@ -262,11 +262,30 @@ describe("GET /api/container", () => {
     expect(await res.json()).toEqual({ container: null });
   });
 
-  it("exposes the ssh command and allowed ops for a running container", async () => {
+  it("withholds the SSH endpoint when the running container has no authorized keys", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await seedHost(env);
     await seedContainer(env, { status: "running", host_key_fingerprints: '["fp1"]' });
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/container", { headers }, env);
+    const body = await res.json();
+    expect(body).toMatchObject({ container: { status: "running", sshCommand: null } });
+    expect(JSON.stringify(body)).not.toContain("30500");
+    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+  });
+
+  it("exposes the ssh command and allowed ops for a running container with an authorized key", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running", host_key_fingerprints: '["fp1"]' });
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, 'laptop', ?, ?)",
+    )
+      .bind(user.id, PUBKEY, Date.now())
+      .run();
     const headers = await login(env, user);
 
     const res = await app().request("/api/container", { headers }, env);
@@ -280,6 +299,20 @@ describe("GET /api/container", () => {
 });
 
 describe("GET /api/dashboard", () => {
+  it("keeps connection details hidden until an SSH key exists", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/dashboard", { headers }, env);
+    const body = await res.json();
+    expect(body).toMatchObject({ container: { sshCommand: null }, keys: [] });
+    expect(JSON.stringify(body)).not.toContain("30500");
+    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+  });
+
   it("returns the initial container, credential-presence, and key state together", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -372,9 +405,26 @@ describe("POST /api/container/:op", () => {
 });
 
 describe("SSH key management", () => {
+  it("does not allow key changes or SSH setup prompts until the server is ready", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "provisioning", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
+
+    expect((await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env)).status).toBe(
+      409,
+    );
+    expect((await app().request("/api/enrollment", { method: "POST", headers }, env)).status).toBe(
+      409,
+    );
+    expect((await env.DB.prepare("SELECT * FROM ssh_keys").all()).results).toHaveLength(0);
+  });
+
   it("treats adding the same public key twice as idempotent", async () => {
     const { env } = makeEnv();
-    const headers = await login(env, await seedUser(env));
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "running", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
 
     expect((await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env)).status).toBe(
       200,
@@ -411,11 +461,16 @@ describe("SSH key management", () => {
       { op: "sync-keys", sshKeys: [PUBKEY] },
       { op: "sync-keys", sshKeys: [] },
     ]);
+
+    const container = await app().request("/api/container", { headers }, env);
+    expect(await container.json()).toMatchObject({ container: { sshCommand: null } });
   });
 
   it("rejects invalid keys", async () => {
     const { env } = makeEnv();
-    const headers = await login(env, await seedUser(env));
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "running", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
     for (const body of [{ pubkey: "junk" }, { pubkey: 42 }, { pubkey: PUBKEY, label: 42 }]) {
       const res = await app().request("/api/keys", json(body, headers), env);
       expect(res.status).toBe(400);
@@ -426,6 +481,7 @@ describe("SSH key management", () => {
     const { env } = makeEnv();
     const alice = await seedUser(env, "alice");
     await seedUser(env, "bob");
+    await seedContainer(env, { user_id: alice.id, status: "running", host_id: null, ssh_port: null });
     await env.DB.prepare(
       "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES ('bob', '', ?, ?)",
     )
@@ -529,6 +585,25 @@ describe("credentials endpoint", () => {
     expect(body).toMatchObject({ llm: { opencode_go: true }, cloudflare: false, wrangler: true });
     expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
+
+  it("locks credential changes once a server has been created", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await upsertCredentials(env, user.id, { llmKeys: { openai: "CANARY-existing" } });
+    await seedContainer(env, { status: "provisioning", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
+
+    const res = await app().request(
+      "/api/credentials",
+      json({ llmKeys: { anthropic: "CANARY-new" } }, headers),
+      env,
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("manual terminal commands") });
+    expect(decryptLlmKeys(env, await getCredentialsRow(env, user.id))).toEqual({
+      openai: "CANARY-existing",
+    });
+  });
 });
 
 describe("enrollment (U4, no-key path)", () => {
@@ -570,6 +645,7 @@ describe("enrollment (U4, no-key path)", () => {
   it("rejects expired tokens", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
+    await seedContainer(env, { status: "running", host_id: null, ssh_port: null });
     const headers = await login(env, user);
     const token = await mintToken(env, headers);
     await env.DB.prepare("UPDATE enrollment_tokens SET expires_at = ?")
@@ -583,6 +659,7 @@ describe("enrollment (U4, no-key path)", () => {
   it("rejects missing or invalid pubkeys without consuming the token", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
+    await seedContainer(env, { status: "running", host_id: null, ssh_port: null });
     const headers = await login(env, user);
     const token = await mintToken(env, headers);
 
@@ -595,6 +672,22 @@ describe("enrollment (U4, no-key path)", () => {
     expect(
       (await app().request("/api/enroll", json({ token, pubkey: PUBKEY }), env)).status,
     ).toBe(200);
+  });
+
+  it("does not consume an enrollment token while the server is still building", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "running", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
+    const token = await mintToken(env, headers);
+    await env.DB.prepare("UPDATE containers SET status = 'provisioning' WHERE user_id = ?")
+      .bind(user.id)
+      .run();
+
+    const res = await app().request("/api/enroll", json({ token, pubkey: PUBKEY }), env);
+    expect(res.status).toBe(409);
+    const stored = await env.DB.prepare("SELECT used_at FROM enrollment_tokens").first<{ used_at: number | null }>();
+    expect(stored?.used_at).toBeNull();
   });
 });
 
