@@ -64,9 +64,11 @@ code, pre { font-family: var(--mono); }
   cursor: default; text-decoration: none; }
 label { display: block; margin: 1rem 0 0.3rem; color: var(--ink); font-size: 0.82rem; font-weight: 700; }
 input[type=text], input[type=password], input[type=search], textarea, select {
-  width: 100%; background: #fff; color: var(--ink); border: 1px solid var(--line-strong);
-  border-radius: 0; padding: 0.58rem 0.65rem; font-size: 0.9rem; font-family: var(--mono); }
-input:hover, textarea:hover, select:hover { border-color: var(--ink); }
+  width: 100%; background: transparent; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 0; padding: 0.58rem 0.65rem; font-size: 0.9rem; font-family: var(--mono);
+  transition: border-color 140ms ease, box-shadow 140ms ease; }
+input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }
+input:focus, textarea:focus, select:focus { border-color: var(--focus); box-shadow: 0 1px 0 var(--focus); }
 textarea { min-height: 6rem; resize: vertical; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
