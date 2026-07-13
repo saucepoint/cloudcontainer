@@ -258,15 +258,25 @@ describe("interface foundation", () => {
     expect(html).toContain("color: var(--accent)");
   });
 
-  it("uses understated underline text fields", () => {
+  it("visually separates text fields from structural dividers", () => {
     const html = String(OnboardingPage({}));
     expect(html).toContain(
-      "background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid var(--line);",
+      "background: var(--field); color: var(--ink); border: 1px solid var(--line-strong);",
     );
+    expect(html).toContain("border-radius: 5px; padding: 0.64rem 0.7rem;");
     expect(html).toContain("input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }");
     expect(html).toContain(
-      "input:focus, textarea:focus, select:focus { border-color: var(--focus); box-shadow: 0 1px 0 var(--focus); }",
+      "input:focus, textarea:focus, select:focus { background: #fff; border-color: var(--focus);",
     );
+  });
+
+  it("uses spacing, bullets, and grouped surfaces instead of row dividers", () => {
+    const html = String(OnboardingPage({ githubAvailable: true }));
+    expect(html).toContain('.check li::before { content: "";');
+    expect(html).toContain('.provider::before { content: "";');
+    expect(html).toContain(".repo-list { display: grid; gap: 0.3rem;");
+    expect(html).toContain("background: var(--surface); border: 0; border-radius: 4px;");
+    expect(html).not.toContain(".check li:last-child { border-bottom: 0; }");
   });
 
   it("keeps iOS Safari from zooming when mobile text fields receive focus", () => {
