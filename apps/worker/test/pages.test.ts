@@ -103,10 +103,20 @@ describe("onboarding wizard order", () => {
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
   });
 
+  it("places provider access between agent selection and optional GitHub setup", () => {
+    const html = String(OnboardingPage({ githubAvailable: true }));
+    const agents = html.indexOf("1. Coding agents");
+    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
+    const github = html.indexOf("2. GitHub");
+
+    expect(apiKeys).toBeGreaterThan(agents);
+    expect(apiKeys).toBeLessThan(github);
+  });
+
   it("warns that credentials can only be changed from the server terminal after setup", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("Preconfigure your workbench now");
-    expect(html).toContain("Once its provisioned, modifications require manual terminal commands");
+    expect(html).toContain("Choose agents and credentials before creating your server");
+    expect(html).toContain("After it is provisioned, changes require manual terminal commands");
   });
 });
 
@@ -125,6 +135,14 @@ describe("GitHub repository onboarding", () => {
     const disabled = String(OnboardingPage({ githubAvailable: false }));
     expect(disabled).not.toContain("Connect or reconnect GitHub");
     expect(disabled).not.toContain('id=\"github-repos\"');
+  });
+
+  it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
+    const html = String(OnboardingPage({ githubAvailable: true }));
+    expect(html).toContain("const selected = new Set(");
+    expect(html).toContain("input.checked = selected.has(input.value)");
+    expect(html).toContain("sessionStorage.removeItem(agentSelectionKey)");
+    expect(html).not.toContain("data-checked");
   });
 });
 
@@ -205,8 +223,11 @@ describe("page accessibility and recovery affordances", () => {
   it("groups onboarding choices, associates the SSH field, and announces errors", () => {
     const html = String(OnboardingPage({}));
     expect(html).toContain("<fieldset");
-    expect(html).toContain('<legend id="agents-legend">1. Coding agents');
-    expect(html).toContain('id="agent-selector"');
+    expect(html).toContain("<legend>1. Coding agents");
+    for (const agent of ["pi", "claude", "codex", "opencode"]) {
+      expect(html).toContain(`name="agent" value="${agent}" id="agent-${agent}"`);
+      expect(html).toContain(`for="agent-${agent}"`);
+    }
     expect(html).toContain('for="ssh-pubkey"');
     expect(html).toContain('id="err" class="err" role="alert" aria-live="assertive"');
   });

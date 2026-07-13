@@ -4,11 +4,9 @@
  * production transport underneath; the signature layer works either way).
  */
 import {
-  HealthResponseSchema,
   JobStatusResponseSchema,
   StatsResponseSchema,
   signRequest,
-  type HealthResponse,
   type JobRequest,
   type JobStatusResponse,
   type StatsResponse,
@@ -75,12 +73,4 @@ export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsRe
   const stats = StatsResponseSchema.parse(await res.json());
   if (stats.hostId !== host.id) throw new Error("daemon stats host identity mismatch");
   return stats;
-}
-
-export async function daemonHealth(env: Bindings, host: HostRow): Promise<HealthResponse> {
-  const res = await daemonFetch(env, host, "GET", "/health");
-  if (!res.ok) throw new Error(`daemon health failed (${res.status})`);
-  const health = HealthResponseSchema.parse(await res.json());
-  if (health.hostId !== host.id) throw new Error("daemon health host identity mismatch");
-  return health;
 }

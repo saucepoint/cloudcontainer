@@ -39,14 +39,6 @@ export interface UserRow {
   created_at: number;
 }
 
-export interface SshKeyRow {
-  id: number;
-  user_id: string;
-  label: string;
-  pubkey: string;
-  created_at: number;
-}
-
 export interface HostRow {
   id: string;
   ipv4: string;

@@ -48,18 +48,6 @@ export const OAUTH_ONLY_LLM_PROVIDERS = [
   "github_copilot",
 ] as const satisfies readonly LlmProvider[];
 
-/**
- * Credentials backed by a paid plan rather than a metered API key. The UI
- * groups these separately ("use a subscription you already pay for") from
- * plain API keys.
- */
-export const SUBSCRIPTION_LLM_PROVIDERS = [
-  "opencode_go",
-  "claude_subscription_token",
-  "codex_subscription_token",
-  "github_copilot",
-] as const satisfies readonly LlmProvider[];
-
 export const CONTAINER_STATUSES = [
   "waitlisted",
   "provisioning",
@@ -186,7 +174,6 @@ export const ContainerSpecSchema = z
     sshPort: z.number().int().min(1024).max(65535),
   })
   .strict();
-export type ContainerSpec = z.infer<typeof ContainerSpecSchema>;
 
 export const JobRequestSchema = z.discriminatedUnion("op", [
   z

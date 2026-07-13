@@ -5,7 +5,7 @@ import type { Agent } from "@codestation/contract";
  * (upgrade-in-place if present, install if absent) so rebuilds can re-run
  * them safely. Node is baked system-wide into the base image.
  */
-export const AGENT_INSTALLERS: Record<Agent, string> = {
+const AGENT_INSTALLERS: Record<Agent, string> = {
   pi: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
   claude: "npm install -g @anthropic-ai/claude-code",
   codex: "npm install -g @openai/codex",

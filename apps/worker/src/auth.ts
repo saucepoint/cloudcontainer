@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { hmacNullifier } from "@codestation/contract";
+import { readJsonBody } from "./http.js";
 import {
   clearSessionCookie,
   createSession,
@@ -80,14 +81,14 @@ export const authRoutes = new Hono<AppContext>()
     return c.json({ app_id: c.env.WORLD_ID_APP_ID, rp_context: signSessionRequest(c.env) });
   })
   .post("/auth/session/verify", async (c) => {
-    const body = await c.req.json().catch(() => null);
+    const body = await readJsonBody<{ idkitResponse?: unknown }>(c);
     if (!body || typeof body !== "object" || !("idkitResponse" in body)) {
       return c.json({ error: "missing idkitResponse" }, 400);
     }
 
     let identity;
     try {
-      identity = await verifySessionProof(c.env, (body as { idkitResponse: unknown }).idkitResponse);
+      identity = await verifySessionProof(c.env, body.idkitResponse);
     } catch (err) {
       console.log(JSON.stringify({ event: "worldid_verify_failed", error: String(err) }));
       return c.json({ error: "World ID verification failed. Please try again." }, 502);

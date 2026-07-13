@@ -23,6 +23,7 @@ import { type WranglerOauth, WranglerOauthSchema } from "@codestation/contract";
 import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
+import { readJsonBody } from "./http.js";
 import { checkOauthState, deleteOauthState, putOauthState } from "./oauthstate.js";
 import type { AppContext } from "./types.js";
 
@@ -97,11 +98,6 @@ async function s256Challenge(verifier: string): Promise<string> {
   return base64url(new Uint8Array(digest));
 }
 
-/** Parse a JSON request body; null (never a throw) on malformed input. */
-async function readJson<T>(c: { req: { json(): Promise<unknown> } }): Promise<T | null> {
-  return (await c.req.json().catch(() => null)) as T | null;
-}
-
 function logFailure(event: string, err: unknown): void {
   // Log the failure kind only, never token material (§10).
   console.log(JSON.stringify({ event, error: String(err) }));
@@ -130,7 +126,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   .post("/api/claude/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJson<{ code?: string }>(c);
+    const body = await readJsonBody<{ code?: string }>(c);
     const pasted = typeof body?.code === "string" ? body.code.trim() : "";
     const [code, state] = pasted.split("#");
     if (!code || !state || pasted.length > 2048) {
@@ -209,7 +205,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   .post("/api/copilot/device/poll", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJson<{ deviceCode?: string }>(c);
+    const body = await readJsonBody<{ deviceCode?: string }>(c);
     if (typeof body?.deviceCode !== "string" || !body.deviceCode || body.deviceCode.length > 256) {
       return c.json({ error: "bad request" }, 400);
     }
@@ -273,7 +269,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   .post("/api/wrangler/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJson<{ callbackUrl?: string }>(c);
+    const body = await readJsonBody<{ callbackUrl?: string }>(c);
     const raw = typeof body?.callbackUrl === "string" ? body.callbackUrl.trim() : "";
     let code = "";
     let state = "";

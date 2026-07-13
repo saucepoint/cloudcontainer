@@ -39,6 +39,7 @@ import {
   refreshJob,
   startProvision,
 } from "./jobs.js";
+import { readJsonBody } from "./http.js";
 import { allowedUserOps } from "./state.js";
 import type { AppContext, Bindings, ContainerRow, JobRow } from "./types.js";
 
@@ -46,6 +47,11 @@ const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
   "Wait for your server to finish building before changing SSH keys or creating an SSH setup prompt.";
+const OAUTH_ONLY_PROVIDER_SET: ReadonlySet<LlmProvider> = new Set(OAUTH_ONLY_LLM_PROVIDERS);
+
+function isLlmProvider(value: string): value is LlmProvider {
+  return (LLM_PROVIDERS as readonly string[]).includes(value);
+}
 
 export function validPubkey(key: string): boolean {
   return SSH_KEY_RE.test(key.trim()) && key.trim().length < INPUT_LIMITS.sshKeyBytes;
@@ -54,11 +60,6 @@ export function validPubkey(key: string): boolean {
 /** SSH key changes need a ready container so they can be applied immediately. */
 async function sshSetupReady(env: Bindings, userId: string): Promise<boolean> {
   return (await getContainerForUser(env, userId))?.status === "running";
-}
-
-/** Parse a JSON request body; null (never a throw) on malformed input. */
-async function readJson<T>(c: { req: { json(): Promise<unknown> } }): Promise<T | null> {
-  return (await c.req.json().catch(() => null)) as T | null;
 }
 
 async function insertSshKey(
@@ -113,16 +114,16 @@ function normalizeCredentialInput(
 
   const llmKeys: Record<string, string> = {};
   for (const [provider, raw] of Object.entries(input.llmKeys ?? {})) {
-    if (!LLM_PROVIDERS.includes(provider as LlmProvider)) {
+    if (!isLlmProvider(provider)) {
       return { error: `unknown model provider: ${provider || "(empty)"}` };
     }
     if (typeof raw !== "string") return { error: `credential for ${provider} must be text` };
     const value = raw.trim();
     // OAuth-only credentials enter through their sign-in flows; only the
     // empty string (disconnect) is accepted here.
-    if (value && OAUTH_ONLY_LLM_PROVIDERS.includes(provider as never)) {
+    if (value && OAUTH_ONLY_PROVIDER_SET.has(provider)) {
       return {
-        error: `${LLM_PROVIDER_LABELS[provider as LlmProvider]} connects via its sign-in button, not a pasted value`,
+        error: `${LLM_PROVIDER_LABELS[provider]} connects via its sign-in button, not a pasted value`,
       };
     }
     if (value.length > INPUT_LIMITS.tokenBytes) {
@@ -178,7 +179,6 @@ interface ContainerView {
   cpu: number;
   ramMb: number;
   diskGb: number;
-  rootDiskGb: number;
   sshCommand: string | null;
   hostKeyFingerprints: string[];
   createdAt: number;
@@ -204,7 +204,6 @@ async function containerView(
     cpu: container.cpu,
     ramMb: container.ram_mb,
     diskGb: container.disk_gb,
-    rootDiskGb: container.disk_gb,
     sshCommand,
     hostKeyFingerprints: container.host_key_fingerprints
       ? (JSON.parse(container.host_key_fingerprints) as string[])
@@ -254,7 +253,7 @@ export const apiRoutes = new Hono<AppContext>()
   // ------------------------------------------------------------------ provision
   .post("/api/provision", requireUser, async (c) => {
     const user = c.get("user");
-    const body = await readJson<{
+    const body = await readJsonBody<{
       agents?: string[];
       sshPubkey?: string;
       llmKeys?: Record<string, unknown>;
@@ -396,7 +395,7 @@ export const apiRoutes = new Hono<AppContext>()
     if (!(await sshSetupReady(c.env, c.get("user").id))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
     }
-    const body = await readJson<{ pubkey?: string; label?: string }>(c);
+    const body = await readJsonBody<{ pubkey?: string; label?: string }>(c);
     if (body?.label !== undefined && typeof body.label !== "string") {
       return c.json({ error: "key label must be text" }, 400);
     }
@@ -425,7 +424,7 @@ export const apiRoutes = new Hono<AppContext>()
     return c.json(await credentialsView(c.env, c.get("user").id));
   })
   .post("/api/credentials", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJson<CredentialInput>(c);
+    const body = await readJsonBody<CredentialInput>(c);
     if (!body) return c.json({ error: "bad request" }, 400);
     const normalized = normalizeCredentialInput(body);
     if ("error" in normalized) return c.json({ error: normalized.error }, 400);
@@ -475,7 +474,7 @@ export const apiRoutes = new Hono<AppContext>()
   })
   // Public: a local agent redeems the one-time token to register a pubkey.
   .post("/api/enroll", async (c) => {
-    const body = await readJson<{ token?: string; pubkey?: string }>(c);
+    const body = await readJsonBody<{ token?: string; pubkey?: string }>(c);
     if (
       typeof body?.token !== "string" ||
       !body.token ||

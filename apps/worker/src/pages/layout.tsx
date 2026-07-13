@@ -82,13 +82,13 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent-choice:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 .agent-checkbox { display: inline-flex; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; align-items: center; justify-content: center;
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
-.agent input:checked + .agent-checkbox, .agent-checkbox[data-checked] { border-color: var(--accent); background: var(--accent); color: #fff; }
+.agent input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
 .agent-copy { min-width: 0; flex: 1; }
 .agent-title { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; }
 .recommend { color: var(--accent); background: transparent; padding: 0; font-family: var(--mono);
   font-size: 0.68rem; font-weight: 400; white-space: nowrap; }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
-.agent:has(input:checked) .agent-choice, .agent:has(.agent-checkbox[data-checked]) .agent-choice { color: var(--accent); background: var(--accent-soft); }
+.agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
 .agent-signin { display: flex; gap: 0.6rem; align-items: center; padding: 0 1rem 0.8rem; }
 .agent-signin .btn { font-size: 0.8rem; }
 .agent-signin .ok { font-size: 0.78rem; }

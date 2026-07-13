@@ -15,6 +15,7 @@ import { Hono } from "hono";
 import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
+import { readJsonBody } from "./http.js";
 import { checkOauthState, deleteOauthState, putOauthState } from "./oauthstate.js";
 import type { AppContext } from "./types.js";
 
@@ -152,11 +153,6 @@ export function buildCodexAuthJson(tokens: {
   });
 }
 
-/** Parse a JSON request body; null (never a throw) on malformed input. */
-async function readJson<T>(c: { req: { json(): Promise<unknown> } }): Promise<T | null> {
-  return (await c.req.json().catch(() => null)) as T | null;
-}
-
 const stateKey = (deviceAuthId: string) => `codex:${deviceAuthId}`;
 
 export const codexAuthRoutes = new Hono<AppContext>()
@@ -176,7 +172,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
   })
 
   .post("/api/codex/device/poll", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJson<{ deviceAuthId?: string; userCode?: string }>(c);
+    const body = await readJsonBody<{ deviceAuthId?: string; userCode?: string }>(c);
     if (!body?.deviceAuthId || !body.userCode) return c.json({ error: "bad request" }, 400);
     if (!(await checkOauthState(c.env, stateKey(body.deviceAuthId), c.get("user").id))) {
       return c.json({ error: "unknown or expired sign-in attempt — start over" }, 403);

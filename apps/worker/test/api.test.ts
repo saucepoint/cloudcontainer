@@ -334,8 +334,10 @@ describe("GET /api/dashboard", () => {
     };
     expect(body.container).toMatchObject({
       status: "running",
+      diskGb: 8,
       sshCommand: "ssh -p 30500 dev@host-1.codestation.test",
     });
+    expect(body.container).not.toHaveProperty("rootDiskGb");
     expect(body.credentials).toMatchObject({ llm: {}, cloudflare: false });
     expect(body.keys).toMatchObject([{ label: "laptop", pubkey: PUBKEY }]);
   });

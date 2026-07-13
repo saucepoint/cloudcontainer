@@ -1,26 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { allowedUserOps, canTransition, pendingStatusFor, successStatusFor } from "../src/state.js";
+import { allowedUserOps, pendingStatusFor, successStatusFor } from "../src/state.js";
 import { CONTAINER_STATUSES } from "@codestation/contract";
 
-describe("container state machine", () => {
-  it("accepts the documented happy path", () => {
-    expect(canTransition("waitlisted", "provisioning")).toBe(true);
-    expect(canTransition("provisioning", "running")).toBe(true);
-    expect(canTransition("running", "stopped")).toBe(true);
-    expect(canTransition("stopped", "running")).toBe(true);
-    expect(canTransition("running", "suspended")).toBe(true);
-    expect(canTransition("suspended", "destroying")).toBe(true);
-    expect(canTransition("provisioning", "error")).toBe(true);
-    expect(canTransition("error", "provisioning")).toBe(true);
-  });
-
-  it("rejects illegal transitions", () => {
-    expect(canTransition("waitlisted", "running")).toBe(false);
-    expect(canTransition("destroying", "running")).toBe(false);
-    expect(canTransition("stopped", "waitlisted")).toBe(false);
-    expect(canTransition("suspended", "stopped")).toBe(false);
-  });
-
+describe("container lifecycle policy", () => {
   it("keeps suspended and user-stopped distinguishable", () => {
     expect(CONTAINER_STATUSES).toContain("suspended");
     expect(CONTAINER_STATUSES).toContain("stopped");

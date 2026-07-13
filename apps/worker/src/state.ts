@@ -1,25 +1,6 @@
 import type { ContainerStatus, JobOp } from "@codestation/contract";
 
 /**
- * Container state machine (§5/§18-L1). `suspended` (operator/billing) and
- * `stopped` (user-initiated) are deliberately distinct states.
- */
-const TRANSITIONS: Record<ContainerStatus, ContainerStatus[]> = {
-  waitlisted: ["provisioning", "destroying"],
-  provisioning: ["running", "error", "destroying"],
-  running: ["stopped", "suspended", "provisioning", "upgrade_pending", "error", "destroying"],
-  stopped: ["running", "provisioning", "suspended", "error", "destroying"],
-  suspended: ["running", "destroying", "error"],
-  upgrade_pending: ["running", "error", "destroying"],
-  error: ["provisioning", "running", "stopped", "destroying"],
-  destroying: ["error"],
-};
-
-export function canTransition(from: ContainerStatus, to: ContainerStatus): boolean {
-  return TRANSITIONS[from]?.includes(to) ?? false;
-}
-
-/**
  * Ops whose failure drops the container into `error` (the container's fate is
  * tied to the job). Background ops (sync-keys, refresh-credentials,
  * export-window) fail without disturbing container state.
