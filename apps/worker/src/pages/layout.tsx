@@ -114,21 +114,25 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .command-row pre { margin: 0; }
 .muted { color: var(--muted); font-size: 0.86rem; }
 .check { list-style: none; padding: 0; margin: 0.25rem 0 0; }
-.check li { min-height: 2.2rem; padding: 0.38rem 0; display: flex; gap: 0.75rem;
-  justify-content: space-between; align-items: center; font-size: 0.9rem; }
-.check li::before { content: ""; flex: 0 0 auto; width: 0.34rem; height: 0.34rem;
-  margin-right: 0.1rem; border-radius: 50%; background: var(--line-strong); }
+.check li { min-height: 2.2rem; padding: 0.38rem 0; display: grid;
+  grid-template-columns: 0.34rem minmax(0, 1fr) auto; column-gap: 0.75rem;
+  align-items: start; font-size: 0.9rem; }
+.check li::before { content: ""; width: 0.34rem; height: 0.34rem; margin-top: 0.5rem;
+  border-radius: 50%; background: var(--line-strong); }
 .ok { color: #28643b; } .missing { color: var(--muted); }
 .group-label { margin: 1.5rem 0 0.2rem; color: var(--muted); font-family: var(--mono);
   font-size: 0.7rem; font-weight: 400; text-transform: uppercase; letter-spacing: 0.07em; }
-.provider { position: relative; padding: 0.75rem 0 0.75rem 1.15rem; }
-.provider::before { content: ""; position: absolute; left: 0.1rem; top: 1.3rem;
-  width: 0.36rem; height: 0.36rem; border-radius: 50%; background: var(--line-strong); }
+.provider { display: grid; grid-template-columns: 0.36rem minmax(0, 1fr); column-gap: 0.75rem;
+  padding: 0.75rem 0; }
+.provider::before { content: ""; grid-column: 1; grid-row: 1; width: 0.36rem; height: 0.36rem;
+  margin-top: 0.5rem; border-radius: 50%; background: var(--line-strong); }
+.provider > * { grid-column: 2; }
 .provider-head { display: flex; gap: 1rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .provider small { display: block; color: var(--muted); margin-top: 0.12rem; }
 .repo-list { display: grid; gap: 0.3rem; margin-top: 0.8rem; max-height: 22rem; overflow-y: auto; }
 .repo-choice { display: flex; gap: 0.7rem; align-items: flex-start; margin: 0; padding: 0.65rem 0.75rem;
   color: var(--ink); background: var(--surface); border: 0; border-radius: 4px; cursor: pointer; }
+.repo-choice input { flex: 0 0 auto; margin: 0.2rem 0 0; accent-color: var(--accent); }
 .repo-choice:has(input:checked) { color: var(--accent); background: var(--accent-soft); }
 .repo-choice:has(input:disabled) { opacity: 0.55; cursor: default; }
 .repo-choice small { display: block; color: var(--muted); font-weight: 400; }
@@ -173,7 +177,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .card { padding: 1rem 0 1.8rem; }
   .agents { grid-template-columns: 1fr; }
   .agent label { min-height: auto; }
-  .card-head, .check li { align-items: flex-start; flex-wrap: wrap; }
+  .card-head { align-items: flex-start; flex-wrap: wrap; }
   .command-row { grid-template-columns: 1fr; }
   .command-row .btn { justify-self: start; }
 }

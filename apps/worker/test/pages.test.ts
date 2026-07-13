@@ -274,6 +274,9 @@ describe("interface foundation", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
     expect(html).toContain('.check li::before { content: "";');
     expect(html).toContain('.provider::before { content: "";');
+    expect(html).toContain("grid-template-columns: 0.34rem minmax(0, 1fr) auto;");
+    expect(html).toContain(".provider > * { grid-column: 2; }");
+    expect(html).toContain(".repo-choice input { flex: 0 0 auto; margin: 0.2rem 0 0;");
     expect(html).toContain(".repo-list { display: grid; gap: 0.3rem;");
     expect(html).toContain("background: var(--surface); border: 0; border-radius: 4px;");
     expect(html).not.toContain(".check li:last-child { border-bottom: 0; }");
