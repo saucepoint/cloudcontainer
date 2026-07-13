@@ -40,6 +40,13 @@ describe("World ID environment wiring", () => {
   });
 });
 
+describe("landing page call to action", () => {
+  it("shows server information before the World ID sign-in", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html.indexOf("free tier")).toBeLessThan(html.indexOf("Continue with World ID"));
+  });
+});
+
 describe("subscription sign-in wiring", () => {
   it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
     const html = String(OnboardingPage({}));
@@ -56,12 +63,17 @@ describe("subscription sign-in wiring", () => {
     expect(html).not.toContain("auth.json");
   });
 
-  it("keeps API keys inside the model card", () => {
+  it("keeps provider sign-ins and API keys inside one collapsed section", () => {
     const html = String(OnboardingPage({}));
-    const apiKeys = html.indexOf("Or paste an API key");
-    expect(html).not.toContain("Use a subscription you already pay for");
+    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
+    expect(html).not.toContain("Model access");
     expect(apiKeys).toBeGreaterThan(-1);
-    expect(html.slice(apiKeys)).toContain('name="llm_anthropic"');
+    const section = html.slice(apiKeys, html.indexOf("</details>", apiKeys));
+    expect(section).toContain("Sign in with GitHub");
+    expect(section).toContain('name="llm_opencode_go"');
+    expect(section).toContain('name="llm_anthropic"');
+    expect(section).toContain('href="https://console.anthropic.com/settings/keys"');
+    expect(section).toContain('href="https://platform.openai.com/api-keys"');
   });
 
   it("dashboard keeps credentials read-only after server creation", () => {
@@ -77,14 +89,14 @@ describe("subscription sign-in wiring", () => {
 });
 
 describe("onboarding wizard order", () => {
-  it("goes agents → model access → advanced config, with SSH keys inside Advanced", () => {
+  it("goes agents → collapsed provider access → advanced config, with SSH keys inside Advanced", () => {
     const html = String(OnboardingPage({}));
     const agents = html.indexOf("1. Coding agents");
-    const model = html.indexOf("2. Model access");
-    const advanced = html.indexOf("3. Advanced");
+    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
+    const advanced = html.indexOf("2. Advanced");
     expect(agents).toBeGreaterThan(-1);
-    expect(model).toBeGreaterThan(agents);
-    expect(advanced).toBeGreaterThan(model);
+    expect(apiKeys).toBeGreaterThan(agents);
+    expect(advanced).toBeGreaterThan(apiKeys);
     // The SSH key field stays behind the Advanced section.
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key myself");
@@ -175,6 +187,10 @@ describe("beginner-friendly provisioning UI", () => {
     const html = String(OnboardingPage({}));
     expect(html).toContain("common choice");
     expect(html).toContain("1. Coding agents");
+    expect(html).toContain("Sign in with Claude");
+    expect(html).toContain("Sign in with ChatGPT");
+    expect(html.indexOf("Sign in with Claude")).toBeGreaterThan(html.indexOf("Claude Code"));
+    expect(html.indexOf("Sign in with ChatGPT")).toBeGreaterThan(html.indexOf("Codex"));
     expect(html).toContain("required");
   });
 });
@@ -189,7 +205,8 @@ describe("page accessibility and recovery affordances", () => {
   it("groups onboarding choices, associates the SSH field, and announces errors", () => {
     const html = String(OnboardingPage({}));
     expect(html).toContain("<fieldset");
-    expect(html).toContain("<legend>1. Coding agents");
+    expect(html).toContain('<legend id="agents-legend">1. Coding agents');
+    expect(html).toContain('id="agent-selector"');
     expect(html).toContain('for="ssh-pubkey"');
     expect(html).toContain('id="err" class="err" role="alert" aria-live="assertive"');
   });

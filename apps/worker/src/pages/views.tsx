@@ -105,6 +105,22 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
   <Layout>
     <h1 class="landing-title">A cloud machine for coding.</h1>
     <p class="lead">Linux, your coding agents, and SSH. Free for one verified person.</p>
+    <div class="card">
+      <ul class="check spec-list">
+        <li>
+          Debian 13 · 1 vCPU · 2 GB RAM · 8 GB persistent disk
+          <span class="ok">free tier</span>
+        </li>
+        <li>
+          Pi, Claude Code, Codex, and/or OpenCode
+          <span class="ok">included</span>
+        </li>
+        <li>
+          SSH, tmux, git, Node, Python, and more
+          <span class="ok">included</span>
+        </li>
+      </ul>
+    </div>
     <div class="card landing-signin">
       <button id="worldid-btn" class="btn" type="button">
         Continue with World ID →
@@ -122,23 +138,6 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
       <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
       <script src={IDKIT_SRC}></script>
       <script type="module" dangerouslySetInnerHTML={{ __html: worldIdJs(worldIdEnvironment) }} />
-    </div>
-    <div class="card">
-      <h2>Included</h2>
-      <ul class="check spec-list">
-        <li>
-          Debian 13 · 1 vCPU · 2 GB RAM · 8 GB persistent disk
-          <span class="ok">free</span>
-        </li>
-        <li>
-          Pi, Claude Code, Codex, and/or OpenCode
-          <span class="ok">included</span>
-        </li>
-        <li>
-          SSH, git, gh, Node, Python, tmux, ripgrep
-          <span class="ok">included</span>
-        </li>
-      </ul>
     </div>
   </Layout>
 );
@@ -200,21 +199,26 @@ function wireSignin(id, flowFn) {
     });
   });
 }
-wireSignin('claude', window.claudeOauthFlow);
-wireSignin('codex', window.codexDeviceFlow);
-wireSignin('copilot', window.copilotDeviceFlow);
-wireSignin('wrangler', window.wranglerOauthFlow);
+function wireSubscriptionSignins() {
+  wireSignin('claude', window.claudeOauthFlow);
+  wireSignin('codex', window.codexDeviceFlow);
+  wireSignin('copilot', window.copilotDeviceFlow);
+  wireSignin('wrangler', window.wranglerOauthFlow);
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireSubscriptionSignins);
+} else {
+  wireSubscriptionSignins();
+}
 
 const githubConnect = document.getElementById('github-connect');
 const githubReauthorize = document.getElementById('github-reauthorize');
 if (githubConnect || githubReauthorize) {
-  let savedAgents = [];
-  try { savedAgents = JSON.parse(sessionStorage.getItem('codestation-github-agents') || '[]'); }
-  catch (_) { savedAgents = []; }
-  sessionStorage.removeItem('codestation-github-agents');
-  for (const agent of savedAgents) {
-    const input = form.querySelector('input[name="agent"][value="' + CSS.escape(agent) + '"]');
-    if (input) input.checked = true;
+  const clearSavedAgents = () => sessionStorage.removeItem('codestation-github-agents');
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', clearSavedAgents);
+  } else {
+    clearSavedAgents();
   }
   const saveGithubAgents = () => {
     sessionStorage.setItem('codestation-github-agents', JSON.stringify(
@@ -336,6 +340,24 @@ const SigninProvider: FC<{
   </div>
 );
 
+const AgentSignin: FC<{
+  id: "claude" | "codex";
+  button: string;
+  connected: string;
+}> = ({ id, button, connected }) => (
+  <>
+    <div class="agent-signin">
+      <button type="button" id={`${id}-signin`} class="btn secondary">
+        {button}
+      </button>
+      <span id={`${id}-connected`} class="ok" style="display:none" role="status" aria-live="polite">
+        ✓ {connected}
+      </span>
+    </div>
+    <div id={`${id}-flow`} role="status" aria-live="polite"></div>
+  </>
+);
+
 export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvailable = false }) => (
   <Layout title="Set up" loggedIn>
     <h1>Set up a server.</h1>
@@ -345,17 +367,35 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
     <form id="wizard">
       <div class="card">
         <fieldset>
-          <legend>1. Coding agents <span class="muted">required</span></legend>
-          <div class="agents">
+          <legend id="agents-legend">1. Coding agents <span class="muted">required</span></legend>
+          <div id="agent-selector" class="agents">
             {AGENTS.map((a) => (
               <div class="agent">
-                <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
-                <label for={`agent-${a}`}>
-                  <span class="agent-title">
-                    {AGENT_LABELS[a]}
-                    {a === "codex" ? <span class="recommend">common choice</span> : null}
+                <label class="agent-choice" for={`agent-${a}`}>
+                  <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
+                  <span class="agent-checkbox" aria-hidden="true">✓</span>
+                  <span class="agent-copy">
+                    <span class="agent-title">
+                      {AGENT_LABELS[a]}
+                      {a === "codex" ? <span class="recommend">common choice</span> : null}
+                    </span>
+                    <small>
+                      {a === "pi"
+                        ? "A lightweight coding agent."
+                        : a === "claude"
+                          ? "Anthropic's coding agent."
+                          : a === "codex"
+                            ? "OpenAI's coding agent."
+                            : "An open model-agnostic agent."}
+                    </small>
                   </span>
                 </label>
+                {a === "claude" ? (
+                  <AgentSignin id="claude" button="Sign in with Claude" connected="Claude connected" />
+                ) : null}
+                {a === "codex" ? (
+                  <AgentSignin id="codex" button="Sign in with ChatGPT" connected="ChatGPT connected" />
+                ) : null}
               </div>
             ))}
           </div>
@@ -389,23 +429,8 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
       ) : null}
 
       <div class="card">
-        <h2>{githubAvailable ? "3" : "2"}. Model access <span class="muted">optional</span></h2>
-        <p class="muted">Authenticate your model provider. (Credentials encrypted!)</p>
-
-        <SigninProvider
-          id="claude"
-          title="Claude"
-          hint="Claude Pro or Max."
-          button="Sign in with Claude"
-          connected="Claude connected"
-        />
-        <SigninProvider
-          id="codex"
-          title="ChatGPT"
-          hint="For Codex."
-          button="Sign in with ChatGPT"
-          connected="ChatGPT connected"
-        />
+        <details>
+          <summary>Add API keys or sign in to a provider</summary>
         <SigninProvider
           id="copilot"
           title="GitHub Copilot"
@@ -432,46 +457,51 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
           />
         </div>
 
-        <h3 class="group-label">Or paste an API key</h3>
-        <details>
-          <summary>Add API keys (Anthropic, OpenAI, Gemini, OpenRouter)</summary>
-          <label for="llm-anthropic">
-            Anthropic API key (
-            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
-              get key
+        <div class="provider">
+          <div class="provider-head">
+            <strong>Anthropic API key</strong>
+            <a class="btn secondary" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
+              Get key
             </a>
-            )
-          </label>
-          <input id="llm-anthropic" type="password" name="llm_anthropic" autocomplete="off" />
-          <label for="llm-openai">
-            OpenAI API key (
-            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
-              get key
+          </div>
+          <label for="llm-anthropic" class="sr-only">Anthropic API key</label>
+          <input id="llm-anthropic" type="password" name="llm_anthropic" autocomplete="off" placeholder="Anthropic API key" />
+        </div>
+        <div class="provider">
+          <div class="provider-head">
+            <strong>OpenAI API key</strong>
+            <a class="btn secondary" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
+              Get key
             </a>
-            )
-          </label>
-          <input id="llm-openai" type="password" name="llm_openai" autocomplete="off" />
-          <label for="llm-gemini">
-            Google (Gemini) API key (
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-              get key
+          </div>
+          <label for="llm-openai" class="sr-only">OpenAI API key</label>
+          <input id="llm-openai" type="password" name="llm_openai" autocomplete="off" placeholder="OpenAI API key" />
+        </div>
+        <div class="provider">
+          <div class="provider-head">
+            <strong>Google (Gemini) API key</strong>
+            <a class="btn secondary" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              Get key
             </a>
-            )
-          </label>
-          <input id="llm-gemini" type="password" name="llm_gemini" autocomplete="off" />
-          <label for="llm-openrouter">
-            OpenRouter API key (
-            <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">
-              get key
+          </div>
+          <label for="llm-gemini" class="sr-only">Google (Gemini) API key</label>
+          <input id="llm-gemini" type="password" name="llm_gemini" autocomplete="off" placeholder="Google (Gemini) API key" />
+        </div>
+        <div class="provider">
+          <div class="provider-head">
+            <strong>OpenRouter API key</strong>
+            <a class="btn secondary" href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">
+              Get key
             </a>
-            )
-          </label>
-          <input id="llm-openrouter" type="password" name="llm_openrouter" autocomplete="off" />
+          </div>
+          <label for="llm-openrouter" class="sr-only">OpenRouter API key</label>
+          <input id="llm-openrouter" type="password" name="llm_openrouter" autocomplete="off" placeholder="OpenRouter API key" />
+        </div>
         </details>
       </div>
 
       <div class="card">
-        <h2>{githubAvailable ? "4" : "3"}. Advanced <span class="muted">optional</span></h2>
+        <h2>{githubAvailable ? "3" : "2"}. Advanced <span class="muted">optional</span></h2>
         <details>
           <summary>Add an SSH public key myself</summary>
           <label for="ssh-pubkey">Public key</label>
@@ -516,7 +546,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
             <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">
               create one
             </a>
-            {" — Workers Scripts:Edit + DNS:Edit is a good template)"}
+)
           </label>
           <input id="cloudflare-token" type="password" name="cloudflareToken" autocomplete="off" />
         </details>
