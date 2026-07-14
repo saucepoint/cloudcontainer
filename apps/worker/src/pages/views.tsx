@@ -407,10 +407,7 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
                   <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
                   <span class="agent-checkbox" aria-hidden="true">✓</span>
                   <span class="agent-copy">
-                    <span class="agent-title">
-                      {AGENT_LABELS[a]}
-                      {a === "codex" ? <span class="recommend">common choice</span> : null}
-                    </span>
+                    <span class="agent-title">{AGENT_LABELS[a]}</span>
                     <small>{AGENT_DESCRIPTIONS[a]}</small>
                   </span>
                 </label>

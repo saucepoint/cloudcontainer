@@ -86,13 +86,11 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
 .agent input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
 .agent-copy { min-width: 0; flex: 1; }
-.agent-title { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; }
-.recommend { color: var(--accent); background: transparent; padding: 0; font-family: var(--mono);
-  font-size: 0.68rem; font-weight: 400; white-space: nowrap; }
+.agent-title { display: block; }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
 .agent:has(input:checked) { background: var(--accent-soft); }
 .agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
-.agent-signin { display: flex; gap: 0.6rem; align-items: center; padding: 0 1rem 0.8rem; }
+.agent-signin { display: flex; gap: 0.6rem; align-items: center; justify-content: flex-end; padding: 0 1rem 0.8rem; }
 .agent-signin .btn { font-size: 0.8rem; }
 .agent-signin .ok { font-size: 0.78rem; }
 .agent > [id$="-flow"] { padding: 0 1rem 0.8rem; }
@@ -122,9 +120,9 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .ok { color: #28643b; } .missing { color: var(--muted); }
 .group-label { margin: 1.5rem 0 0.2rem; color: var(--muted); font-family: var(--mono);
   font-size: 0.7rem; font-weight: 400; text-transform: uppercase; letter-spacing: 0.07em; }
-.provider { display: grid; grid-template-columns: 0.36rem minmax(0, 1fr); column-gap: 0.75rem;
+.provider { display: grid; grid-template-columns: 0.34rem minmax(0, 1fr); column-gap: 0.75rem;
   padding: 0.75rem 0; }
-.provider::before { content: ""; grid-column: 1; grid-row: 1; width: 0.36rem; height: 0.36rem;
+.provider::before { content: ""; grid-column: 1; grid-row: 1; align-self: start; width: 0.34rem; height: 0.34rem;
   margin-top: 0.5rem; border-radius: 50%; background: var(--line-strong); }
 .provider > * { grid-column: 2; }
 .provider-head { display: flex; gap: 1rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }

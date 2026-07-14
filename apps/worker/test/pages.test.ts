@@ -201,9 +201,9 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("refreshKeysAndConnection");
   });
 
-  it("explains agent choices and gives beginners a recommendation", () => {
+  it("explains agent choices without recommending one", () => {
     const html = String(OnboardingPage({}));
-    expect(html).toContain("common choice");
+    expect(html).not.toContain("common choice");
     expect(html).toContain("1. Coding agents");
     expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
