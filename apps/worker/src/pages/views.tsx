@@ -482,13 +482,14 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
             </button>
           </div>
           <p class="muted">
-            Private repositories appear when this app has access to them.
+            Private repositories appear after the app is installed for their owner and granted
+            access to them. Existing installations must approve permission changes in GitHub.
           </p>
           <p id="github-status" class="muted" role="status" aria-live="polite">
-            Search for a repository by owner or name.
+            Search by repository name, or enter an exact owner/repository.
           </p>
           <label for="github-repo-search">Search repositories</label>
-          <input id="github-repo-search" type="search" placeholder="owner or repository name" autocomplete="off" />
+          <input id="github-repo-search" type="search" placeholder="repository name or owner/repository" maxLength={256} autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
         </div>
       ) : null}

@@ -24,10 +24,10 @@ import {
   validateCloudflareToken,
 } from "./credentials.js";
 import {
-  fetchGithubRepositories,
   githubAccessToken,
   githubConfigured,
   pushCredentialsToContainer,
+  verifyGithubRepositories,
 } from "./github.js";
 import {
   containerAgents,
@@ -305,9 +305,7 @@ export const apiRoutes = new Hono<AppContext>()
       try {
         const token = await githubAccessToken(c.env, user.id);
         if (!token) return c.json({ error: "connect GitHub before selecting repositories" }, 409);
-        const accessible = new Set(
-          (await fetchGithubRepositories(token)).map((repo) => repo.fullName),
-        );
+        const accessible = await verifyGithubRepositories(token, githubRepos as string[]);
         const unavailable = githubRepos.find((repo) => !accessible.has(repo as string));
         if (unavailable) {
           return c.json({ error: `GitHub repository is no longer available: ${unavailable}` }, 400);

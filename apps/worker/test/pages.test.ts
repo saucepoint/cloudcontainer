@@ -207,6 +207,8 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("1. Coding agents");
     expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
+    expect(html).toContain(".agent-signin { grid-column: 1; grid-row: 1;");
+    expect(html).toContain("align-self: start; justify-self: end;");
     expect(html.indexOf("Sign in with Claude")).toBeGreaterThan(html.indexOf("Claude Code"));
     expect(html.indexOf("Sign in with ChatGPT")).toBeGreaterThan(html.indexOf("Codex"));
     expect(html).toContain("required");

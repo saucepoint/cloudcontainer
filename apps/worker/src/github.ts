@@ -5,7 +5,7 @@
  * receive the short-lived token via `refresh-credentials` jobs.
  */
 import { Hono } from "hono";
-import { encryptJsonAtRest, toHex } from "@codestation/contract";
+import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@codestation/contract";
 import {
   CREDENTIALS_LOCKED_ERROR,
   credentialsCanBeChanged,
@@ -28,6 +28,13 @@ export interface GithubRepository {
   private: boolean;
   archived: boolean;
   description: string | null;
+}
+
+interface GithubRepositoryResponse {
+  full_name?: string;
+  private?: boolean;
+  archived?: boolean;
+  description?: string | null;
 }
 
 export function githubConfigured(env: Bindings): boolean {
@@ -93,54 +100,70 @@ export async function githubAccessToken(env: Bindings, userId: string): Promise<
   return refreshed.access_token;
 }
 
-/** Repositories visible to the GitHub App user token, newest activity first. */
-export async function fetchGithubRepositories(token: string): Promise<GithubRepository[]> {
-  const repos = new Map<string, GithubRepository>();
-  for (let page = 1; page <= 5; page++) {
-    const url = new URL("https://api.github.com/user/repos");
-    url.searchParams.set("affiliation", "owner,collaborator,organization_member");
-    url.searchParams.set("sort", "updated");
-    url.searchParams.set("per_page", "100");
-    url.searchParams.set("page", String(page));
-    const res = await fetch(url, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        "user-agent": "codestation",
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) throw new Error(`github repositories endpoint ${res.status}`);
-    const rows = (await res.json()) as Array<{
-      full_name?: string;
-      private?: boolean;
-      archived?: boolean;
-      description?: string | null;
-    }>;
-    for (const row of rows) {
-      if (!row.full_name) continue;
-      repos.set(row.full_name, {
-        fullName: row.full_name,
-        private: Boolean(row.private),
-        archived: Boolean(row.archived),
-        description: row.description ?? null,
-      });
-    }
-    if (rows.length < 100) break;
-  }
-  return [...repos.values()];
+function githubApiHeaders(token: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+    "user-agent": "codestation",
+    accept: "application/vnd.github+json",
+    "x-github-api-version": "2022-11-28",
+  };
 }
 
-/** Search repositories visible to the authenticated GitHub App user token. */
+function githubRepository(row: GithubRepositoryResponse): GithubRepository | null {
+  if (!row.full_name) return null;
+  return {
+    fullName: row.full_name,
+    private: Boolean(row.private),
+    archived: Boolean(row.archived),
+    description: row.description ?? null,
+  };
+}
+
+/** Fetch one repository when the user token and App installation can access it. */
+export async function fetchGithubRepository(
+  token: string,
+  fullName: string,
+): Promise<GithubRepository | null> {
+  const [owner, name] = fullName.split("/");
+  if (!owner || !name) return null;
+  const url = new URL(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+  );
+  const res = await fetch(url, {
+    headers: githubApiHeaders(token),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`github repository endpoint ${res.status}`);
+  return githubRepository((await res.json()) as GithubRepositoryResponse);
+}
+
+/** Search every repository visible to the authenticated GitHub App user token. */
 export async function searchGithubRepositories(
   token: string,
   query: string,
 ): Promise<GithubRepository[]> {
-  const repositories = await fetchGithubRepositories(token);
-  const needle = query.trim().toLocaleLowerCase();
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  if (GithubRepoNameSchema.safeParse(trimmed).success) {
+    const exact = await fetchGithubRepository(token, trimmed);
+    return exact ? [exact] : [];
+  }
+
+  const url = new URL("https://api.github.com/search/repositories");
+  url.searchParams.set("q", `${trimmed} in:name`);
+  url.searchParams.set("per_page", "20");
+  const res = await fetch(url, {
+    headers: githubApiHeaders(token),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`github repository search endpoint ${res.status}`);
+  const body = (await res.json()) as { items?: GithubRepositoryResponse[] };
+  const repositories = (body.items ?? [])
+    .map(githubRepository)
+    .filter((repository): repository is GithubRepository => repository !== null);
+  const needle = trimmed.toLocaleLowerCase();
   return repositories
-    .filter((repository) => repository.fullName.toLocaleLowerCase().includes(needle))
     .sort((left, right) => {
       const leftName = left.fullName.split("/").at(-1)?.toLocaleLowerCase() ?? "";
       const rightName = right.fullName.split("/").at(-1)?.toLocaleLowerCase() ?? "";
@@ -151,6 +174,17 @@ export async function searchGithubRepositories(
       );
     })
     .slice(0, 20);
+}
+
+/** Verify selected names directly so access checks have no repository-list cutoff. */
+export async function verifyGithubRepositories(
+  token: string,
+  fullNames: string[],
+): Promise<Set<string>> {
+  const repositories = await Promise.all(
+    fullNames.map((fullName) => fetchGithubRepository(token, fullName)),
+  );
+  return new Set(fullNames.filter((_fullName, index) => repositories[index] !== null));
 }
 
 export async function storeGithubTokens(
@@ -293,7 +327,7 @@ export const githubRoutes = new Hono<AppContext>()
     try {
       const token = await githubAccessToken(c.env, c.get("user").id);
       if (!token) return c.json({ error: "connect GitHub first" }, 409);
-      const query = (c.req.query("q") ?? "").trim().toLocaleLowerCase();
+      const query = (c.req.query("q") ?? "").trim().slice(0, 256);
       if (!query) return c.json({ repositories: [] });
       const repositories = await searchGithubRepositories(token, query);
       return c.json({ repositories });

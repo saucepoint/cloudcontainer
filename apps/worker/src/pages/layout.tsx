@@ -77,9 +77,9 @@ textarea { min-height: 6rem; resize: vertical; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
-.agent { position: relative; background: var(--surface); border-radius: 5px; overflow: hidden; }
+.agent { display: grid; grid-template-columns: minmax(0, 1fr); background: var(--surface); border-radius: 5px; overflow: hidden; }
 .agent input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.agent-choice { display: flex; min-height: 6.2rem; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.85rem 1rem;
+.agent-choice { grid-column: 1; grid-row: 1; display: flex; min-height: 6.2rem; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.85rem 9.5rem 0.85rem 1rem;
   color: var(--ink); background: transparent; border: 0; border-radius: 0; cursor: pointer; font-size: 0.94rem; }
 .agent-choice:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 .agent-checkbox { display: inline-flex; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; align-items: center; justify-content: center;
@@ -90,10 +90,11 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
 .agent:has(input:checked) { background: var(--accent-soft); }
 .agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
-.agent-signin { display: flex; gap: 0.6rem; align-items: center; justify-content: flex-end; padding: 0 1rem 0.8rem; }
+.agent-signin { grid-column: 1; grid-row: 1; display: flex; gap: 0.6rem; align-self: start; justify-self: end; align-items: center;
+  padding: 0.45rem 1rem 0; }
 .agent-signin .btn { font-size: 0.8rem; }
 .agent-signin .ok { font-size: 0.78rem; }
-.agent > [id$="-flow"] { padding: 0 1rem 0.8rem; }
+.agent > [id$="-flow"] { grid-column: 1; grid-row: 2; padding: 0 1rem 0.8rem; }
 .agent > [id$="-flow"]:empty { display: none; }
 .badge { display: inline-flex; align-items: center; gap: 0.42rem; padding: 0; font-family: var(--mono);
   font-size: 0.76rem; font-weight: 600; white-space: nowrap; }

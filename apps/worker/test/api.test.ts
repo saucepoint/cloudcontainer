@@ -141,13 +141,20 @@ describe("POST /api/provision", () => {
       .run();
     stubFetch(
       daemon.route,
-      (url) =>
-        url.hostname === "api.github.com" && url.pathname === "/user/repos"
-          ? Response.json([
-              { full_name: "octocat/hello-world", private: false, archived: false },
-              { full_name: "acme/private", private: true, archived: false },
-            ])
-          : null,
+      (url) => {
+        if (url.hostname !== "api.github.com") return null;
+        if (url.pathname === "/repos/octocat/hello-world") {
+          return Response.json({
+            full_name: "octocat/hello-world",
+            private: false,
+            archived: false,
+          });
+        }
+        if (url.pathname === "/repos/acme/private") {
+          return Response.json({ full_name: "acme/private", private: true, archived: false });
+        }
+        return null;
+      },
       (url) =>
         url.hostname === "api.cloudflare.com" ? Response.json({ success: true }) : null,
     );
@@ -192,8 +199,8 @@ describe("POST /api/provision", () => {
     stubFetch(
       daemon.route,
       (url) =>
-        url.hostname === "api.github.com" && url.pathname === "/user/repos"
-          ? Response.json([{ full_name: "octocat/allowed", private: true, archived: false }])
+        url.hostname === "api.github.com" && url.pathname === "/repos/octocat/not-allowed"
+          ? Response.json({ message: "Not Found" }, { status: 404 })
           : null,
     );
 

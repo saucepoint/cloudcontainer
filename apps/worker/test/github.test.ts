@@ -205,7 +205,7 @@ describe("GitHub OAuth", () => {
 });
 
 describe("GET /api/github/repos", () => {
-  it("searches repositories visible to the user token without requiring an app installation", async () => {
+  it("uses GitHub search instead of filtering a capped recent-repository list", async () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-id",
       GITHUB_APP_CLIENT_SECRET: "client-secret",
@@ -227,47 +227,90 @@ describe("GET /api/github/repos", () => {
     stubFetch((url, init) => {
       if (url.hostname !== "api.github.com") return null;
       expect(new Headers(init.headers).get("authorization")).toBe("Bearer CANARY-gh-access");
-      if (url.pathname === "/user/repos") {
-        expect(url.searchParams.get("per_page")).toBe("100");
-        return Response.json([
-          {
-            full_name: "octocat/hello-world",
-            private: false,
-            archived: false,
-            description: "A sample repository",
-          },
-          {
-            full_name: "octocat/private",
-            private: true,
-            archived: true,
-            description: null,
-          },
-          {
-            full_name: "acme/unrelated",
-            private: true,
-            archived: false,
-            description: "Must be filtered out",
-          },
-        ]);
+      if (url.pathname === "/search/repositories") {
+        expect(url.searchParams.get("q")).toBe("world in:name");
+        expect(url.searchParams.get("per_page")).toBe("20");
+        return Response.json({
+          items: [
+            {
+              full_name: "octocat/hello-world",
+              private: false,
+              archived: false,
+              description: "A sample repository",
+            },
+            {
+              full_name: "acme/world-private",
+              private: true,
+              archived: true,
+              description: null,
+            },
+          ],
+        });
       }
       return null;
     });
 
-    const response = await app().request("/api/github/repos?q=octocat", { headers }, env);
+    const response = await app().request("/api/github/repos?q=world", { headers }, env);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       repositories: [
+        {
+          fullName: "acme/world-private",
+          private: true,
+          archived: true,
+          description: null,
+        },
         {
           fullName: "octocat/hello-world",
           private: false,
           archived: false,
           description: "A sample repository",
         },
+      ],
+    });
+  });
+
+  it("finds an accessible private repository by exact owner/name", async () => {
+    const { env } = makeEnv({
+      GITHUB_APP_CLIENT_ID: "client-id",
+      GITHUB_APP_CLIENT_SECRET: "client-secret",
+    });
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    await env.DB.prepare(
+      `INSERT INTO credentials_encrypted
+         (user_id, github_token, github_expires_at, github_login)
+       VALUES (?, ?, ?, ?)`,
+    )
+      .bind(
+        user.id,
+        encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY),
+        Date.now() + 3_600_000,
+        "octocat",
+      )
+      .run();
+    stubFetch((url, init) => {
+      if (url.hostname !== "api.github.com" || url.pathname !== "/repos/acme/private") {
+        return null;
+      }
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer CANARY-gh-access");
+      return Response.json({
+        full_name: "acme/private",
+        private: true,
+        archived: false,
+        description: "Private and installed",
+      });
+    });
+
+    const response = await app().request("/api/github/repos?q=acme%2Fprivate", { headers }, env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      repositories: [
         {
-          fullName: "octocat/private",
+          fullName: "acme/private",
           private: true,
-          archived: true,
-          description: null,
+          archived: false,
+          description: "Private and installed",
         },
       ],
     });
