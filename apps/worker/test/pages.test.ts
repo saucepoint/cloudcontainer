@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
 import { LandingPage, OnboardingPage } from "../src/pages/views.js";
+import { createSession } from "../src/sessions.js";
+import { makeEnv, seedUser } from "./helpers/env.js";
 
 function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
@@ -131,12 +134,15 @@ describe("onboarding wizard order", () => {
 });
 
 describe("GitHub repository onboarding", () => {
-  it("offers OAuth and repository selection only when the GitHub App is configured", () => {
-    const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect GitHub");
+  it("offers App installation, separate OAuth reauthorization, and repository selection", () => {
+    const enabled = String(OnboardingPage({
+      githubAvailable: true,
+      githubInstallationAvailable: true,
+    }));
+    expect(enabled).toContain("Install or manage GitHub access");
     expect(enabled).toContain("Reauthorize GitHub");
     expect(onboardingClient).toContain("/auth/github/reauth");
-    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).toContain("/auth/github/install?return_to=/onboarding");
     expect(onboardingClient).toContain("/api/github/repos");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
@@ -145,6 +151,35 @@ describe("GitHub repository onboarding", () => {
     const disabled = String(OnboardingPage({ githubAvailable: false }));
     expect(disabled).not.toContain("Connect or reconnect GitHub");
     expect(disabled).not.toContain('id=\"github-repos\"');
+  });
+
+  it("keeps repository selection visible when only GitHub OAuth is configured", () => {
+    const enabled = String(OnboardingPage({ githubAvailable: true }));
+    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).toContain('id=\"github-repo-search\"');
+    expect(enabled).toContain('id=\"github-repos\"');
+    expect(enabled).not.toContain("/auth/github/install?return_to=/onboarding");
+  });
+
+  it("renders repository selection from the onboarding route without an App slug", async () => {
+    const { env } = makeEnv({
+      GITHUB_APP_CLIENT_ID: "client-id",
+      GITHUB_APP_CLIENT_SECRET: "client-secret",
+      GITHUB_APP_SLUG: "",
+    });
+    const user = await seedUser(env);
+    const sessionId = await createSession(env, user.id);
+    const response = await workerApp.request(
+      "/onboarding",
+      { headers: { cookie: `cs_session=${sessionId}` } },
+      env,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('id="github-repo-search"');
+    expect(html).toContain('id="github-repos"');
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {

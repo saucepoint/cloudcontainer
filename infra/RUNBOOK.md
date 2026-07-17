@@ -298,7 +298,7 @@ The result must be empty. Also inspect the host:
     ssh root@HOST '
       set -eu
       systemctl is-active codestation-daemon
-      incus list
+      incus --project codestation list
       incus storage info default
       df -h / /opt
     '
@@ -369,7 +369,7 @@ On the host:
       systemctl show codestation-daemon \
         -p MainPID -p ExecMainStartTimestamp --no-pager
       journalctl -u codestation-daemon --since "-5 minutes" --no-pager
-      incus list
+      incus --project codestation list
     '
 
 From outside the host, an unsigned health request must reach the daemon and be

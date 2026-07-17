@@ -12,6 +12,7 @@ export type Bindings = Omit<
   | "WORLD_ID_ENVIRONMENT"
   | "DEV_AUTH"
   | "GITHUB_APP_CLIENT_ID"
+  | "GITHUB_APP_SLUG"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
@@ -20,6 +21,7 @@ export type Bindings = Omit<
   WORLD_ID_ENVIRONMENT: "production" | "staging";
   DEV_AUTH: string;
   GITHUB_APP_CLIENT_ID: string;
+  GITHUB_APP_SLUG: string;
   // secrets
   RP_SIGNING_KEY: string;
   CREDENTIAL_MASTER_KEY: string;

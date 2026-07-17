@@ -70,14 +70,23 @@ Risk level: Medium. Repository setup is blocked, but no unauthorized access occu
 
 ## Acceptance Criteria
 
-- [ ] Connecting GitHub gives users an installation path that grants access to selected personal or organization repositories.
-- [ ] Authorization remains a distinct user grant and callback token handling still works.
-- [ ] A granted private repository appears in search and can be selected and revalidated.
-- [ ] An ungranted private repository does not appear and cannot be provisioned.
-- [ ] Setup documentation lists GitHub App visibility, Contents permission, installation selection, organization approval, and SAML requirements.
-- [ ] All new tests pass.
-- [ ] Existing tests still pass.
+- [x] Connecting GitHub gives users an installation path that grants access to selected personal or organization repositories.
+- [x] Authorization remains a distinct user grant and callback token handling still works.
+- [x] A granted private repository appears in search and can be selected and revalidated.
+- [x] An ungranted private repository does not appear and cannot be provisioned.
+- [x] Setup documentation lists GitHub App visibility, Contents permission, installation selection, organization approval, and SAML requirements.
+- [x] All new tests pass.
+- [x] Existing tests still pass.
 
 ## Resolution
 
-<!-- filled in by validate-fix -->
+When an App slug is configured, the primary onboarding action redirects through
+the GitHub App installation chooser with CSRF state before GitHub continues into
+the existing OAuth callback. Reauthorization remains a separate OAuth-only
+action. The App slug is an explicit, validated Worker binding; when it is absent,
+the existing OAuth connection and repository selector remain available.
+
+Granted private repositories remain searchable and are revalidated directly at
+submission; ungranted repositories return GitHub's not-found response and are
+rejected. Existing short-lived user-token delivery continues to authenticate
+`gh` and Git cloning without introducing stored installation credentials.

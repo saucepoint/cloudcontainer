@@ -80,13 +80,17 @@ describe("provision command construction", () => {
     expect(init).toContain("limits.cpu.allowance=100%");
     expect(init).toContain("limits.memory=2048MiB");
     expect(init).toContain("limits.memory.enforce=hard");
-    expect(init).toContain("limits.memory.swap=false");
+    // Restricted Incus projects classify limits.memory.swap as low-level
+    // configuration. This host policy therefore relies on swap being absent.
+    expect(init).not.toContain("limits.memory.swap");
     expect(init).toContain("limits.processes=1024");
     expect(init).toContain("boot.autostart=last-state");
     expect(init).toContain("boot.autorestart=false");
     expect(init).toContain("security.privileged=false");
     expect(init).toContain("security.idmap.isolated=true");
-    expect(init).toContain("security.idmap.size=65536");
+    // Incus defaults isolated maps to 65,536 IDs and restricted projects
+    // reject an explicit security.idmap.size as low-level configuration.
+    expect(init).not.toContain("security.idmap.size");
     expect(init).toContain("security.nesting=false");
     expect(init).toContain("user.codestation.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     expect(flat).toContain(

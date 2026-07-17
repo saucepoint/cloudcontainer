@@ -29,6 +29,10 @@ if ! [[ "$TENANT_PROCESS_LIMIT" =~ ^[0-9]+$ ]] || (( TENANT_PROCESS_LIMIT < 64 )
   echo "!! TENANT_PROCESS_LIMIT must be an integer of at least 64"
   exit 1
 fi
+if [[ $(awk 'END { print NR }' /proc/swaps) -ne 1 ]]; then
+  echo "!! host swap must be disabled because restricted projects cannot set limits.memory.swap"
+  exit 1
+fi
 
 STORAGE_DRIVER=$(incus storage show "$POOL_NAME" | awk '$1 == "driver:" { print $2; exit }')
 if [[ "$STORAGE_DRIVER" != "zfs" && "$ALLOW_DIR_STORAGE" != "1" ]]; then
@@ -38,6 +42,13 @@ fi
 if [[ "$ZFS_LOOP_GB" -gt 0 ]]; then
   echo "!! file-backed ZFS is suitable only for development and destructive multi-tenant testing"
 fi
+
+if ! modprobe br_netfilter; then
+  echo "!! br_netfilter is required for Incus bridge anti-spoofing"
+  exit 1
+fi
+install -d -m 0755 /etc/modules-load.d
+printf '%s\n' br_netfilter > /etc/modules-load.d/codestation.conf
 
 # Keep the default project usable for image builds, but tenant instances are
 # created only in the restricted project below.
@@ -67,7 +78,8 @@ if [[ -z "$PHYSICAL_CORES" || "$PHYSICAL_CORES" -lt 1 ]]; then
   PHYSICAL_CORES=$(nproc)
 fi
 VCPU_CAPACITY=$(( PHYSICAL_CORES * VCPU_OVERCOMMIT ))
-POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" | jq -er '.metadata.space.total')
+POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" | \
+  jq -er '.metadata.space.total // .space.total')
 DISK_GB=$(( POOL_TOTAL_BYTES * DISK_CAPACITY_PERCENT / 100 / 1073741824 ))
 
 # The current service tier is 1 vCPU, 2 GiB RAM, and 8 GiB each for root/home.

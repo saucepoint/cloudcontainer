@@ -1,8 +1,9 @@
 /**
- * GitHub App user authorization (§9). The user-to-server token is short-lived
- * (~8 h); the reconciler refreshes it control-plane-side before expiry using
- * the refresh token, which never leaves the control plane. Hosts only ever
- * receive the short-lived token via `refresh-credentials` jobs.
+ * GitHub App installation and user authorization (§9). Installation grants
+ * repository access; the user-to-server token is short-lived (~8 h), and the
+ * reconciler refreshes it control-plane-side before expiry. The refresh token
+ * never leaves the control plane. Hosts only receive the short-lived token via
+ * `refresh-credentials` jobs.
  */
 import { Hono } from "hono";
 import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@codestation/contract";
@@ -39,6 +40,14 @@ interface GithubRepositoryResponse {
 
 export function githubConfigured(env: Bindings): boolean {
   return Boolean(env.GITHUB_APP_CLIENT_ID && env.GITHUB_APP_CLIENT_SECRET);
+}
+
+export function githubInstallationConfigured(env: Bindings): boolean {
+  return Boolean(
+    githubConfigured(env) &&
+      typeof env.GITHUB_APP_SLUG === "string" &&
+      /^[a-z\d](?:[a-z\d-]{0,98}[a-z\d])?$/i.test(env.GITHUB_APP_SLUG),
+  );
 }
 
 /** POST to GitHub's token endpoint: `{ code }` for the OAuth callback, `{ grant_type, refresh_token }` for refresh. */
@@ -220,7 +229,7 @@ export async function pushCredentialsToContainer(env: Bindings, userId: string):
   await enqueueJobForUser(env, userId, "refresh-credentials");
 }
 
-async function beginGithubAuthorization(
+async function createGithubState(
   env: Bindings,
   userId: string,
   returnTo: string,
@@ -234,6 +243,15 @@ async function beginGithubAuthorization(
   )
     .bind(state, userId, now, now + 10 * 60 * 1000, returnTo)
     .run();
+  return state;
+}
+
+async function beginGithubAuthorization(
+  env: Bindings,
+  userId: string,
+  returnTo: string,
+): Promise<string> {
+  const state = await createGithubState(env, userId, returnTo);
   const params = new URLSearchParams({
     client_id: env.GITHUB_APP_CLIENT_ID,
     redirect_uri: `${env.BASE_URL}/auth/github/callback`,
@@ -241,6 +259,20 @@ async function beginGithubAuthorization(
     prompt: "select_account",
   });
   return `https://github.com/login/oauth/authorize?${params}`;
+}
+
+/** Start GitHub's account/repository chooser, which continues into OAuth when configured. */
+async function beginGithubInstallation(
+  env: Bindings,
+  userId: string,
+  returnTo: string,
+): Promise<string> {
+  const state = await createGithubState(env, userId, returnTo);
+  const url = new URL(
+    `https://github.com/apps/${encodeURIComponent(env.GITHUB_APP_SLUG)}/installations/new`,
+  );
+  url.searchParams.set("state", state);
+  return url.toString();
 }
 
 /** Revoke every user token and grant issued by this GitHub App for this user. */
@@ -265,6 +297,16 @@ async function revokeGithubAuthorization(env: Bindings, token: string): Promise<
 }
 
 export const githubRoutes = new Hono<AppContext>()
+  .get("/auth/github/install", requireUser, async (c) => {
+    if (!githubInstallationConfigured(c.env)) {
+      return c.text("GitHub App installation not configured", 404);
+    }
+    if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
+      return c.text(CREDENTIALS_LOCKED_ERROR, 409);
+    }
+    const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
+    return c.redirect(await beginGithubInstallation(c.env, c.get("user").id, returnTo));
+  })
   .get("/auth/github", requireUser, async (c) => {
     if (!githubConfigured(c.env)) return c.text("GitHub App not configured", 404);
     if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {

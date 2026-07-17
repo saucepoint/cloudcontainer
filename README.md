@@ -110,7 +110,8 @@ Required Worker secrets:
 
 Optional secrets:
 
-- GITHUB_APP_CLIENT_SECRET, paired with GITHUB_APP_CLIENT_ID
+- GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` Worker
+  variable; also set `GITHUB_APP_SLUG` to enable the installation chooser
 - DEV_AUTH_TOKEN, for a controlled deployed development bypass
 
 Generate service keys with:
@@ -144,16 +145,34 @@ one-time RP signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real
 World App. Use `staging` only when the configured app/RP and World simulator are
 also staging. `DEV_AUTH` does not select the World ID environment.
 
-For optional GitHub authorization, register a GitHub App with callback:
+For optional GitHub repository access, register a public GitHub App and set
+`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. Set `GITHUB_APP_SLUG` to
+enable the installation chooser; without it, onboarding keeps the direct OAuth
+connection and repository selector available. The slug is the final path
+segment of `https://github.com/apps/APP-SLUG`. Configure the first callback URL
+as:
 
     https://YOUR_BASE_URL/auth/github/callback
 
-Enable expiring user-to-server tokens and grant read-only Contents permission
-(Metadata read access is implicit). Install the App for the accounts or
-organizations whose repositories users should be able to select. The control
-plane refreshes access tokens; refresh tokens never leave it. Provisioning
-preconfigures both `gh` and Git's HTTPS credential helper with the short-lived
-access token.
+Enable **Request user authorization (OAuth) during installation** and expiring
+user-to-server tokens. Grant **Contents: read-only** repository permission
+(Metadata read access is implicit), make the App installable on **Any account**,
+and do not request broader permissions. The onboarding action then opens the
+App's installation chooser when `GITHUB_APP_SLUG` is configured, so a user can
+select a personal or organization account and grant either all repositories or
+specific repositories.
+
+Organization installations may require owner approval. If the organization
+uses SAML SSO, the user must start an active SAML session before reauthorizing.
+When permissions change, owners of existing installations must approve the new
+permissions in GitHub. Before release, install the App on a test account, grant
+one private repository, reauthorize, verify that search finds it, and verify
+that an ungranted private repository is rejected.
+
+The control plane refreshes access tokens; refresh tokens never leave it.
+Provisioning preconfigures both `gh` and Git's HTTPS credential helper with the
+short-lived access token, which can clone only repositories shared by the user
+grant and the App installation.
 
 ## Repeat deployment
 

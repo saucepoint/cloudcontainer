@@ -111,13 +111,11 @@ export class Incus {
       "-c", `limits.cpu.allowance=${cpu * 100}%`,
       "-c", `limits.memory=${ramMb}MiB`,
       "-c", "limits.memory.enforce=hard",
-      "-c", "limits.memory.swap=false",
       "-c", `limits.processes=${TENANT_PROCESS_LIMIT}`,
       "-c", "boot.autostart=last-state",
       "-c", "boot.autorestart=false",
       "-c", "security.privileged=false",
       "-c", "security.idmap.isolated=true",
-      "-c", "security.idmap.size=65536",
       "-c", "security.nesting=false",
       "-c", `user.codestation.id=${containerId}`,
     ]);

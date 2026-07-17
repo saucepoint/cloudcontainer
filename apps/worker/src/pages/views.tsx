@@ -130,7 +130,10 @@ const AgentSignin: FC<{
   </>
 );
 
-export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvailable = false }) => (
+export const OnboardingPage: FC<{
+  githubAvailable?: boolean;
+  githubInstallationAvailable?: boolean;
+}> = ({ githubAvailable = false, githubInstallationAvailable = false }) => (
   <Layout title="Set up" loggedIn>
     <h1>Set up a server.</h1>
     <p class="notice">
@@ -212,20 +215,31 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
-            Connect and clone repositories into <code>~/repos</code>.
+            {githubInstallationAvailable
+              ? "Install the GitHub App for a personal or organization account, then clone granted repositories into "
+              : "Connect GitHub, then choose repositories to clone into "}
+            <code>~/repos</code>.
           </p>
           <div class="row">
-            <a id="github-connect" class="btn secondary" href="/auth/github?return_to=/onboarding">
-              Connect GitHub
+            <a
+              id="github-connect"
+              class="btn secondary"
+              href={githubInstallationAvailable
+                ? "/auth/github/install?return_to=/onboarding"
+                : "/auth/github?return_to=/onboarding"}
+            >
+              {githubInstallationAvailable ? "Install or manage GitHub access" : "Connect GitHub"}
             </a>
             <button id="github-reauthorize" class="btn secondary" type="button">
               Reauthorize GitHub
             </button>
           </div>
-          <p class="muted">
-            Private repositories appear after the app is installed for their owner and granted
-            access to them. Existing installations must approve permission changes in GitHub.
-          </p>
+          {githubInstallationAvailable ? (
+            <p class="muted">
+              Choose the repositories the App may read. Organization installations may require an
+              owner&apos;s approval; after changing access, return here and reauthorize GitHub.
+            </p>
+          ) : null}
           <p id="github-status" class="muted" role="status" aria-live="polite">
             Search by repository name, or enter an exact owner/repository.
           </p>

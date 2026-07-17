@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { apiRoutes } from "./api.js";
 import { authRoutes, requireUser } from "./auth.js";
 import { codexAuthRoutes } from "./codexauth.js";
-import { githubRoutes } from "./github.js";
+import { githubConfigured, githubInstallationConfigured, githubRoutes } from "./github.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage } from "./pages/views.js";
@@ -10,7 +10,7 @@ import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
 
-const app = new Hono<AppContext>();
+export const app = new Hono<AppContext>();
 
 app.use("*", async (c, next) => {
   await next();
@@ -40,7 +40,12 @@ app.get("/", (c) =>
 app.get("/onboarding", requireUser, async (c) => {
   const container = await getContainerForUser(c.env, c.get("user").id);
   if (container) return c.redirect("/dashboard");
-  return c.html(<OnboardingPage githubAvailable={Boolean(c.env.GITHUB_APP_CLIENT_ID && c.env.GITHUB_APP_CLIENT_SECRET)} />);
+  return c.html(
+    <OnboardingPage
+      githubAvailable={githubConfigured(c.env)}
+      githubInstallationAvailable={githubInstallationConfigured(c.env)}
+    />,
+  );
 });
 
 app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));

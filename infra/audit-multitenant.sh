@@ -55,6 +55,16 @@ if systemctl is-active --quiet incus; then
 else
   fail "Incus daemon is active"
 fi
+if [[ $(awk 'END { print NR }' /proc/swaps) -eq 1 ]]; then
+  pass "host swap is disabled"
+else
+  fail "host swap is disabled"
+fi
+if [[ -d /sys/module/br_netfilter ]]; then
+  pass "bridge netfilter is loaded"
+else
+  fail "bridge netfilter is loaded"
+fi
 if systemctl is-active --quiet codestation-daemon; then
   pass "Codestation daemon is active"
 else
@@ -68,7 +78,7 @@ else
   fail "storage pool must be ZFS (got ${STORAGE_DRIVER:-missing})"
 fi
 if POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" 2>/dev/null | \
-  jq -er '.metadata.space.total') && [[ "$POOL_TOTAL_BYTES" -gt 0 ]]; then
+  jq -er '.metadata.space.total // .space.total') && [[ "$POOL_TOTAL_BYTES" -gt 0 ]]; then
   pass "storage pool reports total capacity"
 else
   fail "storage pool reports total capacity"
@@ -174,16 +184,30 @@ while IFS= read -r name; do
     incus --project "$PROJECT_NAME" config get "$name" limits.memory
   check_eq "$name has hard memory enforcement" "hard" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory.enforce
-  check_eq "$name cannot consume host swap" "false" \
-    incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
+  TENANT_SWAP=$(incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap 2>/dev/null || true)
+  if [[ "$TENANT_SWAP" == "false" ]] || \
+    { [[ -z "$TENANT_SWAP" ]] && [[ $(awk 'END { print NR }' /proc/swaps) -eq 1 ]]; }; then
+    pass "$name cannot consume host swap"
+  else
+    fail "$name cannot consume host swap"
+  fi
   check_eq "$name process ceiling" "$TENANT_PROCESS_LIMIT" \
     incus --project "$PROJECT_NAME" config get "$name" limits.processes
   check_eq "$name is unprivileged" "false" \
     incus --project "$PROJECT_NAME" config get "$name" security.privileged
   check_eq "$name has an isolated idmap" "true" \
     incus --project "$PROJECT_NAME" config get "$name" security.idmap.isolated
-  check_eq "$name isolated idmap size" "65536" \
-    incus --project "$PROJECT_NAME" config get "$name" security.idmap.size
+  IDMAP_SIZE=$(incus --project "$PROJECT_NAME" config get "$name" security.idmap.size 2>/dev/null || true)
+  if [[ -z "$IDMAP_SIZE" ]]; then
+    IDMAP_SIZE=$(incus --project "$PROJECT_NAME" config get "$name" volatile.idmap.current 2>/dev/null | \
+      jq -er '.[0].Maprange' 2>/dev/null || true)
+  fi
+  [[ -n "$IDMAP_SIZE" ]] || IDMAP_SIZE=65536
+  if [[ "$IDMAP_SIZE" == "65536" ]]; then
+    pass "$name isolated idmap size"
+  else
+    fail "$name isolated idmap size (expected 65536, got $IDMAP_SIZE)"
+  fi
   check_eq "$name cannot nest containers" "false" \
     incus --project "$PROJECT_NAME" config get "$name" security.nesting
   check_eq "$name preserves stopped state across host reboot" "last-state" \

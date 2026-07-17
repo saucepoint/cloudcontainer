@@ -44,8 +44,10 @@
     "WORLD_ID_ENVIRONMENT": "production",
     // Set to "1" ONLY for local development: enables /auth/dev login bypass.
     "DEV_AUTH": "0",
-    // GitHub App OAuth client id; leave empty to hide the GitHub connect flow.
-    "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c"
+    // GitHub App OAuth client id. Set the public-page slug as well to enable
+    // the install-first chooser; OAuth and repository selection do not require it.
+    "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c",
+    "GITHUB_APP_SLUG": "codestationdemo"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   RP_SIGNING_KEY           — World ID 4.0 RP signing key (Developer Portal →
