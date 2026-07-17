@@ -46,7 +46,9 @@ export function successStatusFor(op: JobOp): ContainerStatus | null {
 export function allowedUserOps(status: ContainerStatus): JobOp[] {
   switch (status) {
     case "running":
-      return ["stop", "rebuild", "destroy", "sync-keys", "refresh-credentials"];
+      // Key and credential synchronization is triggered by its owning update,
+      // never exposed as a manual container lifecycle action.
+      return ["stop", "rebuild", "destroy"];
     case "stopped":
       return ["start", "rebuild", "destroy"];
     case "error":

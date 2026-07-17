@@ -20,7 +20,8 @@ describe("container lifecycle policy", () => {
     expect(successStatusFor("refresh-credentials")).toBeNull();
   });
 
-  it("never lets a user act while provisioning or destroying", () => {
+  it("only exposes lifecycle actions, not automatic synchronization jobs", () => {
+    expect(allowedUserOps("running")).toEqual(["stop", "rebuild", "destroy"]);
     expect(allowedUserOps("provisioning")).toEqual([]);
     expect(allowedUserOps("destroying")).toEqual([]);
   });

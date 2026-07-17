@@ -109,13 +109,12 @@ describe("subscription sign-in wiring", () => {
     expect(section).toContain('href="https://platform.openai.com/api-keys"');
   });
 
-  it("dashboard keeps credentials read-only after server creation", () => {
+  it("dashboard omits credential management after server creation", () => {
     const html = String(DashboardPage({}));
     for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
       expect(html).not.toContain(flow);
     }
-    expect(dashboardClient).toContain("Set during setup");
-    expect(dashboardClient).toContain("manual terminal commands");
+    expect(dashboardClient).not.toContain("CredentialsCard");
     expect(dashboardClient).not.toContain("/api/credentials");
     expect(html).not.toContain("Changes apply without a restart");
   });
@@ -241,11 +240,10 @@ describe("dashboard loading and polling", () => {
 });
 
 describe("beginner-friendly provisioning UI", () => {
-  it("puts SSH access before credentials and only unlocks key setup after a successful build", () => {
+  it("shows SSH access and only unlocks key setup after a successful build", () => {
     const renderedDashboard = dashboardClient.slice(dashboardClient.indexOf("if (!loaded)"));
-    expect(renderedDashboard.indexOf('id="ssh-heading"')).toBeLessThan(
-      renderedDashboard.indexOf("<CredentialsCard"),
-    );
+    expect(renderedDashboard).toContain('id="ssh-heading"');
+    expect(renderedDashboard).not.toContain("<CredentialsCard");
     expect(dashboardClient).toContain("Copy SSH command");
     expect(dashboardClient).toContain("Set up SSH with an agent");
     expect(dashboardClient).toContain("Enroll another device");

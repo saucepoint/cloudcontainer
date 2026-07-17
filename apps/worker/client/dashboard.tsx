@@ -363,10 +363,6 @@ function SshKeys({
                   <summary>Review the setup prompt</summary>
                   <pre className="ssh prompt" id="enrollprompt">{prompt}</pre>
                 </details>
-                <details>
-                  <summary>Doing it by hand? Show the one-time token</summary>
-                  <pre className="ssh">{enrollment.token}</pre>
-                </details>
               </motion.div>
             ) : enrollmentMode === "manual" ? (
               <motion.div
@@ -395,16 +391,6 @@ function SshKeys({
       <div className="err" role="alert" aria-live="assertive">{error}</div>
     </>
   );
-}
-
-function CredentialsCard({ credentials }: { credentials: Credentials }) {
-  const modelProviders = Object.keys(credentials.llm).filter((provider) => credentials.llm[provider]).map((provider) => LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider);
-  const configured: string[] = [];
-  if (modelProviders.length) configured.push(`Model access: ${modelProviders.join(", ")}`);
-  if (credentials.github) configured.push(`GitHub: ${credentials.github}`);
-  const cloudflare = [credentials.wrangler ? "wrangler" : null, credentials.cloudflare ? "API token" : null].filter(Boolean);
-  if (cloudflare.length) configured.push(`Cloudflare: ${cloudflare.join(" + ")}`);
-  return <section className="card" aria-labelledby="credentials-heading"><h2 id="credentials-heading">Credentials</h2><p className="muted">Model, GitHub, and Cloudflare access selected during setup. To make changes, use manual terminal commands in your server.</p>{configured.length ? <ul className="check">{configured.map((item) => <li key={item}><span className="ok">✓ {item}</span></li>)}</ul> : <p className="muted">No credentials were selected during setup.</p>}<p className="notice"><strong>Set during setup.</strong> To add, remove, or rotate credentials, use manual terminal commands in your server.</p></section>;
 }
 
 function DashboardApp() {
@@ -521,7 +507,6 @@ function DashboardApp() {
       {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
       <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
-      {credentials ? <CredentialsCard credentials={credentials} /> : null}
       <section className="card" aria-labelledby="danger-heading"><h2 id="danger-heading">Account</h2><button type="button" className="btn danger" disabled={Boolean(container && container.status !== "waitlisted")} onClick={deleteAccount}>Delete account</button><p className="muted" style={{ marginTop: "0.6rem" }}>{container && container.status !== "waitlisted" ? "Destroy your server first. When deletion finishes, you can delete the account." : "Purges all credentials and keys, and removes your account."}</p></section>
     </>
   );
