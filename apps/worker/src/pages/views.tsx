@@ -19,10 +19,10 @@ const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
 );
 
 const AGENT_DESCRIPTIONS: Record<Agent, string> = {
-  pi: "A lightweight coding agent.",
+  pi: "A minimal agent harness. Adapt Pi to your workflows.",
   claude: "Anthropic's coding agent.",
   codex: "OpenAI's coding agent.",
-  opencode: "An open model-agnostic agent.",
+  opencode: "The open source AI coding agent.",
 };
 
 const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";

@@ -50,10 +50,14 @@ export interface HostRow {
   ram_total_mb: number;
   ram_allocated_mb: number;
   ram_reserve_mb: number;
+  vcpu_capacity: number;
+  vcpu_allocated: number;
   disk_total_gb: number;
   disk_allocated_gb: number;
   status: string;
   joined_at: number;
+  last_seen_at: number | null;
+  consecutive_failures: number;
 }
 
 export interface ContainerRow {

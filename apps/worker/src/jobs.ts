@@ -72,6 +72,11 @@ export function diskReservationGb(homeDiskGb: number): number {
   return homeDiskGb * 2;
 }
 
+/** Placement requires a recent positive daemon heartbeat. */
+export const HOST_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
+/** Repeated failures quarantine a host before admitting more tenants. */
+export const HOST_FAILURE_THRESHOLD = 3;
+
 /**
  * Build the wire request for a job op. Credentials are decrypted in-memory
  * and immediately sealed to the destination host's X25519 key.
@@ -231,8 +236,17 @@ async function finalizeDestroy(env: Bindings, container: ContainerRow): Promise<
   if (container.host_id) {
     statements.push(
       env.DB.prepare(
-        "UPDATE hosts SET ram_allocated_mb = MAX(0, ram_allocated_mb - ?), disk_allocated_gb = MAX(0, disk_allocated_gb - ?) WHERE id = ?",
-      ).bind(container.ram_mb, diskReservationGb(container.disk_gb), container.host_id),
+        `UPDATE hosts
+         SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
+             ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
+             disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
+         WHERE id = ?`,
+      ).bind(
+        container.cpu,
+        container.ram_mb,
+        diskReservationGb(container.disk_gb),
+        container.host_id,
+      ),
     );
   }
   statements.push(
@@ -330,22 +344,36 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
 
 /**
  * Scheduler (§10): place on the active host with the most unallocated
- * *non-reserved* RAM above the required headroom; check disk too.
+ * *non-reserved* RAM above the required headroom; check CPU, disk, and the
+ * daemon heartbeat too. The final capacity check is repeated transactionally
+ * by the caller so concurrent signups cannot race past a ceiling.
  */
 export async function pickHost(
   env: Bindings,
+  cpu: number,
   ramMb: number,
   diskGb: number,
+  now: () => number = Date.now,
 ): Promise<HostRow | null> {
   return env.DB.prepare(
     `SELECT * FROM hosts
      WHERE status = 'active'
+       AND vcpu_capacity - vcpu_allocated >= ?
        AND ram_total_mb - ram_reserve_mb - ram_allocated_mb >= ?
        AND disk_total_gb - disk_allocated_gb >= ?
-     ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC, id
+       AND last_seen_at IS NOT NULL AND last_seen_at >= ?
+       AND consecutive_failures = 0
+     ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC,
+              vcpu_capacity - vcpu_allocated DESC,
+              id
      LIMIT 1`,
   )
-    .bind(ramMb, diskGb)
+    .bind(
+      cpu,
+      ramMb,
+      diskGb,
+      now() - HOST_HEARTBEAT_MAX_AGE_MS,
+    )
     .first<HostRow>();
 }
 
@@ -376,9 +404,10 @@ export async function startProvision(
   // oversubscription when two signups race for the last slot. A unique-port
   // collision rolls the batch back and is retried with a fresh allocation.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const host = await pickHost(env, tier.ramMb, reservedDiskGb);
+    const host = await pickHost(env, tier.cpu, tier.ramMb, reservedDiskGb);
     if (!host) break;
     const port = await allocatePort(env, host.id);
+    const heartbeatCutoff = Date.now() - HOST_HEARTBEAT_MAX_AGE_MS;
     try {
       const results = (await env.DB.batch([
         env.DB.prepare(
@@ -387,8 +416,11 @@ export async function startProvision(
            SELECT ?, ?, h.id, ?, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
            FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
+             AND h.vcpu_capacity - h.vcpu_allocated >= ?
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
-             AND h.disk_total_gb - h.disk_allocated_gb >= ?`,
+             AND h.disk_total_gb - h.disk_allocated_gb >= ?
+             AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
+             AND h.consecutive_failures = 0`,
         ).bind(
           containerId,
           user.id,
@@ -400,14 +432,18 @@ export async function startProvision(
           tier.diskGb,
           now,
           host.id,
+          tier.cpu,
           tier.ramMb,
           reservedDiskGb,
+          heartbeatCutoff,
         ),
         env.DB.prepare(
           `UPDATE hosts
-           SET ram_allocated_mb = ram_allocated_mb + ?, disk_allocated_gb = disk_allocated_gb + ?
+           SET vcpu_allocated = vcpu_allocated + ?,
+               ram_allocated_mb = ram_allocated_mb + ?,
+               disk_allocated_gb = disk_allocated_gb + ?
            WHERE id = ? AND changes() = 1`,
-        ).bind(tier.ramMb, reservedDiskGb, host.id),
+        ).bind(tier.cpu, tier.ramMb, reservedDiskGb, host.id),
       ])) as Array<{ meta?: { changes?: number } }>;
 
       if (!results[0]?.meta?.changes) continue;

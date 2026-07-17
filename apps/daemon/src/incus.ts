@@ -48,14 +48,18 @@ export interface IncusContainer {
   config: Record<string, string>;
 }
 
+export const TENANT_PROCESS_LIMIT = 1024;
+
 export class Incus {
   constructor(
     private exec: ExecFn = realExec,
     private bin = "incus",
+    private project = "default",
   ) {}
 
   private run(args: string[], stdin?: string): Promise<ExecResult> {
-    return this.exec(this.bin, args, stdin);
+    const scoped = this.project === "default" ? args : ["--project", this.project, ...args];
+    return this.exec(this.bin, scoped, stdin);
   }
 
   async list(): Promise<IncusContainer[]> {
@@ -104,8 +108,16 @@ export class Incus {
       image,
       name,
       "-c", `limits.cpu=${cpu}`,
+      "-c", `limits.cpu.allowance=${cpu * 100}%`,
       "-c", `limits.memory=${ramMb}MiB`,
-      "-c", "boot.autostart=true",
+      "-c", "limits.memory.enforce=hard",
+      "-c", "limits.memory.swap=false",
+      "-c", `limits.processes=${TENANT_PROCESS_LIMIT}`,
+      "-c", "boot.autostart=last-state",
+      "-c", "boot.autorestart=false",
+      "-c", "security.privileged=false",
+      "-c", "security.idmap.isolated=true",
+      "-c", "security.idmap.size=65536",
       "-c", "security.nesting=false",
       "-c", `user.codestation.id=${containerId}`,
     ]);
@@ -113,6 +125,7 @@ export class Incus {
 
   async setLimits(name: string, cpu: number, ramMb: number): Promise<void> {
     await this.run(["config", "set", name, `limits.cpu=${cpu}`]);
+    await this.run(["config", "set", name, `limits.cpu.allowance=${cpu * 100}%`]);
     await this.run(["config", "set", name, `limits.memory=${ramMb}MiB`]);
   }
 

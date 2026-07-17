@@ -67,6 +67,17 @@ describe("Incus.list", () => {
       { name: "plain", status: "Stopped", config: {} },
     ]);
   });
+
+  it("scopes every operation to the configured tenant project", async () => {
+    const { calls, exec } = capture();
+    await new Incus(exec, "incus", "codestation").exists("cs-x");
+    expect(calls[0]?.args).toEqual([
+      "--project",
+      "codestation",
+      "info",
+      "cs-x",
+    ]);
+  });
 });
 
 describe("Incus disk limits", () => {

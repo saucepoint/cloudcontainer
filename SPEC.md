@@ -476,12 +476,15 @@ also match.
 
 ### Placement
 
-Only active hosts receive new environments. Placement requires enough
-unallocated disk for both the home and root quotas and enough non-reserved RAM.
-Hosts retain a RAM reserve so future operations are not scheduled against every
-available byte. Capacity accounting, port assignment, and FIFO admission must
-be committed together so concurrent reconciler runs cannot double-allocate
-capacity.
+Only active, recently healthy hosts receive new environments. Placement
+requires enough vCPU reservation capacity, enough unallocated disk for both
+the home and root quotas, and enough non-reserved RAM. One failed daemon health
+check immediately pauses new placement; three consecutive failures mark the
+host unhealthy, and a later valid signed stats response recovers it. Hosts
+retain a RAM reserve so future operations are not scheduled against every
+available byte. CPU/RAM/disk accounting, port assignment, and FIFO admission
+must be committed together so concurrent reconciler runs cannot
+double-allocate capacity.
 
 ---
 
@@ -531,9 +534,17 @@ keys or foreign keys.
 ### Current controls
 
 - Public-key-only SSH and unique per-environment host keys.
-- Incus RAM/CPU settings, an 8 GiB home-volume quota, and an 8 GiB root-disk
-  quota; host disk accounting reserves both.
-- No nesting and no Docker-in-container support.
+- A dedicated restricted Incus project with aggregate CPU, memory, process,
+  disk, and instance ceilings.
+- Per-tenant one-CPU allowance, hard 2 GiB memory without swap, 1024-process
+  ceiling, isolated unprivileged idmap, an 8 GiB home-volume quota, and an
+  8 GiB root-disk quota; host accounting reserves CPU and both disks.
+- No nesting, privileged containers, raw low-level Incus configuration, or
+  Docker-in-container support.
+- NIC MAC/IPv4/IPv6 anti-spoofing, east-west port isolation, and a 100 Mbit/s
+  per-tenant bandwidth ceiling.
+- Host scheduler-debug and kernel-slab metadata are root-only to reduce
+  cross-tenant container-name and kernel-information leakage.
 - Host nftables drops forwarded outbound TCP port 25 and caps new outbound
   connections per source address.
 - One shared host egress IPv4, disclosed as a shared-fate risk.
@@ -564,7 +575,6 @@ row can be removed as part of deletion. A prior abuse-ban HMAC may remain.
 - The daemon job registry and replay nonce store are in memory.
 - The current Certbot deploy hook restarts the daemon, so an uncoordinated
   renewal can lose an active in-memory job.
-- Outbound bandwidth and sustained CPU are not yet shaped.
 - There is no automated alerting, SLO reporting, or tested disaster recovery.
 - GitHub integration is absent when its application credentials are unset.
 - The static development-bypass token is intentionally weaker than World ID.
@@ -611,6 +621,9 @@ Tests use Vitest. The Worker suite uses an in-memory node:sqlite database with
 the real migration files, a Map-backed KV double, and intercepted fetch calls.
 It does not use a live D1 database, Miniflare, World ID, GitHub, Cloudflare, or
 an Incus host.
+
+Real-host multi-tenant capacity, isolation, quota, reboot, health-quarantine,
+and soak acceptance is defined in infra/MULTITENANT_TESTING.md.
 
 Current automated coverage includes:
 

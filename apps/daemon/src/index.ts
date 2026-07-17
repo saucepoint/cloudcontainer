@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:https";
-import { totalmem } from "node:os";
+import { availableParallelism, freemem, loadavg, totalmem, uptime } from "node:os";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import {
@@ -64,7 +64,11 @@ export function buildApp(opts: {
           incusStatus: ct.status,
         })),
       ramTotalMb: Math.floor(totalmem() / (1024 * 1024)),
+      ramAvailableMb: Math.floor(freemem() / (1024 * 1024)),
+      cpuLogical: availableParallelism(),
+      loadAverage1: loadavg()[0] ?? 0,
       uptimeSec: Math.floor(process.uptime()),
+      hostUptimeSec: Math.floor(uptime()),
     };
     return c.json(res);
   });
@@ -108,7 +112,7 @@ export function buildApp(opts: {
 
 function main() {
   const config = loadConfig();
-  const incus = new Incus(realExec);
+  const incus = new Incus(realExec, "incus", config.project);
   const runner = new JobRunner(new Provisioner(incus, config));
   const app = buildApp({ config, incus, runner });
 

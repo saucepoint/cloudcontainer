@@ -7,6 +7,9 @@ The control-plane deployment procedure is in the repository README.
 Adding a host requires this procedure plus one D1 hosts row. It must not require
 dashboard or daemon source changes.
 
+The destructive capacity and isolation gate for a staging host is
+[MULTITENANT_TESTING.md](./MULTITENANT_TESTING.md).
+
 ## 1. Environment classes
 
 ### Current development host
@@ -109,7 +112,10 @@ the module loads, and rerun bootstrap.
 Bootstrap:
 
 - installs Incus, Node.js 22, nftables, and supporting packages;
-- creates or attaches the Incus storage pool;
+- creates or attaches a quota-capable Incus storage pool and refuses a silent
+  dir-pool fallback;
+- creates a restricted `codestation` tenant project with aggregate capacity,
+  anti-spoofing, east-west isolation, and bandwidth limits;
 - installs the outbound-port-25 and new-connection-rate rules;
 - installs the repository dependencies and daemon systemd unit;
 - creates the host X25519 credential keypair;
@@ -119,6 +125,15 @@ Bootstrap:
 The generated private key remains in /etc/codestation/daemon.json, mode 0600.
 Back it up only through the host-secret backup process. Never copy it into D1
 or the repository.
+
+Before activating the host, run the read-only policy audit:
+
+    ssh root@HOST \
+      'cd /opt/codestation && bash infra/audit-multitenant.sh'
+
+The bootstrap registers a conservative 3:1 vCPU ceiling, 60% of physical RAM,
+and 70% of pool capacity. The actual 1 vCPU/2 GiB tenant count is the minimum
+of CPU, RAM, and 16 GiB root-plus-home disk slots.
 
 ### 3.3 Build and verify the base image
 
@@ -213,9 +228,10 @@ Run the command from apps/worker so Wrangler finds the correct configuration:
 Confirm:
 
     npx wrangler d1 execute codestation --remote --command \
-      "SELECT id, ssh_hostname, daemon_endpoint, ram_total_mb,
-              ram_allocated_mb, ram_reserve_mb, disk_total_gb,
-              disk_allocated_gb, status
+      "SELECT id, ssh_hostname, daemon_endpoint, vcpu_capacity,
+              vcpu_allocated, ram_total_mb, ram_allocated_mb, ram_reserve_mb,
+              disk_total_gb, disk_allocated_gb, last_seen_at,
+              consecutive_failures, status
        FROM hosts ORDER BY id"
 
 Complete a real signup, provision, fingerprint check, and SSH login before
@@ -467,14 +483,15 @@ migration, and daemon rollback does not reverse Worker code.
 
 ## 8. Reboot behavior and verification
 
-Containers have boot.autostart=true, so Incus restores them and their proxy
-devices. The daemon is enabled under systemd. After a reboot:
+Containers use `boot.autostart=last-state`: running tenants return after a host
+restart, while deliberately stopped tenants remain stopped. The daemon is
+enabled under systemd. After a reboot:
 
     ssh root@HOST '
       set -eu
       systemctl is-active codestation-daemon
       systemctl is-active nftables
-      incus list
+      incus --project codestation list
       nft list table inet codestation
       zpool status
       zfs get encryption,keyformat,keylocation
@@ -530,7 +547,11 @@ no-backup outcome.
 - Credential payloads are sealed to the destination host and are never stored
   in D1 jobs or daemon logs.
 - Outbound forwarded TCP port 25 is dropped.
-- New outbound connections are capped per container source address.
+- New outbound IPv4 and IPv6 connections are capped per container source
+  address.
+- The daemon operates in the restricted `codestation` project; tenant NICs
+  enforce anti-spoofing, east-west isolation, and bandwidth limits.
+- Each tenant has CPU, hard memory, process, root-disk, and home-disk ceilings.
 - Password and root SSH login are disabled in the image.
 - Development file-backed storage is unencrypted and must never be presented
   as production-safe storage.

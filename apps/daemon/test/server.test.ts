@@ -20,6 +20,7 @@ function makeApp() {
     x25519PrivateKey: generateX25519Keypair().privateKey,
     baseImage: "codestation-base",
     storagePool: "default",
+    project: "default",
   };
   const listJson = JSON.stringify([
     { name: "cs-abc", status: "Running", config: { "user.codestation.id": "c-123" } },
@@ -65,8 +66,16 @@ describe("daemon HTTP API", () => {
     expect(await health.json()).toMatchObject({ ok: true, hostId: "host-1" });
 
     const stats = await app.request("/stats", signedInit("GET", "/stats"));
-    const body = (await stats.json()) as { containers: unknown[] };
+    const body = (await stats.json()) as {
+      containers: unknown[];
+      cpuLogical: number;
+      ramAvailableMb: number;
+      hostUptimeSec: number;
+    };
     expect(body.containers).toEqual([{ containerId: "c-123", incusStatus: "Running" }]);
+    expect(body.cpuLogical).toBeGreaterThan(0);
+    expect(body.ramAvailableMb).toBeGreaterThanOrEqual(0);
+    expect(body.hostUptimeSec).toBeGreaterThan(0);
   });
 
   it("rejects a replayed signed request", async () => {

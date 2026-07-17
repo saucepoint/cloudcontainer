@@ -20,6 +20,7 @@ function makeConfig(): DaemonConfig {
     x25519PrivateKey: hostKeys.privateKey,
     baseImage: "codestation-base",
     storagePool: "default",
+    project: "default",
   };
 }
 
@@ -76,8 +77,17 @@ describe("provision command construction", () => {
     expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=8GiB"));
     const init = flat.find((f) => f.startsWith("init codestation-base cs-aaaaaaaabbbb"));
     expect(init).toContain("limits.cpu=1");
+    expect(init).toContain("limits.cpu.allowance=100%");
     expect(init).toContain("limits.memory=2048MiB");
-    expect(init).toContain("boot.autostart=true");
+    expect(init).toContain("limits.memory.enforce=hard");
+    expect(init).toContain("limits.memory.swap=false");
+    expect(init).toContain("limits.processes=1024");
+    expect(init).toContain("boot.autostart=last-state");
+    expect(init).toContain("boot.autorestart=false");
+    expect(init).toContain("security.privileged=false");
+    expect(init).toContain("security.idmap.isolated=true");
+    expect(init).toContain("security.idmap.size=65536");
+    expect(init).toContain("security.nesting=false");
     expect(init).toContain("user.codestation.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     expect(flat).toContain(
       "config device override cs-aaaaaaaabbbb root size=8GiB",
@@ -392,6 +402,7 @@ describe("resize / destroy", () => {
     });
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
+    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
     expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=32GiB");
     expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=32GiB");

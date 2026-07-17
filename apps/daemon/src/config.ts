@@ -10,6 +10,8 @@ export interface DaemonConfig {
   /** Incus image alias used for provisioning (built by infra/build-image.sh). */
   baseImage: string;
   storagePool: string;
+  /** Dedicated Incus project containing only service-managed tenant instances. */
+  project: string;
   /** Optional TLS material; when absent the daemon serves plain HTTP (dev only). */
   tlsCertPath?: string;
   tlsKeyPath?: string;
@@ -29,6 +31,9 @@ export function loadConfig(path = process.env.CS_DAEMON_CONFIG ?? DEFAULT_PATH):
     x25519PrivateKey: raw.x25519PrivateKey!,
     baseImage: raw.baseImage ?? "codestation-base",
     storagePool: raw.storagePool ?? "default",
+    // Keep existing daemon configs compatible. New hosts explicitly select the
+    // restricted `codestation` project during bootstrap.
+    project: raw.project ?? "default",
     tlsCertPath: raw.tlsCertPath,
     tlsKeyPath: raw.tlsKeyPath,
   };

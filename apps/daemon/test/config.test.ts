@@ -24,17 +24,25 @@ describe("loadConfig", () => {
       listenPort: 8443,
       baseImage: "codestation-base",
       storagePool: "default",
+      project: "default",
     });
     expect(config.tlsCertPath).toBeUndefined();
   });
 
   it("keeps explicit values", () => {
     const config = loadConfig(
-      writeConfig({ ...required, listenPort: 9000, storagePool: "tank", baseImage: "custom" }),
+      writeConfig({
+        ...required,
+        listenPort: 9000,
+        storagePool: "tank",
+        baseImage: "custom",
+        project: "tenants",
+      }),
     );
     expect(config.listenPort).toBe(9000);
     expect(config.storagePool).toBe("tank");
     expect(config.baseImage).toBe("custom");
+    expect(config.project).toBe("tenants");
   });
 
   it.each(["hostId", "workerRpcPublicKey", "x25519PrivateKey"] as const)(

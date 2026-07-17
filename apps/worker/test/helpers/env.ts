@@ -158,21 +158,28 @@ export async function seedHost(
     ram_total_mb: 65536,
     ram_allocated_mb: 0,
     ram_reserve_mb: 16384,
+    vcpu_capacity: 72,
+    vcpu_allocated: 0,
     disk_total_gb: 1000,
     disk_allocated_gb: 0,
     status: "active",
     joined_at: Date.now(),
+    last_seen_at: Date.now(),
+    consecutive_failures: 0,
     ...overrides,
   };
   await env.DB.prepare(
     `INSERT INTO hosts (id, ipv4, ipv6, ssh_hostname, daemon_endpoint, daemon_cert_fp, daemon_pubkey,
-       ram_total_mb, ram_allocated_mb, ram_reserve_mb, disk_total_gb, disk_allocated_gb, status, joined_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ram_total_mb, ram_allocated_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
+       disk_total_gb, disk_allocated_gb, status, joined_at, last_seen_at, consecutive_failures)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       host.id, host.ipv4, host.ipv6, host.ssh_hostname, host.daemon_endpoint,
       host.daemon_cert_fp, host.daemon_pubkey, host.ram_total_mb, host.ram_allocated_mb,
-      host.ram_reserve_mb, host.disk_total_gb, host.disk_allocated_gb, host.status, host.joined_at,
+      host.ram_reserve_mb, host.vcpu_capacity, host.vcpu_allocated, host.disk_total_gb,
+      host.disk_allocated_gb, host.status, host.joined_at, host.last_seen_at,
+      host.consecutive_failures,
     )
     .run();
   return host;

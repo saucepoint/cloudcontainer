@@ -148,9 +148,9 @@ describe("waitlist admission", () => {
       { user_id: "second", host_id: null, status: "waitlisted" },
     ]);
     const host = await env.DB.prepare(
-      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
-    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
     const admitted = await env.DB.prepare(
       "SELECT admitted_at FROM waitlist WHERE user_id = 'first'",
     ).first<{ admitted_at: number }>();
@@ -158,6 +158,35 @@ describe("waitlist admission", () => {
     expect(daemon.submitted).toMatchObject([
       { op: "provision", containerId: "container-first" },
     ]);
+  });
+
+  it("does not admit a tenant after the current host health check fails", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { last_seen_at: Date.now() });
+    await seedContainer(env, {
+      user_id: user.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1000)",
+    ).run();
+    stubFetch(() => {
+      throw new Error("host down");
+    });
+
+    await reconcile(env, Date.now);
+
+    const container = await env.DB.prepare(
+      "SELECT host_id, status FROM containers WHERE user_id = 'user-1'",
+    ).first<{ host_id: string | null; status: string }>();
+    expect(container).toEqual({ host_id: null, status: "waitlisted" });
+    const host = await env.DB.prepare(
+      "SELECT consecutive_failures, vcpu_allocated FROM hosts WHERE id = 'host-1'",
+    ).first<{ consecutive_failures: number; vcpu_allocated: number }>();
+    expect(host).toEqual({ consecutive_failures: 1, vcpu_allocated: 0 });
   });
 });
 
@@ -198,6 +227,31 @@ describe("drift correction (D1 <-> incus)", () => {
     await reconcile(env, Date.now);
     const row = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(row?.status).toBe("running");
+  });
+
+  it("quarantines a host after three failed heartbeats and recovers it on success", async () => {
+    const { env } = makeEnv();
+    await seedHost(env);
+    stubFetch(() => {
+      throw new Error("host down");
+    });
+
+    await reconcile(env, Date.now);
+    await reconcile(env, Date.now);
+    await reconcile(env, Date.now);
+    const failed = await env.DB.prepare(
+      "SELECT status, consecutive_failures FROM hosts WHERE id = 'host-1'",
+    ).first<{ status: string; consecutive_failures: number }>();
+    expect(failed).toEqual({ status: "unhealthy", consecutive_failures: 3 });
+
+    stubFetch(statsRoute([]));
+    await reconcile(env, Date.now);
+    const recovered = await env.DB.prepare(
+      "SELECT status, consecutive_failures, last_seen_at FROM hosts WHERE id = 'host-1'",
+    ).first<{ status: string; consecutive_failures: number; last_seen_at: number }>();
+    expect(recovered?.status).toBe("active");
+    expect(recovered?.consecutive_failures).toBe(0);
+    expect(recovered?.last_seen_at).toBeGreaterThan(0);
   });
 });
 

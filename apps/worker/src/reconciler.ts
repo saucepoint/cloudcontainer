@@ -11,7 +11,15 @@ import {
   pushCredentialsToContainer,
   storeGithubTokens,
 } from "./github.js";
-import { diskReservationGb, enqueueJob, getHost, pickHost, refreshJob } from "./jobs.js";
+import {
+  diskReservationGb,
+  enqueueJob,
+  getHost,
+  HOST_FAILURE_THRESHOLD,
+  HOST_HEARTBEAT_MAX_AGE_MS,
+  pickHost,
+  refreshJob,
+} from "./jobs.js";
 import { allocatePort } from "./ports.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
@@ -46,13 +54,22 @@ async function runBounded<T>(
 }
 
 export async function reconcile(env: Bindings, now: () => number = Date.now): Promise<void> {
+  // Refresh host eligibility before waitlist admission. A stale or repeatedly
+  // failing daemon must not receive another tenant in the same cron pass.
+  try {
+    await correctDrift(env, now);
+  } catch (error) {
+    console.log(
+      JSON.stringify({ event: "reconcile_task_failed", task: "host_health", error: String(error) }),
+    );
+  }
+
   const tasks = [
     ["sweep_jobs", sweepJobs(env, now)],
     ["timeout_jobs", timeoutStuckJobs(env, now)],
     ["github_refresh", refreshGithubTokens(env, now)],
     ["grace_expiry", expireSuspendedContainers(env, now)],
     ["waitlist_admission", admitWaitlistedContainers(env, now)],
-    ["drift_correction", correctDrift(env)],
     ["expired_row_cleanup", cleanupExpiredRows(env, now)],
   ] as const;
   const results = await Promise.allSettled(tasks.map(([, task]) => task));
@@ -120,8 +137,10 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
   for (const container of waiting.results) {
     const host = await pickHost(
       env,
+      container.cpu,
       container.ram_mb,
       diskReservationGb(container.disk_gb),
+      now,
     );
     if (!host) break;
     const admitted = await placeWaitlistedContainer(env, container, host, now());
@@ -139,6 +158,7 @@ async function placeWaitlistedContainer(
   // transaction. `changes()` gates accounting on winning the waitlisted-row
   // claim, so overlapping cron invocations cannot double-reserve capacity.
   const port = await allocatePort(env, host.id, admittedAt);
+  const heartbeatCutoff = admittedAt - HOST_HEARTBEAT_MAX_AGE_MS;
   const results = (await env.DB.batch([
     env.DB.prepare(
       `UPDATE containers
@@ -147,15 +167,31 @@ async function placeWaitlistedContainer(
          AND EXISTS (
            SELECT 1 FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
+             AND h.vcpu_capacity - h.vcpu_allocated >= containers.cpu
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= containers.ram_mb
              AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
+             AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
+             AND h.consecutive_failures = 0
          )`,
-    ).bind(host.id, port, container.id, host.id),
+    ).bind(
+      host.id,
+      port,
+      container.id,
+      host.id,
+      heartbeatCutoff,
+    ),
     env.DB.prepare(
       `UPDATE hosts
-       SET ram_allocated_mb = ram_allocated_mb + ?, disk_allocated_gb = disk_allocated_gb + ?
+       SET vcpu_allocated = vcpu_allocated + ?,
+           ram_allocated_mb = ram_allocated_mb + ?,
+           disk_allocated_gb = disk_allocated_gb + ?
        WHERE id = ? AND changes() = 1`,
-    ).bind(container.ram_mb, diskReservationGb(container.disk_gb), host.id),
+    ).bind(
+      container.cpu,
+      container.ram_mb,
+      diskReservationGb(container.disk_gb),
+      host.id,
+    ),
     env.DB.prepare(
       "UPDATE waitlist SET admitted_at = ? WHERE user_id = ? AND changes() = 1",
     ).bind(admittedAt, container.user_id),
@@ -218,15 +254,36 @@ async function expireSuspendedContainers(env: Bindings, now: () => number): Prom
 }
 
 /** D1 <-> host drift detection via daemon `stats` (§10). */
-async function correctDrift(env: Bindings): Promise<void> {
-  const hosts = await env.DB.prepare("SELECT * FROM hosts WHERE status = 'active'").all<HostRow>();
+async function correctDrift(env: Bindings, now: () => number): Promise<void> {
+  const hosts = await env.DB.prepare(
+    "SELECT * FROM hosts WHERE status IN ('active','unhealthy')",
+  ).all<HostRow>();
   await runBounded(hosts.results, 3, async (host) => {
     let stats;
     try {
       stats = await daemonStats(env, host);
     } catch {
-      return; // unreachable host: containers keep their last known state
+      await env.DB.prepare(
+        `UPDATE hosts
+         SET consecutive_failures = consecutive_failures + 1,
+             status = CASE
+               WHEN status = 'active' AND consecutive_failures + 1 >= ? THEN 'unhealthy'
+               ELSE status
+             END
+         WHERE id = ? AND status IN ('active','unhealthy')`,
+      )
+        .bind(HOST_FAILURE_THRESHOLD, host.id)
+        .run();
+      return; // containers keep their last known state
     }
+    await env.DB.prepare(
+      `UPDATE hosts
+       SET last_seen_at = ?, consecutive_failures = 0,
+           status = CASE WHEN status = 'unhealthy' THEN 'active' ELSE status END
+       WHERE id = ? AND status IN ('active','unhealthy')`,
+    )
+      .bind(now(), host.id)
+      .run();
     const actual = new Map(stats.containers.map((s) => [s.containerId, s.incusStatus]));
     const rows = await env.DB.prepare(
       "SELECT * FROM containers WHERE host_id = ? AND status IN ('running','stopped')",

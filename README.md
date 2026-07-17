@@ -36,9 +36,10 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
-4. The daemon clones codestation-base, caps the disposable root disk, attaches
-   the separately capped persistent /home/dev volume, configures SSH and
-   credentials, and verifies the selected agents.
+4. The daemon clones codestation-base inside a restricted Incus project,
+   applies hard CPU/memory/process limits, caps the disposable root disk,
+   attaches the separately capped persistent /home/dev volume, configures SSH
+   and credentials, and verifies the selected agents.
    All four agents are baked into the image; a missing-only fallback installer
    runs only for a selected binary that is unexpectedly absent. The selected
    set drives dashboard and MOTD guidance even though every binary is available.
@@ -92,7 +93,8 @@ The fast suite never contacts live external services or infrastructure:
 
 There is not yet an automated real-Incus nightly suite. Provision-to-SSH,
 firewall, reboot, browser accessibility, and rollback checks are manual release
-evidence listed in SPEC.md.
+evidence listed in SPEC.md. The destructive multi-tenant staging gate is in
+[infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md).
 
 ## Control-plane configuration
 
@@ -215,7 +217,9 @@ or reuses the dev-prefixed test account and creates a KV session.
 
 ## Adding and maintaining hosts
 
-See [infra/RUNBOOK.md](./infra/RUNBOOK.md). In summary:
+See [infra/RUNBOOK.md](./infra/RUNBOOK.md). For a multi-tenant staging rollout,
+also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md). In
+summary:
 
 1. copy the repository to /opt/codestation;
 2. run infra/bootstrap.sh with the host ID and Worker RPC public key;
@@ -240,8 +244,9 @@ must use draining and active-job checks; do not rerun bootstrap blindly.
 - Daemon jobs and replay nonces are in memory and are lost on daemon restart.
 - The current certificate-renewal hook restarts the daemon; production should
   use hot-reload TLS termination or coordinate renewal with active-job checks.
-- Port 25 and new-connection rate limits are enforced; bandwidth shaping and a
-  sustained-CPU ceiling are not.
+- Tenant NICs enforce anti-spoofing, east-west isolation, and a 100 Mbit/s
+  bandwidth ceiling. CPU is capped per tenant and admitted against a host-wide
+  vCPU reservation ceiling.
 - The base image is not automatically rebuilt. Rebuild it for tool/agent/base
   changes and on the security refresh cadence in the runbook.
 - Agent npm packages currently resolve latest-at-image-build, and fallback

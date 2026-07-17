@@ -274,7 +274,12 @@ export const StatsResponseSchema = z
     hostId: z.string(),
     containers: z.array(ContainerStatSchema),
     ramTotalMb: z.number(),
+    // Optional for daemon-first/Worker-first rolling compatibility.
+    ramAvailableMb: z.number().nonnegative().optional(),
+    cpuLogical: z.number().int().positive().optional(),
+    loadAverage1: z.number().nonnegative().optional(),
     uptimeSec: z.number(),
+    hostUptimeSec: z.number().nonnegative().optional(),
   })
   .strict();
 export type StatsResponse = z.infer<typeof StatsResponseSchema>;

@@ -8,9 +8,9 @@
 #
 # What it does:
 #   1. Installs Incus, Node.js 22, nftables.
-#   2. Creates a ZFS-backed (or dir-backed fallback) Incus storage pool.
+#   2. Creates a quota-capable storage pool and a restricted tenant project.
 #   3. Applies the nftables baseline: outbound port 25 blocked, per-source
-#      connection-rate limit.
+#      connection-rate limit for IPv4 and IPv6.
 #   4. Installs the daemon under /opt/codestation + systemd unit.
 #   5. Generates the daemon X25519 keypair and TLS cert; prints the SQL to
 #      register the host row in D1.
@@ -19,8 +19,15 @@ set -euo pipefail
 HOST_ID="${HOST_ID:-host-$(hostname -s)}"
 DAEMON_PORT="${DAEMON_PORT:-8443}"
 POOL_NAME="${POOL_NAME:-default}"
+PROJECT_NAME="${PROJECT_NAME:-codestation}"
+NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 REPO_DIR="${REPO_DIR:-/opt/codestation}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"   # >0: create a file-backed zpool of this size (dev boxes)
+ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}" # dev-only escape hatch; dir cannot enforce quotas
+DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
+VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-3}"
+TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
+TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
 
 echo "== [1/6] packages =="
 export DEBIAN_FRONTEND=noninteractive
@@ -37,9 +44,6 @@ if ! command -v node >/dev/null || [[ "$(node --version | cut -c2-3)" -lt 22 ]];
 fi
 
 echo "== [2/6] incus init + storage =="
-if ! incus profile show default >/dev/null 2>&1; then
-  incus admin init --minimal
-fi
 if ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
   if [[ "$ZFS_LOOP_GB" -gt 0 ]]; then
     apt-get install -y -qq zfsutils-linux || true
@@ -51,22 +55,23 @@ if ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
     incus storage create "$POOL_NAME" zfs size="${ZFS_LOOP_GB}GiB"
   elif command -v zpool >/dev/null && zpool list -H -o name 2>/dev/null | grep -q .; then
     incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/codestation"
-  else
-    echo "!! no ZFS available — falling back to dir pool (no quotas!). Set ZFS_LOOP_GB=40 for a file-backed pool."
+  elif [[ "$ALLOW_DIR_STORAGE" == "1" ]]; then
+    echo "!! creating a development-only dir pool; tenant disk quotas are not enforceable"
     incus storage create "$POOL_NAME" dir
+  else
+    echo "!! refusing to create a dir pool because it cannot enforce tenant disk quotas."
+    echo "   Provide a ZFS pool, set ZFS_LOOP_GB for a development loop pool, or explicitly set ALLOW_DIR_STORAGE=1."
+    exit 1
   fi
 fi
 # NOTE (spec §10): production hosts should use ZFS native encryption. Create the
 # pool with `zpool create -O encryption=on -O keyformat=passphrase ...` before
 # running this script and document key handling in your ops runbook.
 
-# Repair a default profile left empty by an interrupted `incus admin init`
-# (seen when stdin was piped into it): ensure root disk + bridge NIC exist.
-if ! incus profile show default | grep -q 'type: disk'; then
-  incus network show incusbr0 >/dev/null 2>&1 || incus network create incusbr0
-  incus profile device add default root disk path=/ pool="$POOL_NAME"
-  incus profile device add default eth0 nic network=incusbr0 name=eth0
-fi
+# Source the same policy entry point used to upgrade an existing drained host.
+# It leaves the calculated capacity variables available for D1 registration.
+# shellcheck source=infra/configure-multitenant.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/configure-multitenant.sh"
 
 echo "== [3/6] nftables baseline =="
 mkdir -p /etc/nftables.d
@@ -77,7 +82,8 @@ table inet codestation {
     # No outbound SMTP from tenant containers, ever (spec §10 networking).
     tcp dport 25 drop
     # Blunt scanning/brute-force: cap new outbound connections per source.
-    ct state new meter cs-connrate { ip saddr limit rate over 60/second } drop
+    meta nfproto ipv4 ct state new meter cs-v4-connrate { ip saddr limit rate over 60/second } drop
+    meta nfproto ipv6 ct state new meter cs-v6-connrate { ip6 saddr limit rate over 60/second } drop
   }
 }
 NFT
@@ -116,6 +122,7 @@ if [[ ! -f /etc/codestation/daemon.json ]]; then
   "x25519PrivateKey": "${X25519_PRIV}",
   "baseImage": "codestation-base",
   "storagePool": "${POOL_NAME}",
+  "project": "${PROJECT_NAME}",
   "tlsCertPath": "/etc/codestation/daemon.crt",
   "tlsKeyPath": "/etc/codestation/daemon.key"
 }
@@ -132,12 +139,6 @@ echo "== [6/6] register host =="
 IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
 CERT_FP=$(openssl x509 -in /etc/codestation/daemon.crt -noout -fingerprint -sha256 | cut -d= -f2)
 X25519_PUB=$(cat /etc/codestation/daemon.x25519.pub)
-RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-# Reserve 20% for host/incus overhead, then 25% of the remainder for upgrades (§10).
-RAM_USABLE=$(( RAM_MB * 80 / 100 ))
-RAM_RESERVE=$(( RAM_USABLE * 25 / 100 ))
-DISK_GB=$(incus storage info "$POOL_NAME" 2>/dev/null | awk '/total space/ {print int($NF)}' || echo 100)
-
 cat <<EOF
 
 ============================================================
@@ -150,10 +151,12 @@ Host bootstrapped. Next steps:
 
    npx wrangler d1 execute codestation --remote --command "
    INSERT INTO hosts (id, ipv4, ssh_hostname, daemon_endpoint, daemon_cert_fp,
-     daemon_pubkey, ram_total_mb, ram_reserve_mb, disk_total_gb, status, joined_at)
+     daemon_pubkey, ram_total_mb, ram_reserve_mb, vcpu_capacity,
+     disk_total_gb, status, joined_at, last_seen_at)
    VALUES ('${HOST_ID}', '${IPV4}', '${IPV4}', 'https://${IPV4}:${DAEMON_PORT}',
-     '${CERT_FP}', '${X25519_PUB}', ${RAM_USABLE}, ${RAM_RESERVE}, ${DISK_GB:-100},
-     'active', $(date +%s)000);"
+     '${CERT_FP}', '${X25519_PUB}', ${RAM_USABLE}, ${RAM_RESERVE}, ${VCPU_CAPACITY},
+     ${DISK_GB}, 'draining', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+     CAST(strftime('%s', 'now') AS INTEGER) * 1000);"
 
    (set ssh_hostname to a DNS name if you have one)
 
@@ -161,5 +164,11 @@ Host bootstrapped. Next steps:
    error 1003) or a self-signed cert. Before real use, give the daemon a
    hostname + Let's Encrypt cert and update daemon_endpoint — see
    "Daemon endpoint TLS" in infra/RUNBOOK.md.
+
+4. After the signed health/stats checks pass, make the host eligible:
+     UPDATE hosts SET status = 'active' WHERE id = '${HOST_ID}';
+
+Capacity: ${TENANT_SLOTS} tenant(s), ${VCPU_CAPACITY} vCPU reservations,
+${RAM_CAPACITY_MB} MiB allocatable RAM, ${DISK_GB} GiB safe pool capacity.
 ============================================================
 EOF

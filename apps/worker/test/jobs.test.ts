@@ -11,6 +11,7 @@ import {
   enqueueJobForUser,
   getContainerForUser,
   getJob,
+  HOST_HEARTBEAT_MAX_AGE_MS,
   pickHost,
   refreshJob,
   startProvision,
@@ -264,7 +265,7 @@ describe("refreshJob", () => {
   it("destroy success quarantines the port, releases host accounting, and drops the row", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
     await seedContainer(env, { status: "running" });
     await env.DB.prepare(
       "INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES ('user-1', 1, 2)",
@@ -277,9 +278,11 @@ describe("refreshJob", () => {
 
     expect(await getContainerForUser(env, "user-1")).toBeNull();
     const host = await env.DB.prepare("SELECT * FROM hosts WHERE id = 'host-1'").first<{
+      vcpu_allocated: number;
       ram_allocated_mb: number;
       disk_allocated_gb: number;
     }>();
+    expect(host?.vcpu_allocated).toBe(0);
     expect(host?.ram_allocated_mb).toBe(0);
     expect(host?.disk_allocated_gb).toBe(0);
     const q = await env.DB.prepare("SELECT * FROM port_quarantine WHERE host_id = 'host-1'").all<{
@@ -292,7 +295,11 @@ describe("refreshJob", () => {
   it("applies destroy completion side effects once when dashboard and cron poll concurrently", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedHost(env, {
+      vcpu_allocated: 2,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 32,
+    });
     await seedContainer(env, { status: "destroying" });
     const now = Date.now();
     await env.DB.prepare(
@@ -317,9 +324,9 @@ describe("refreshJob", () => {
     await Promise.all([refreshJob(env, job), refreshJob(env, job)]);
 
     const host = await env.DB.prepare(
-      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
-    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
   it("renews the D1 lease when the daemon reports a running heartbeat", async () => {
@@ -377,27 +384,45 @@ describe("pickHost (scheduler §10)", () => {
     await seedHost(env, { id: "small", ram_total_mb: 32768, ram_reserve_mb: 8192, ram_allocated_mb: 20000 });
     await seedHost(env, { id: "big", ram_total_mb: 65536, ram_reserve_mb: 16384, ram_allocated_mb: 0 });
 
-    expect((await pickHost(env, 2048, 8))?.id).toBe("big");
+    expect((await pickHost(env, 1, 2048, 8))?.id).toBe("big");
   });
 
   it("respects the upgrade-headroom reserve", async () => {
     const { env } = makeEnv();
     // 4096 total, 2048 reserved, 1024 allocated -> only 1024 non-reserved free.
     await seedHost(env, { ram_total_mb: 4096, ram_reserve_mb: 2048, ram_allocated_mb: 1024 });
-    expect(await pickHost(env, 2048, 8)).toBeNull();
+    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
   });
 
   it("rejects hosts whose ZFS pool cannot fit the disk quota", async () => {
     const { env } = makeEnv();
     await seedHost(env, { disk_total_gb: 40, disk_allocated_gb: 36 });
-    expect(await pickHost(env, 2048, 8)).toBeNull();
-    expect(await pickHost(env, 2048, 4)).not.toBeNull();
+    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+    expect(await pickHost(env, 1, 2048, 4)).not.toBeNull();
   });
 
   it("ignores inactive hosts", async () => {
     const { env } = makeEnv();
     await seedHost(env, { status: "draining" });
-    expect(await pickHost(env, 2048, 8)).toBeNull();
+    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+  });
+
+  it("rejects a host whose vCPU reservation ceiling is full", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, { vcpu_capacity: 3, vcpu_allocated: 3 });
+    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+  });
+
+  it("rejects stale or currently failing daemon heartbeats", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, {
+      last_seen_at: Date.now() - HOST_HEARTBEAT_MAX_AGE_MS - 1,
+    });
+    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+
+    const fresh = makeEnv();
+    await seedHost(fresh.env, { consecutive_failures: 1 });
+    expect(await pickHost(fresh.env, 1, 2048, 8)).toBeNull();
   });
 });
 
@@ -426,9 +451,11 @@ describe("startProvision", () => {
     expect(JSON.parse(container.agents)).toEqual(["claude", "pi"]);
 
     const host = await env.DB.prepare("SELECT * FROM hosts WHERE id = 'host-1'").first<{
+      vcpu_allocated: number;
       ram_allocated_mb: number;
       disk_allocated_gb: number;
     }>();
+    expect(host?.vcpu_allocated).toBe(1);
     expect(host?.ram_allocated_mb).toBe(2048);
     expect(host?.disk_allocated_gb).toBe(16);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
@@ -439,6 +466,7 @@ describe("startProvision", () => {
     const alice = await seedUser(env, "alice");
     const bob = await seedUser(env, "bob");
     await seedHost(env, {
+      vcpu_capacity: 1,
       ram_total_mb: 4096,
       ram_reserve_mb: 2048,
       disk_total_gb: 16,
@@ -457,9 +485,9 @@ describe("startProvision", () => {
       "waitlisted",
     ]);
     const host = await env.DB.prepare(
-      "SELECT ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
-    ).first<{ ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
     expect(daemon.submitted).toHaveLength(1);
   });
 });
