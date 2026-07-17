@@ -9,6 +9,7 @@ export type Bindings = Omit<
   | "BASE_URL"
   | "WORLD_ID_APP_ID"
   | "WORLD_ID_RP_ID"
+  | "WORLD_ID_ACTION"
   | "WORLD_ID_ENVIRONMENT"
   | "DEV_AUTH"
   | "GITHUB_APP_CLIENT_ID"
@@ -18,6 +19,7 @@ export type Bindings = Omit<
   BASE_URL: string;
   WORLD_ID_APP_ID: string;
   WORLD_ID_RP_ID: string;
+  WORLD_ID_ACTION: string;
   WORLD_ID_ENVIRONMENT: "production" | "staging";
   DEV_AUTH: string;
   GITHUB_APP_CLIENT_ID: string;

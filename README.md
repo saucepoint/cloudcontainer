@@ -25,8 +25,9 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 
 ## User flow
 
-1. The user completes one World ID 4.0 Session proof. The RP-scoped
-   session_id provides both one-human/one-account uniqueness and repeat login.
+1. The user completes a World ID proof for the fixed `codestation-login`
+   action. IDKit accepts v4 proof-of-human credentials with an Orb v3 fallback;
+   browsers holding an existing v4 session continue to prove that session.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the server. Later credential
@@ -139,11 +140,12 @@ Copy the returned IDs into wrangler.jsonc, then:
     npx wrangler secret put RP_SIGNING_KEY
     npx wrangler deploy
 
-World ID setup is in the World Developer Portal. The app must use World ID 4.0
-and provide `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, `WORLD_ID_ENVIRONMENT`, and the
-one-time RP signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real
-World App. Use `staging` only when the configured app/RP and World simulator are
-also staging. `DEV_AUTH` does not select the World ID environment.
+World ID setup is in the World Developer Portal. The app must be upgraded for
+World ID 4.0, register the `WORLD_ID_ACTION` action, and provide
+`WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, `WORLD_ID_ENVIRONMENT`, and the one-time RP
+signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real World App. Use
+`staging` only when the configured app/RP and World simulator are also staging.
+`DEV_AUTH` does not select the World ID environment.
 
 For optional GitHub repository access, register a public GitHub App and set
 `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. Set `GITHUB_APP_SLUG` to

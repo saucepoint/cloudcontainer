@@ -11,7 +11,7 @@ import {
   SESSION_COOKIE,
   sessionCookie,
 } from "./sessions.js";
-import { signSessionRequest, verifySessionProof } from "./worldid.js";
+import { signWorldIdRequest, verifyWorldIdProof } from "./worldid.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -28,20 +28,19 @@ async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 
-/** Look up or create the account for a World ID session identity. Returns null if banned. */
-async function findOrCreateUser(env: Bindings, sessionId: string): Promise<UserRow | null> {
+/** Look up or create the account for a verified World ID identity. Returns null if banned. */
+async function findOrCreateUser(env: Bindings, identityKey: string): Promise<UserRow | null> {
   const existing = await env.DB.prepare("SELECT * FROM users WHERE world_id_session_id = ?")
-    .bind(sessionId)
+    .bind(identityKey)
     .first<UserRow>();
   if (existing) return existing.status === "banned" ? null : existing;
 
-  // Signup: `session_id` is stable per (RP, human) — it already bounds one
-  // human to one account, same as a nullifier — so we reject banned ones
-  // (HMAC match survives account deletion, §13).
+  // The v4 session ID or action-scoped normalized nullifier bounds an accepted
+  // identity to one account. The HMAC match survives account deletion (§13).
   const banned = await env.DB.prepare(
     "SELECT nullifier_hmac FROM banned_nullifiers WHERE nullifier_hmac = ?",
   )
-    .bind(hmacNullifier(sessionId, env.NULLIFIER_HMAC_KEY))
+    .bind(hmacNullifier(identityKey, env.NULLIFIER_HMAC_KEY))
     .first();
   if (banned) return null;
 
@@ -50,14 +49,14 @@ async function findOrCreateUser(env: Bindings, sessionId: string): Promise<UserR
     await env.DB.prepare(
       "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES (?, ?, ?, ?)",
     )
-      .bind(id, sessionId, sessionId, Date.now())
+      .bind(id, identityKey, identityKey, Date.now())
       .run();
     return getUser(env, id);
   } catch (error) {
-    // Two tabs can complete the same World ID proof concurrently. The unique
-    // session identity chooses the winner; the other request logs into it.
+    // Two tabs can complete the same proof concurrently. The unique identity
+    // chooses the winner; the other request logs into it.
     const winner = await env.DB.prepare("SELECT * FROM users WHERE world_id_session_id = ?")
-      .bind(sessionId)
+      .bind(identityKey)
       .first<UserRow>();
     if (winner) return winner.status === "banned" ? null : winner;
     throw error;
@@ -74,12 +73,16 @@ async function loginAndRedirect(env: Bindings, user: UserRow, secure: boolean) {
 }
 
 export const authRoutes = new Hono<AppContext>()
-  // Client fetches this right before opening the IDKit session request; the RP
-  // signature itself carries the replay-protection (nonce + short TTL), so no
-  // server-side state needs to be stashed for this step.
+  // Client fetches this immediately before opening IDKit. New sign-ins bind
+  // the fixed login action; saved v4 sessions retain their actionless context.
   .get("/auth/session/rp-context", (c) => {
+    const mode = c.req.query("mode") === "session" ? "session" : "proof";
     c.header("cache-control", "no-store");
-    return c.json({ app_id: c.env.WORLD_ID_APP_ID, rp_context: signSessionRequest(c.env) });
+    return c.json({
+      app_id: c.env.WORLD_ID_APP_ID,
+      action: c.env.WORLD_ID_ACTION,
+      rp_context: signWorldIdRequest(c.env, mode),
+    });
   })
   // Capture a World App protocol outcome when the native client only shows a
   // generic error. The browser intentionally sends no proof, identity, or
@@ -105,13 +108,13 @@ export const authRoutes = new Hono<AppContext>()
 
     let identity;
     try {
-      identity = await verifySessionProof(c.env, body.idkitResponse);
+      identity = await verifyWorldIdProof(c.env, body.idkitResponse);
     } catch (err) {
       console.log(JSON.stringify({ event: "worldid_verify_failed", error: String(err) }));
       return c.json({ error: "World ID verification failed. Please try again." }, 502);
     }
 
-    const user = await findOrCreateUser(c.env, identity.sessionId);
+    const user = await findOrCreateUser(c.env, identity.identityKey);
     if (!user) return c.json({ error: "This World ID is not eligible for an account." }, 403);
     const { location, cookie } = await loginAndRedirect(c.env, user, c.env.BASE_URL.startsWith("https"));
     c.header("set-cookie", cookie);

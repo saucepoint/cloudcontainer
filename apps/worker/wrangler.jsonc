@@ -38,6 +38,9 @@
     // World ID 4.0 RP id, minted alongside the signing key when the app is
     // registered/upgraded for v4 (Developer Portal → configure_world_id). Public identifier.
     "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
+    // Fixed Developer Portal action used for v4 proof-of-human and Orb v3
+    // fallback. Changing it changes the nullifier and therefore account identity.
+    "WORLD_ID_ACTION": "codestation-login",
     // Must match the Developer Portal app/RP and the client used to approve
     // proofs. Real World App devices use "production"; the simulator uses
     // "staging". Keep this independent from DEV_AUTH.

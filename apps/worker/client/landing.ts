@@ -2,7 +2,9 @@ import {
   CredentialRequest,
   IDKit,
   any,
+  proofOfHuman,
   type IDKitErrorCodes,
+  type IDKitRequestConfig,
   type IDKitResultSession,
   type IDKitSessionConfig,
   type RpContext,
@@ -21,7 +23,7 @@ const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
   unknown_rp: "World ID does not recognize this site’s RP ID.",
   inactive_rp: "This site’s World ID registration is not active yet.",
   world_id_4_not_available: "Your World App does not have a World ID 4.0 credential yet.",
-  credential_unavailable: "Your World App does not have the required proof-of-human credential.",
+  credential_unavailable: "This World ID is not Orb-verified and cannot prove personhood.",
   malformed_request: "World ID rejected this site’s request configuration.",
   connection_failed: "The connection to World App was lost. Please try again.",
   failed_by_host_app: "World App could not process this request. Please try again.",
@@ -35,6 +37,7 @@ const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
 
 type RpContextResponse = {
   app_id: `app_${string}`;
+  action: string;
   rp_context: RpContext;
 };
 
@@ -62,8 +65,8 @@ function readSavedSessionId(): `session_${string}` | null {
   return null;
 }
 
-async function fetchRpContext(): Promise<RpContextResponse> {
-  const response = await fetch("/auth/session/rp-context", {
+async function fetchRpContext(mode: "proof" | "session"): Promise<RpContextResponse> {
+  const response = await fetch(`/auth/session/rp-context?mode=${mode}`, {
     headers: { accept: "application/json" },
     cache: "no-store",
   });
@@ -75,7 +78,13 @@ async function fetchRpContext(): Promise<RpContextResponse> {
     throw new Error(message);
   }
   const context = body as Partial<RpContextResponse> | null;
-  if (!context || typeof context.app_id !== "string" || !context.app_id.startsWith("app_") || !context.rp_context) {
+  if (
+    !context
+    || typeof context.app_id !== "string"
+    || !context.app_id.startsWith("app_")
+    || typeof context.action !== "string"
+    || !context.rp_context
+  ) {
     throw new Error("World ID returned an invalid request context.");
   }
   return context as RpContextResponse;
@@ -113,17 +122,22 @@ async function startWorldIdSignIn(): Promise<void> {
   qrContainer!.replaceChildren();
 
   try {
-    const { app_id, rp_context } = await fetchRpContext();
-    const config: IDKitSessionConfig = {
+    const savedSessionId = readSavedSessionId();
+    const mode = savedSessionId ? "session" : "proof";
+    const { app_id, action, rp_context } = await fetchRpContext(mode);
+    const baseConfig: IDKitSessionConfig = {
       app_id,
       rp_context,
       environment: button!.dataset.worldIdEnvironment === "staging" ? "staging" : "production",
     };
-    const savedSessionId = readSavedSessionId();
-    const request = await (savedSessionId
-      ? IDKit.proveSession(savedSessionId, config)
-      : IDKit.createSession(config)
-    ).constraints(any(CredentialRequest("proof_of_human")));
+    const request = savedSessionId
+      ? await IDKit.proveSession(savedSessionId, baseConfig)
+        .constraints(any(CredentialRequest("proof_of_human")))
+      : await IDKit.request({
+          ...baseConfig,
+          action,
+          allow_legacy_proofs: true,
+        } satisfies IDKitRequestConfig).preset(proofOfHuman());
 
     await renderConnection(request.connectorURI);
     const completion = await request.pollUntilCompletion({ timeout: 180_000 });
@@ -131,10 +145,6 @@ async function startWorldIdSignIn(): Promise<void> {
       await reportFailure(completion.error, request.requestId);
       throw new Error(ERROR_MESSAGES[completion.error] ?? `World ID error: ${completion.error}`);
     }
-    if (!isSessionResult(completion.result)) {
-      throw new Error("World App returned an invalid session proof.");
-    }
-
     status!.textContent = "Verifying…";
     qrContainer!.replaceChildren();
     const response = await fetch("/auth/session/verify", {
@@ -154,10 +164,12 @@ async function startWorldIdSignIn(): Promise<void> {
       throw new Error("Sign-in returned an invalid redirect.");
     }
 
-    try {
-      localStorage.setItem(SESSION_STORAGE_KEY, completion.result.session_id);
-    } catch {
-      // The authenticated cookie still works when storage is unavailable.
+    if (isSessionResult(completion.result)) {
+      try {
+        localStorage.setItem(SESSION_STORAGE_KEY, completion.result.session_id);
+      } catch {
+        // The authenticated cookie still works when storage is unavailable.
+      }
     }
     window.location.assign(redirect);
   } catch (error) {

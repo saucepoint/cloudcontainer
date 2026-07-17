@@ -51,8 +51,11 @@ describe("World ID environment wiring", () => {
     expect(landingClient).toContain("localStorage.removeItem(SESSION_STORAGE_KEY)");
   });
 
-  it("sends World ID's documented proof-of-human session constraint tree", () => {
+  it("retains v4 sessions and enables the proof-of-human v3 fallback for new sign-ins", () => {
     expect(landingClient).toContain('constraints(any(CredentialRequest("proof_of_human")))');
+    expect(landingClient).toContain("allow_legacy_proofs: true");
+    expect(landingClient).toContain(".preset(proofOfHuman())");
+    expect(landingClient).toContain('const mode = savedSessionId ? "session" : "proof"');
   });
 
   it("bundles typed IDKit and QR dependencies without a runtime CDN global", () => {

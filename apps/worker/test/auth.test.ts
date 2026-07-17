@@ -97,6 +97,48 @@ describe("signup and login via session identity", () => {
 });
 
 describe("/auth/session/verify", () => {
+  it("creates an account from a verified Orb v3 nullifier", async () => {
+    const { env } = makeEnv();
+    const nullifier = `0x${"a".repeat(64)}`;
+    const idkitResponse = {
+      protocol_version: "3.0",
+      nonce: "proof-nonce",
+      action: "codestation-login",
+      environment: "production",
+      responses: [{
+        identifier: "orb",
+        proof: "0xproof",
+        merkle_root: `0x${"b".repeat(64)}`,
+        nullifier,
+      }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        success: true,
+        action: "codestation-login",
+        nullifier,
+      }), { status: 200 }),
+    ));
+
+    const res = await app().request(
+      "/auth/session/verify",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idkitResponse }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    const users = await env.DB.prepare("SELECT world_id_session_id FROM users").all<{
+      world_id_session_id: string;
+    }>();
+    expect(users.results).toEqual([{
+      world_id_session_id: `worldid-nullifier:${BigInt(nullifier).toString(10)}`,
+    }]);
+  });
+
   it("creates the session for the identity confirmed by the verifier", async () => {
     const { env } = makeEnv();
     const submittedSessionId = `session_${"b".repeat(128)}`;

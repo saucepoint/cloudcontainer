@@ -79,7 +79,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- World ID 4.0 Session proof for signup uniqueness and repeat login.
+- World ID proof-of-human authentication with World ID 4.0 and Orb v3 support.
 - One free environment per account.
 - Free resources: 1 vCPU, 2048 MiB RAM, an 8 GiB persistent home volume,
   and an 8 GiB disposable root filesystem.
@@ -131,9 +131,10 @@ The landing page explains three facts before sign-in:
 - the current service is free and needs no credit card; and
 - the environment is a shared-kernel cloud container.
 
-The user completes one World ID 4.0 Session proof. A first proof creates the
-account. A later proof with the same RP-scoped session_id signs into the same
-account.
+For a new sign-in, the user proves the fixed `codestation-login` action with a
+v4 proof-of-human credential or the Orb v3 fallback. The action-scoped
+nullifier is normalized and reused for later sign-ins. A browser that already
+holds a v4 session ID continues to use the session-proof path.
 
 ### 4.2 Configure and launch
 
@@ -241,21 +242,24 @@ usable with keyboard alone. Specifically:
 
 ## 5. Identity, sessions, and development bypass
 
-### World ID 4.0
+### World ID
 
-Codestation uses IDKit Session proofs, not the retired separate verify-plus-OIDC
-design. The verified session_id is stable for a human and relying party, so it
-serves both signup uniqueness and repeat authentication. The per-proof
-session_nullifier is replay-related proof data and is not the account identity.
+New sign-ins use IDKit's proof-of-human preset for the fixed
+`codestation-login` action with `allow_legacy_proofs` enabled. The Developer
+Portal verifies both v4 uniqueness proofs and Orb v3 proofs. The backend
+requires the configured action and credential, normalizes the verified
+nullifier to a decimal integer, and uses that action-scoped value as the account
+identity. Existing saved v4 sessions remain accepted by their verified
+RP-scoped session_id.
 
-The canonical identity column is world_id_session_id and it is UNIQUE. Internal
-relationships use a generated user UUID. The current migrated schema also
-retains a legacy world_id_nullifier column populated with the same session_id;
-new logic must not treat that compatibility column as a separate proof.
+The canonical compatibility column is world_id_session_id and it is UNIQUE;
+it stores either a v4 session ID or a namespaced normalized nullifier. Internal
+relationships use a generated user UUID. The world_id_nullifier column mirrors
+the same identity key and must not be treated as a second proof.
 
-For an abuse ban, the service stores an HMAC-SHA256 of session_id in
-banned_nullifiers. This keyed value may remain after account deletion solely to
-prevent immediate re-signup by a banned identity.
+For an abuse ban, the service stores an HMAC-SHA256 of the canonical identity
+key in banned_nullifiers. This keyed value may remain after account deletion
+solely to prevent immediate re-signup by a banned identity.
 
 ### Application sessions
 
@@ -680,9 +684,9 @@ coverage.
 A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
-1. **Identity:** a valid World ID v4 Session proof creates or reuses exactly one
-   account; a banned identity is refused; logout revokes the application
-   session.
+1. **Identity:** a valid v4 proof-of-human, Orb v3, or retained v4 session proof
+   creates or reuses the account for its verified identity; a banned identity
+   is refused; logout revokes the application session.
 2. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.
