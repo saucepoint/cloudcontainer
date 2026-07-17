@@ -6,6 +6,10 @@ import { LandingPage, OnboardingPage } from "../src/pages/views.js";
 import { createSession } from "../src/sessions.js";
 import { makeEnv, seedUser } from "./helpers/env.js";
 
+const workerPackage = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { scripts: { "build:client": string } };
+
 function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1] ?? "")
@@ -38,17 +42,30 @@ describe("World ID environment wiring", () => {
   it("renders the configured environment independently of dev auth", () => {
     const html = String(LandingPage({ devAuth: true, worldIdEnvironment: "production" }));
     expect(html).toContain('data-world-id-environment="production"');
-    expect(landingClient).toContain("btn?.dataset.worldIdEnvironment");
+    expect(landingClient).toContain('button!.dataset.worldIdEnvironment === "staging"');
     expect(html).toContain("Dev login");
   });
 
   it("discards stale non-v4 session IDs before calling proveSession", () => {
     expect(landingClient).toContain("/^session_[0-9a-f]{128}$/i");
-    expect(landingClient).toContain("localStorage.removeItem('cs_world_id_session')");
+    expect(landingClient).toContain("localStorage.removeItem(SESSION_STORAGE_KEY)");
   });
 
   it("sends World ID's documented proof-of-human session constraint tree", () => {
-    expect(landingClient).toContain("IDKit.any(IDKit.CredentialRequest('proof_of_human'))");
+    expect(landingClient).toContain('constraints(any(CredentialRequest("proof_of_human")))');
+  });
+
+  it("bundles typed IDKit and QR dependencies without a runtime CDN global", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(landingClient).toContain('from "@worldcoin/idkit-core"');
+    expect(landingClient).toContain('import QRCode from "qrcode"');
+    expect(html).not.toContain("cdn.jsdelivr.net");
+  });
+
+  it("ships the IDKit WebAssembly sidecar at the URL used by the bundle", () => {
+    expect(workerPackage.scripts["build:client"]).toContain(
+      "@worldcoin/idkit-core/dist/idkit_wasm_bg.wasm public/idkit_wasm_bg.wasm",
+    );
   });
 });
 
@@ -246,6 +263,28 @@ describe("beginner-friendly provisioning UI", () => {
       dashboardClient.indexOf("if (container.sshCommand)"),
     );
     expect(dashboardClient).toContain("refreshKeysAndConnection");
+  });
+
+  it("keeps agent enrollment and manual key entry as exclusive, animated paths", () => {
+    expect(dashboardClient).toContain('import { AnimatePresence, motion, useReducedMotion } from "motion/react"');
+    expect(dashboardClient).toContain('type EnrollmentMode = "agent" | "manual";');
+    expect(dashboardClient).toContain('const [enrollmentMode, setEnrollmentMode] = React.useState<EnrollmentMode | null>(null);');
+    expect(dashboardClient).toContain('enrollmentMode === "agent" && enrollment');
+    expect(dashboardClient).toContain('enrollmentMode === "manual"');
+    expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="wait">');
+    expect(dashboardClient).toContain('initial={reducedMotion ? false : { opacity: 0, y: 4 }}');
+    expect(dashboardClient).not.toContain('{enrollment ? <div>');
+    expect(dashboardClient).not.toContain('{showForm ? <div id="keyform">');
+  });
+
+  it("keeps the agent prompt collapsed until requested and prioritizes copying it", () => {
+    const enrollmentView = dashboardClient.slice(
+      dashboardClient.indexOf('enrollmentMode === "agent" && enrollment'),
+      dashboardClient.indexOf('enrollmentMode === "manual"'),
+    );
+    expect(enrollmentView.indexOf('Copy prompt')).toBeLessThan(enrollmentView.indexOf('<details>'));
+    expect(enrollmentView).toContain('<summary>Review the setup prompt</summary>');
+    expect(enrollmentView).toContain('<pre className="ssh prompt" id="enrollprompt">{prompt}</pre>');
   });
 
   it("explains agent choices without recommending one", () => {

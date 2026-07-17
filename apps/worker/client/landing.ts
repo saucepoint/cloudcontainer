@@ -1,115 +1,171 @@
-export {};
+import {
+  CredentialRequest,
+  IDKit,
+  any,
+  type IDKitErrorCodes,
+  type IDKitResultSession,
+  type IDKitSessionConfig,
+  type RpContext,
+} from "@worldcoin/idkit-core";
+import QRCode from "qrcode";
 
-const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
-const element = (id: string): any => document.getElementById(id);
-const btn = element('worldid-btn');
-const status = element('worldid-status');
-const qrWrap = element('worldid-qr');
-const environment = btn?.dataset.worldIdEnvironment;
-const WORLD_ID_SESSION_ID_RE = /^session_[0-9a-f]{128}$/i;
+const SESSION_STORAGE_KEY = "cs_world_id_session";
+const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
+const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
+  timeout: "Timed out waiting for World App.",
+  cancelled: "Cancelled in World App.",
+  user_rejected: "Cancelled in World App.",
+  verification_rejected: "Cancelled in World App.",
+  invalid_network: "World ID environment mismatch. This site must use production with the real World App.",
+  invalid_rp_signature: "World ID rejected this site’s RP signing key.",
+  unknown_rp: "World ID does not recognize this site’s RP ID.",
+  inactive_rp: "This site’s World ID registration is not active yet.",
+  world_id_4_not_available: "Your World App does not have a World ID 4.0 credential yet.",
+  credential_unavailable: "Your World App does not have the required proof-of-human credential.",
+  malformed_request: "World ID rejected this site’s request configuration.",
+  connection_failed: "The connection to World App was lost. Please try again.",
+  failed_by_host_app: "World App could not process this request. Please try again.",
+  generic_error: "World App could not process this request. Please try again.",
+  unexpected_response: "World App returned an unexpected response. Please try again.",
+  duplicate_nonce: "This World ID request was already used. Please start again.",
+  timestamp_too_old: "This World ID request expired. Please start again.",
+  timestamp_too_far_in_future: "Your device time appears incorrect. Please correct it and try again.",
+  invalid_timestamp: "Your device time appears incorrect. Please correct it and try again.",
+};
 
-async function startWorldIdSignIn() {
-  if (typeof IDKit === 'undefined') {
-    status.textContent = 'Could not load World ID. Check your connection and reload.';
-    return;
-  }
-  btn.disabled = true;
-  status.textContent = 'Connecting to World ID…';
-  qrWrap.replaceChildren();
+type RpContextResponse = {
+  app_id: `app_${string}`;
+  rp_context: RpContext;
+};
+
+const button = document.querySelector<HTMLButtonElement>("#worldid-btn");
+const status = document.querySelector<HTMLElement>("#worldid-status");
+const qrContainer = document.querySelector<HTMLElement>("#worldid-qr");
+
+function isSessionId(value: unknown): value is `session_${string}` {
+  return typeof value === "string" && SESSION_ID_PATTERN.test(value);
+}
+
+function isSessionResult(value: unknown): value is IDKitResultSession {
+  return typeof value === "object" && value !== null && isSessionId((value as { session_id?: unknown }).session_id);
+}
+
+function readSavedSessionId(): `session_${string}` | null {
   try {
-    const contextRes = await fetch('/auth/session/rp-context');
-    const context = await contextRes.json().catch(() => ({}));
-    if (!contextRes.ok) throw new Error(context.error || 'Could not start World ID sign-in.');
-    const { app_id, rp_context } = context;
-    let savedSessionId: string | null = null;
-    try {
-      const stored = localStorage.getItem('cs_world_id_session');
-      if (stored && WORLD_ID_SESSION_ID_RE.test(stored)) {
-        savedSessionId = stored;
-      } else if (stored) {
-        // Older builds could leave a non-v4 value here. IDKit.proveSession rejects
-        // it before a request is created, which otherwise makes login look stuck.
-        localStorage.removeItem('cs_world_id_session');
-      }
-    } catch (_) {}
-    const config = { app_id, rp_context, environment: environment };
-    const builder = savedSessionId
-      ? IDKit.proveSession(savedSessionId, config)
-      : IDKit.createSession(config);
-    // World App expects a constraint tree even with only one acceptable
-    // credential. The documented session request wraps proof-of-human in
-    // any(...); omitting that wrapper produces a different bridge payload
-    // that some World App clients reject before they can authorize.
-    const request = await builder.constraints(
-      IDKit.any(IDKit.CredentialRequest('proof_of_human')),
-    );
+    const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stored) return null;
+    if (isSessionId(stored)) return stored;
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // Storage may be disabled. A new World ID session can still be created.
+  }
+  return null;
+}
 
-    if (request.connectorURI) {
-      if (/Mobi|Android/i.test(navigator.userAgent)) {
-        status.textContent = 'Opening World App…';
-        window.location.href = request.connectorURI;
-      } else {
-        status.textContent = 'Scan with World App';
-        const { default: QRCode } = await import(QRCODE_ESM);
-        const canvas = document.createElement('canvas');
-        qrWrap.appendChild(canvas);
-        await QRCode.toCanvas(canvas, request.connectorURI, { width: 220, margin: 1 });
-      }
-    }
+async function fetchRpContext(): Promise<RpContextResponse> {
+  const response = await fetch("/auth/session/rp-context", {
+    headers: { accept: "application/json" },
+    cache: "no-store",
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = typeof (body as { error?: unknown } | null)?.error === "string"
+      ? (body as { error: string }).error
+      : "Could not start World ID sign-in.";
+    throw new Error(message);
+  }
+  const context = body as Partial<RpContextResponse> | null;
+  if (!context || typeof context.app_id !== "string" || !context.app_id.startsWith("app_") || !context.rp_context) {
+    throw new Error("World ID returned an invalid request context.");
+  }
+  return context as RpContextResponse;
+}
 
-    const completion = await request.pollUntilCompletion({ timeout: 180000 });
-    if (!completion.success) {
-      // World App sometimes presents a generic error without exposing its
-      // protocol code in the native UI. Record only that code and the opaque
-      // bridge request ID; never send the proof, session ID, or user data.
-      try {
-        await fetch('/auth/session/failure', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code: completion.error, request_id: request.requestId }),
-          keepalive: true,
-        });
-      } catch (_) {}
-      const messages = {
-        timeout: 'Timed out waiting for World App.',
-        cancelled: 'Cancelled in World App.',
-        user_rejected: 'Cancelled in World App.',
-        verification_rejected: 'Cancelled in World App.',
-        invalid_network: 'World ID environment mismatch. This site must use production with the real World App.',
-        invalid_rp_signature: 'World ID rejected this site’s RP signing key.',
-        unknown_rp: 'World ID does not recognize this site’s RP ID.',
-        inactive_rp: 'This site’s World ID registration is not active yet.',
-        world_id_4_not_available: 'Your World App does not have a World ID 4.0 credential yet.',
-        credential_unavailable: 'Your World App does not have the required proof-of-human credential.',
-        malformed_request: 'World ID rejected this site’s request configuration.',
-        connection_failed: 'The connection to World App was lost. Please try again.',
-        failed_by_host_app: 'World App could not process this request. Please try again.',
-        generic_error: 'World App could not process this request. Please try again.',
-        unexpected_response: 'World App returned an unexpected response. Please try again.',
-        duplicate_nonce: 'This World ID request was already used. Please start again.',
-        timestamp_too_old: 'This World ID request expired. Please start again.',
-        timestamp_too_far_in_future: 'Your device time appears incorrect. Please correct it and try again.',
-        invalid_timestamp: 'Your device time appears incorrect. Please correct it and try again.',
-      };
-      throw new Error((messages as Record<string, string>)[completion.error] || ('World ID error: ' + completion.error));
-    }
-
-    status.textContent = 'Verifying…';
-    qrWrap.replaceChildren();
-    const res = await fetch('/auth/session/verify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idkitResponse: completion.result }),
+async function reportFailure(code: IDKitErrorCodes, requestId: string): Promise<void> {
+  try {
+    await fetch("/auth/session/failure", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, request_id: requestId }),
+      keepalive: true,
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || 'Sign-in failed.');
-
-    try { localStorage.setItem('cs_world_id_session', completion.result.session_id); } catch (_) {}
-    location.href = json.redirect;
-  } catch (e) {
-    status.textContent = e instanceof Error ? e.message : 'Something went wrong. Please try again.';
-    btn.disabled = false;
+  } catch {
+    // Diagnostics must never obscure the user-facing failure.
   }
 }
 
-btn.addEventListener('click', startWorldIdSignIn);
+async function renderConnection(connectorURI: string): Promise<void> {
+  if (/Mobi|Android/i.test(navigator.userAgent)) {
+    status!.textContent = "Opening World App…";
+    window.location.assign(connectorURI);
+    return;
+  }
+
+  status!.textContent = "Scan with World App";
+  const canvas = document.createElement("canvas");
+  qrContainer!.replaceChildren(canvas);
+  await QRCode.toCanvas(canvas, connectorURI, { width: 220, margin: 1 });
+}
+
+async function startWorldIdSignIn(): Promise<void> {
+  button!.disabled = true;
+  status!.textContent = "Connecting to World ID…";
+  qrContainer!.replaceChildren();
+
+  try {
+    const { app_id, rp_context } = await fetchRpContext();
+    const config: IDKitSessionConfig = {
+      app_id,
+      rp_context,
+      environment: button!.dataset.worldIdEnvironment === "staging" ? "staging" : "production",
+    };
+    const savedSessionId = readSavedSessionId();
+    const request = await (savedSessionId
+      ? IDKit.proveSession(savedSessionId, config)
+      : IDKit.createSession(config)
+    ).constraints(any(CredentialRequest("proof_of_human")));
+
+    await renderConnection(request.connectorURI);
+    const completion = await request.pollUntilCompletion({ timeout: 180_000 });
+    if (!completion.success) {
+      await reportFailure(completion.error, request.requestId);
+      throw new Error(ERROR_MESSAGES[completion.error] ?? `World ID error: ${completion.error}`);
+    }
+    if (!isSessionResult(completion.result)) {
+      throw new Error("World App returned an invalid session proof.");
+    }
+
+    status!.textContent = "Verifying…";
+    qrContainer!.replaceChildren();
+    const response = await fetch("/auth/session/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idkitResponse: completion.result }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = typeof (body as { error?: unknown } | null)?.error === "string"
+        ? (body as { error: string }).error
+        : "Sign-in failed.";
+      throw new Error(message);
+    }
+    const redirect = (body as { redirect?: unknown } | null)?.redirect;
+    if (typeof redirect !== "string" || !redirect.startsWith("/")) {
+      throw new Error("Sign-in returned an invalid redirect.");
+    }
+
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, completion.result.session_id);
+    } catch {
+      // The authenticated cookie still works when storage is unavailable.
+    }
+    window.location.assign(redirect);
+  } catch (error) {
+    status!.textContent = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+    button!.disabled = false;
+  }
+}
+
+if (button && status && qrContainer) {
+  button.addEventListener("click", () => void startWorldIdSignIn());
+}

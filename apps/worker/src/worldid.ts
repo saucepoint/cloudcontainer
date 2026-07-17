@@ -11,10 +11,12 @@
  * `session_nullifier` is per-proof replay protection, not a stable identity,
  * and is not persisted beyond request-scoped logging.
  */
+import type { IDKitResultSession } from "@worldcoin/idkit-core";
 import { signRequest } from "@worldcoin/idkit-core/signing";
 import type { Bindings } from "./types.js";
 
 const VERIFY_URL = (rpId: string) => `https://developer.world.org/api/v4/verify/${rpId}`;
+const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
 
 export interface WorldIdRpContext {
   rp_id: string;
@@ -40,28 +42,49 @@ export function signSessionRequest(env: Bindings): WorldIdRpContext {
 
 export interface WorldIdSessionIdentity {
   sessionId: string;
-  sessionNullifier: string | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function parseSessionProof(
+  value: unknown,
+  environment: Bindings["WORLD_ID_ENVIRONMENT"],
+): IDKitResultSession {
+  if (!isRecord(value)) throw new Error("world id session proof must be an object");
+  if (value.protocol_version !== "4.0") {
+    throw new Error("world id session proof must use protocol version 4.0");
+  }
+  if (value.environment !== environment) {
+    throw new Error(
+      `world id environment mismatch: expected ${environment}, received ${String(value.environment)}`,
+    );
+  }
+  if (!SESSION_ID_PATTERN.test(String(value.session_id))) {
+    throw new Error("world id session proof has an invalid session_id");
+  }
+  if (typeof value.nonce !== "string" || !value.nonce) {
+    throw new Error("world id session proof has an invalid nonce");
+  }
+  if (!Array.isArray(value.responses) || !value.responses.some((response) =>
+    isRecord(response) && response.identifier === "proof_of_human" && response.issuer_schema_id === 1
+  )) {
+    throw new Error("world id session proof is missing the proof-of-human credential");
+  }
+  return value as unknown as IDKitResultSession;
+}
+
 /**
  * Forward an IDKit session-proof result to the Developer Portal for verification.
- * The payload is passed through byte-for-byte per the integration guide — no
- * field remapping, no client-supplied re-encoding.
+ * The payload is forwarded as returned by IDKit per the integration guide,
+ * without field remapping or proof re-encoding.
  */
 export async function verifySessionProof(
   env: Bindings,
   idkitResponse: unknown,
 ): Promise<WorldIdSessionIdentity> {
-  const proofEnvironment = (idkitResponse as { environment?: unknown } | null)?.environment;
-  if (proofEnvironment !== env.WORLD_ID_ENVIRONMENT) {
-    throw new Error(
-      `world id environment mismatch: expected ${env.WORLD_ID_ENVIRONMENT}, received ${String(proofEnvironment)}`,
-    );
-  }
+  const proof = parseSessionProof(idkitResponse, env.WORLD_ID_ENVIRONMENT);
 
   const res = await fetch(VERIFY_URL(env.WORLD_ID_RP_ID), {
     method: "POST",
@@ -72,7 +95,7 @@ export async function verifySessionProof(
       "content-type": "application/json",
       "user-agent": "codestation-world-id/1.0",
     },
-    body: JSON.stringify(idkitResponse),
+    body: JSON.stringify(proof),
   });
   const responseBody = await res.text();
   let verifierResponse: Record<string, unknown> | null = null;
@@ -95,20 +118,15 @@ export async function verifySessionProof(
   if (!verifierResponse) {
     throw new Error("world id proof verification failed: verifier returned invalid JSON");
   }
-  const submitted = idkitResponse as {
-    session_id?: unknown;
-    responses?: Array<{ session_nullifier?: unknown }>;
-  };
   const verifiedSessionId = verifierResponse.session_id;
-  const sessionId =
-    typeof verifiedSessionId === "string" && verifiedSessionId
-      ? verifiedSessionId
-      : submitted.session_id;
-  if (typeof sessionId !== "string" || !sessionId) {
-    throw new Error("verified payload missing session_id");
+  if (typeof verifiedSessionId !== "string" || !SESSION_ID_PATTERN.test(verifiedSessionId)) {
+    throw new Error("world id verifier returned an invalid session_id");
   }
-  const nullifier = submitted.responses?.[0]?.session_nullifier;
-  const sessionNullifier =
-    Array.isArray(nullifier) && typeof nullifier[0] === "string" ? nullifier[0] : null;
-  return { sessionId, sessionNullifier };
+  if (verifiedSessionId !== proof.session_id) {
+    throw new Error("world id verifier returned a different session_id");
+  }
+  if ("environment" in verifierResponse && verifierResponse.environment !== env.WORLD_ID_ENVIRONMENT) {
+    throw new Error("world id verifier returned a different environment");
+  }
+  return { sessionId: verifiedSessionId };
 }

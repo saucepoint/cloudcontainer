@@ -100,17 +100,23 @@ describe("/auth/session/verify", () => {
   it("creates the session for the identity confirmed by the verifier", async () => {
     const { env } = makeEnv();
     const submittedSessionId = `session_${"b".repeat(128)}`;
-    const verifiedSessionId = `session_${"c".repeat(128)}`;
     const idkitResponse = {
       protocol_version: "4.0",
+      nonce: "proof-nonce",
       environment: "production",
       session_id: submittedSessionId,
-      responses: [{ session_nullifier: ["nullifier", "action"] }],
+      responses: [{
+        identifier: "proof_of_human",
+        issuer_schema_id: 1,
+        proof: ["proof"],
+        expires_at_min: 1,
+        session_nullifier: ["nullifier", "action"],
+      }],
     };
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ success: true, session_id: verifiedSessionId }), {
+        new Response(JSON.stringify({ success: true, session_id: submittedSessionId }), {
           status: 200,
         }),
       ),
@@ -131,7 +137,7 @@ describe("/auth/session/verify", () => {
     const users = await env.DB.prepare("SELECT world_id_session_id FROM users").all<{
       world_id_session_id: string;
     }>();
-    expect(users.results).toEqual([{ world_id_session_id: verifiedSessionId }]);
+    expect(users.results).toEqual([{ world_id_session_id: submittedSessionId }]);
   });
 });
 

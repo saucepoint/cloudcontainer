@@ -24,8 +24,6 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
   opencode: "The open source AI coding agent.",
 };
 
-const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";
-
 export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production" | "staging" }> = ({
   devAuth,
   worldIdEnvironment,
@@ -62,7 +60,6 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
         No email or card. World ID only verifies that you are one person.
       </p>
       <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
-      <script src={IDKIT_SRC}></script>
       <script type="module" src="/landing.js"></script>
     </div>
   </Layout>
@@ -216,7 +213,7 @@ export const OnboardingPage: FC<{
           <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
             {githubInstallationAvailable
-              ? "Install the GitHub App for a personal or organization account, then clone granted repositories into "
+              ? "Install the GitHub App for a personal or organization account, to clone repositories into "
               : "Connect GitHub, then choose repositories to clone into "}
             <code>~/repos</code>.
           </p>
@@ -234,12 +231,6 @@ export const OnboardingPage: FC<{
               Reauthorize GitHub
             </button>
           </div>
-          {githubInstallationAvailable ? (
-            <p class="muted">
-              Choose the repositories the App may read. Organization installations may require an
-              owner&apos;s approval; after changing access, return here and reauthorize GitHub.
-            </p>
-          ) : null}
           <p id="github-status" class="muted" role="status" aria-live="polite">
             Search by repository name, or enter an exact owner/repository.
           </p>
@@ -269,12 +260,11 @@ export const OnboardingPage: FC<{
           </p>
         </details>
         <details>
-          <summary>Connect Cloudflare for deploys</summary>
+          <summary>Connect Cloudflare</summary>
           <div class="provider" style="border-bottom:0">
             <div class="provider-head">
               <div>
                 <strong>Wrangler sign-in</strong>
-                <small>Log wrangler in with your Cloudflare account — no token to create.</small>
               </div>
               <button type="button" id="wrangler-signin" class="btn secondary">
                 Sign in with Cloudflare
@@ -292,7 +282,7 @@ export const OnboardingPage: FC<{
             <div id="wrangler-flow" role="status" aria-live="polite"></div>
           </div>
           <label for="cloudflare-token">
-            Or paste a scoped API token. You can{" "}
+            or paste an API token. You can{" "}
             <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">
               create one in Cloudflare
             </a>

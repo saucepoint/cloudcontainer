@@ -78,6 +78,7 @@ export const authRoutes = new Hono<AppContext>()
   // signature itself carries the replay-protection (nonce + short TTL), so no
   // server-side state needs to be stashed for this step.
   .get("/auth/session/rp-context", (c) => {
+    c.header("cache-control", "no-store");
     return c.json({ app_id: c.env.WORLD_ID_APP_ID, rp_context: signSessionRequest(c.env) });
   })
   // Capture a World App protocol outcome when the native client only shows a

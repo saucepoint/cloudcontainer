@@ -1,4 +1,5 @@
 import { AGENT_LABELS, LLM_PROVIDER_LABELS, type JobOp } from "@codestation/contract";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 
@@ -38,6 +39,7 @@ type DashboardSnapshot = {
 };
 
 type Enrollment = { endpoint: string; token: string };
+type EnrollmentMode = "agent" | "manual";
 type ContainerAction = JobOp | "retry";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -235,7 +237,8 @@ function SshKeys({
   refresh: () => Promise<void>;
 }) {
   const ready = canManageSshKeys(container);
-  const [showForm, setShowForm] = React.useState(false);
+  const reducedMotion = useReducedMotion();
+  const [enrollmentMode, setEnrollmentMode] = React.useState<EnrollmentMode | null>(null);
   const [publicKey, setPublicKey] = React.useState("");
   const [enrollment, setEnrollment] = React.useState<Enrollment | null>(null);
   const [busy, setBusy] = React.useState("");
@@ -245,7 +248,7 @@ function SshKeys({
   React.useEffect(() => {
     if (!ready) {
       setEnrollment(null);
-      setShowForm(false);
+      setEnrollmentMode(null);
     }
   }, [ready]);
 
@@ -272,11 +275,27 @@ function SshKeys({
       body: JSON.stringify({ pubkey: publicKey }),
     });
     setPublicKey("");
+    setEnrollment(null);
+    setEnrollmentMode(null);
     await refresh();
   });
 
-  const mint = () => void withBusy("mint", async () => {
-    setEnrollment(await api<Enrollment>("/api/enrollment", { method: "POST" }));
+  const openAgentEnrollment = () => {
+    setEnrollmentMode("agent");
+    if (enrollment) return;
+    void withBusy("mint", async () => {
+      setEnrollment(await api<Enrollment>("/api/enrollment", { method: "POST" }));
+    });
+  };
+
+  const openManualEnrollment = () => {
+    setEnrollmentMode("manual");
+  };
+
+  const refreshEnrollment = () => void withBusy("refresh", async () => {
+    await refresh();
+    setEnrollment(null);
+    setEnrollmentMode(null);
   });
 
   const prompt = enrollment ? [
@@ -315,9 +334,61 @@ function SshKeys({
       )}
       {!ready ? <p className="notice"><strong>SSH setup unlocks after the server is ready.</strong> Finish building the server before adding keys or creating an agent setup prompt.</p> : (
         <>
-          <div className="row"><button type="button" className="btn" disabled={Boolean(busy)} onClick={mint}><BusyLabel busy={busy === "mint"}>{keys.length ? "Enroll another device" : "Set up SSH with an agent"}</BusyLabel></button><button type="button" className="btn secondary" onClick={() => setShowForm(true)}>{keys.length ? "Add another key manually" : "Add a key manually"}</button></div>
-          {enrollment ? <div><div className="notice"><strong>Paste this prompt into your local coding agent</strong><p className="muted">It creates a dedicated key, registers only the public half, and configures the short command <code>ssh codestation</code>.</p></div><pre className="ssh prompt" id="enrollprompt">{prompt}</pre><div className="row"><button type="button" className="btn" onClick={() => copy("prompt", prompt)}>{copied === "prompt" ? "Copied ✓" : "Copy prompt"}</button><button type="button" className="btn secondary" disabled={Boolean(busy)} onClick={() => void withBusy("refresh", refresh)}><BusyLabel busy={busy === "refresh"}>I finished — refresh keys</BusyLabel></button></div><details><summary>Doing it by hand? Show the one-time token</summary><pre className="ssh">{enrollment.token}</pre></details></div> : null}
-          {showForm ? <div id="keyform"><p className="muted">First create a key if needed, then print the public half:</p><div className="command-row"><pre className="ssh">{KEY_HELP}</pre><button type="button" className="btn secondary" onClick={() => copy("commands", KEY_HELP)}>{copied === "commands" ? "Copied ✓" : "Copy commands"}</button></div><p className="muted">Paste only the output from the <code>.pub</code> file. Never paste your private key.</p><label htmlFor="newkey">SSH public key</label><textarea id="newkey" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder="ssh-ed25519 AAAA… you@laptop" spellCheck={false} /><div className="row"><button type="button" className="btn" disabled={Boolean(busy)} onClick={save}><BusyLabel busy={busy === "save"}>Save key</BusyLabel></button></div></div> : null}
+          <div className="row">
+            <button type="button" className="btn" disabled={Boolean(busy)} onClick={openAgentEnrollment}>
+              <BusyLabel busy={busy === "mint"}>{keys.length ? "Enroll another device" : "Set up SSH with an agent"}</BusyLabel>
+            </button>
+            <button type="button" className="btn secondary" disabled={Boolean(busy)} onClick={openManualEnrollment}>
+              {keys.length ? "Add another key manually" : "Add a key manually"}
+            </button>
+          </div>
+          <AnimatePresence initial={false} mode="wait">
+            {enrollmentMode === "agent" && enrollment ? (
+              <motion.div
+                key="agent-enrollment"
+                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
+              >
+                <div className="notice">
+                  <strong>Paste this prompt into your local coding agent</strong>
+                  <p className="muted">It creates a dedicated key, registers only the public half, and configures the short command <code>ssh codestation</code>.</p>
+                </div>
+                <div className="row">
+                  <button type="button" className="btn" onClick={() => copy("prompt", prompt)}>{copied === "prompt" ? "Copied ✓" : "Copy prompt"}</button>
+                  <button type="button" className="btn secondary" disabled={Boolean(busy)} onClick={refreshEnrollment}><BusyLabel busy={busy === "refresh"}>I finished — refresh keys</BusyLabel></button>
+                </div>
+                <details>
+                  <summary>Review the setup prompt</summary>
+                  <pre className="ssh prompt" id="enrollprompt">{prompt}</pre>
+                </details>
+                <details>
+                  <summary>Doing it by hand? Show the one-time token</summary>
+                  <pre className="ssh">{enrollment.token}</pre>
+                </details>
+              </motion.div>
+            ) : enrollmentMode === "manual" ? (
+              <motion.div
+                key="manual-enrollment"
+                id="keyform"
+                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
+              >
+                <p className="muted">First create a key if needed, then print the public half:</p>
+                <div className="command-row">
+                  <pre className="ssh">{KEY_HELP}</pre>
+                  <button type="button" className="btn secondary" onClick={() => copy("commands", KEY_HELP)}>{copied === "commands" ? "Copied ✓" : "Copy commands"}</button>
+                </div>
+                <p className="muted">Paste only the output from the <code>.pub</code> file. Never paste your private key.</p>
+                <label htmlFor="newkey">SSH public key</label>
+                <textarea id="newkey" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder="ssh-ed25519 AAAA… you@laptop" spellCheck={false} />
+                <div className="row"><button type="button" className="btn" disabled={Boolean(busy)} onClick={save}><BusyLabel busy={busy === "save"}>Save key</BusyLabel></button></div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
           <div id="enroll"></div>
         </>
       )}
