@@ -42,13 +42,13 @@ export function homeVolumeName(containerId: string): string {
   return `home-${containerName(containerId)}`;
 }
 
-export interface IncusContainer {
+interface IncusContainer {
   name: string;
   status: string;
   config: Record<string, string>;
 }
 
-export const TENANT_PROCESS_LIMIT = 1024;
+const TENANT_PROCESS_LIMIT = 1024;
 
 export class Incus {
   constructor(

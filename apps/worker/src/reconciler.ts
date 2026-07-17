@@ -6,18 +6,20 @@
 import { decryptJsonAtRest } from "@codestation/contract";
 import { daemonStats } from "./daemon.js";
 import {
+  diskReservationGb,
+  HOST_FAILURE_THRESHOLD,
+  HOST_HEARTBEAT_MAX_AGE_MS,
+  pickHost,
+} from "./capacity.js";
+import {
   exchangeGithubTokens,
   githubConfigured,
   pushCredentialsToContainer,
   storeGithubTokens,
 } from "./github.js";
 import {
-  diskReservationGb,
   enqueueJob,
   getHost,
-  HOST_FAILURE_THRESHOLD,
-  HOST_HEARTBEAT_MAX_AGE_MS,
-  pickHost,
   refreshJob,
 } from "./jobs.js";
 import { allocatePort } from "./ports.js";
@@ -25,7 +27,7 @@ import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./
 
 export const STUCK_JOB_MS = 15 * 60 * 1000;
 export const GRACE_DAYS = 7;
-export const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
+const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
 
 /** Run I/O work in parallel without opening an unbounded number of host calls. */
 async function runBounded<T>(

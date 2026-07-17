@@ -31,7 +31,7 @@ export function canonicalString(
   return [method.toUpperCase(), path, timestamp, nonce, toHex(sha256(utf8(body)))].join("\n");
 }
 
-export type SignedHeaders = Record<string, string>;
+type SignedHeaders = Record<string, string>;
 
 export function signRequest(
   method: string,
@@ -53,7 +53,7 @@ export function signRequest(
   };
 }
 
-export type VerifyFailure =
+type VerifyFailure =
   | "missing-headers"
   | "stale-timestamp"
   | "replayed-nonce"

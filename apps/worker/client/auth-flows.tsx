@@ -39,7 +39,7 @@ async function api<T extends object>(path: string, body?: object): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const json = await response.json().catch(() => ({})) as T & { error?: string };
   if (!response.ok) throw new Error(json.error || `request failed: ${response.status}`);

@@ -24,7 +24,7 @@ interface TokenResponse {
   error?: string;
 }
 
-export interface GithubRepository {
+interface GithubRepository {
   fullName: string;
   private: boolean;
   archived: boolean;
@@ -148,7 +148,7 @@ export async function fetchGithubRepository(
 }
 
 /** Search every repository visible to the authenticated GitHub App user token. */
-export async function searchGithubRepositories(
+async function searchGithubRepositories(
   token: string,
   query: string,
 ): Promise<GithubRepository[]> {

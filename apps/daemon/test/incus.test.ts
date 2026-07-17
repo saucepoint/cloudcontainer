@@ -4,7 +4,7 @@ import { Incus, shellQuote, type ExecFn } from "../src/incus.js";
 function capture(): { calls: Array<{ args: string[]; stdin?: string }>; exec: ExecFn } {
   const calls: Array<{ args: string[]; stdin?: string }> = [];
   const exec: ExecFn = async (_cmd, args, stdin) => {
-    calls.push({ args, stdin });
+    calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
     return { stdout: "", stderr: "" };
   };
   return { calls, exec };

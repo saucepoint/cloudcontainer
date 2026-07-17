@@ -31,7 +31,7 @@ interface Call {
 
 function fakeExec(calls: Call[], respond?: (args: string[]) => string): ExecFn {
   return async (_cmd, args, stdin) => {
-    calls.push({ args, stdin });
+    calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
     // Fresh provision: the container and volume don't exist yet.
     if (args[0] === "info" || (args[0] === "storage" && args[2] === "show")) {
       throw new Error("not found");
@@ -198,7 +198,7 @@ describe("provision command construction", () => {
     let failInstall = true;
     let failCleanupDelete = true;
     const exec: ExecFn = async (_cmd, args, stdin) => {
-      calls.push({ args, stdin });
+      calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
       if (args[0] === "info") {
         if (!rootExists) throw new Error("not found");
         return { stdout: "", stderr: "" };
@@ -438,6 +438,28 @@ describe("provision command construction", () => {
       "invalid sealed credential payload",
     );
     expect(calls).toHaveLength(0);
+  });
+
+  it("rejects malformed Wrangler auth without exposing its contents in the error", async () => {
+    const sealed = sealJson(
+      { wranglerOauth: '{"oauth_token":"CANARY-secret"}' },
+      hostKeys.publicKey,
+    );
+    const calls: Call[] = [];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+
+    const error = await provisioner.run({
+      op: "refresh-credentials",
+      jobId: "j-invalid-wrangler",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      dashboardUrl: "https://codestation.example",
+      sealedCredentials: sealed,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("invalid Wrangler OAuth payload");
+    expect((error as Error).message).not.toContain("CANARY");
+    expect(calls.every((call) => call.stdin === undefined)).toBe(true);
   });
 });
 

@@ -2,20 +2,10 @@ import type { FC } from "hono/jsx";
 import {
   AGENT_LABELS,
   AGENTS,
-  INPUT_LIMITS,
-  LLM_PROVIDERS,
-  OAUTH_ONLY_LLM_PROVIDERS,
   type Agent,
   type LlmProvider,
 } from "@codestation/contract";
 import { Layout } from "./layout.js";
-
-/** Providers the wizard form can submit directly; OAuth-only ones are stored
- * server-side the moment their sign-in flow completes. */
-const OAUTH_ONLY_PROVIDER_SET: ReadonlySet<LlmProvider> = new Set(OAUTH_ONLY_LLM_PROVIDERS);
-const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
-  (provider) => !OAUTH_ONLY_PROVIDER_SET.has(provider),
-);
 
 const AGENT_DESCRIPTIONS: Record<Agent, string> = {
   pi: "A minimal agent harness. Adapt Pi to your workflows.",

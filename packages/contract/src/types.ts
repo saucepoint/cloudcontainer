@@ -60,7 +60,7 @@ export const CONTAINER_STATUSES = [
 ] as const;
 export type ContainerStatus = (typeof CONTAINER_STATUSES)[number];
 
-export const JOB_OPS = [
+const JOB_OPS = [
   "provision",
   "start",
   "stop",
@@ -151,6 +151,7 @@ const SshKeysSchema = z
   .max(INPUT_LIMITS.sshKeysPerAccount);
 const DashboardUrlSchema = z.string().url().max(2048);
 const SealedCredentialsSchema = z.string().min(1).max(INPUT_LIMITS.sealedCredentialBytes);
+export const AgentsSchema = z.array(z.enum(AGENTS)).min(1).max(AGENTS.length);
 export const GithubRepoNameSchema = z
   .string()
   .min(3)
@@ -160,13 +161,13 @@ export const GithubRepoNameSchema = z
     (name) => name.split("/").every((component) => component !== "." && component !== ".."),
     "repository path components cannot be dot segments",
   );
-const GithubReposSchema = z
+export const GithubReposSchema = z
   .array(GithubRepoNameSchema)
   .max(INPUT_LIMITS.githubReposPerProvision);
 
 export const ContainerSpecSchema = z
   .object({
-    agents: z.array(z.enum(AGENTS)).min(1).max(AGENTS.length),
+    agents: AgentsSchema,
     tier: z.enum(["free", "paid"]),
     cpu: z.number().int().positive(),
     ramMb: z.number().int().positive(),
@@ -262,7 +263,7 @@ export const JobStatusResponseSchema = z
   .strict();
 export type JobStatusResponse = z.infer<typeof JobStatusResponseSchema>;
 
-export const ContainerStatSchema = z
+const ContainerStatSchema = z
   .object({
     containerId: z.string(),
     incusStatus: z.string(), // Running | Stopped | ...
@@ -287,4 +288,3 @@ export type StatsResponse = z.infer<typeof StatsResponseSchema>;
 export const HealthResponseSchema = z
   .object({ ok: z.boolean(), hostId: z.string(), version: z.string() })
   .strict();
-export type HealthResponse = z.infer<typeof HealthResponseSchema>;

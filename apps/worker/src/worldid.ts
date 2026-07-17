@@ -17,7 +17,7 @@ const VERIFY_URL = (rpId: string) => `https://developer.world.org/api/v4/verify/
 const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
 const NULLIFIER_PATTERN = /^0x[0-9a-f]{64}$/i;
 
-export interface WorldIdRpContext {
+interface WorldIdRpContext {
   rp_id: string;
   nonce: string;
   created_at: number;
@@ -25,7 +25,7 @@ export interface WorldIdRpContext {
   signature: string;
 }
 
-export type WorldIdProofMode = "proof" | "session";
+type WorldIdProofMode = "proof" | "session";
 
 /** Sign a fresh RP context. Uniqueness proofs bind the configured login action. */
 export function signWorldIdRequest(
@@ -45,7 +45,7 @@ export function signWorldIdRequest(
   };
 }
 
-export interface WorldIdIdentity {
+interface WorldIdIdentity {
   identityKey: string;
   protocolVersion: "3.0" | "4.0";
 }

@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest, generateX25519Keypair } from "@codestation/contract";
-import { apiRoutes, validPubkey } from "../src/api.js";
+import { apiRoutes } from "../src/api.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
@@ -33,22 +33,6 @@ function json(body: unknown, headers: Record<string, string> = {}): RequestInit 
     body: JSON.stringify(body),
   };
 }
-
-describe("validPubkey", () => {
-  it("accepts common key types with or without comments", () => {
-    expect(validPubkey(PUBKEY)).toBe(true);
-    expect(validPubkey("ssh-rsa AAAAB3NzaC1yc2E=")).toBe(true);
-    expect(validPubkey("ecdsa-sha2-nistp256 AAAAE2Vj comment here")).toBe(true);
-    expect(validPubkey("  ssh-ed25519 AAAA trailing-ws  ")).toBe(true);
-  });
-
-  it("rejects garbage, private keys, and oversized blobs", () => {
-    expect(validPubkey("not a key")).toBe(false);
-    expect(validPubkey("-----BEGIN OPENSSH PRIVATE KEY-----")).toBe(false);
-    expect(validPubkey(`ssh-ed25519 ${"A".repeat(5000)}`)).toBe(false);
-    expect(validPubkey("ssh-dss AAAA")).toBe(false); // legacy DSA not allowed
-  });
-});
 
 describe("auth gating", () => {
   it("rejects unauthenticated API access with JSON 401", async () => {
@@ -303,6 +287,21 @@ describe("GET /api/container", () => {
     expect(container.allowedOps).toContain("stop");
     expect(container.hostKeyFingerprints).toEqual(["fp1"]);
   });
+
+  it("does not crash the dashboard when stored host fingerprints are malformed", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running", host_key_fingerprints: "not-json" });
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/container", { headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      container: { hostKeyFingerprints: [] },
+    });
+  });
 });
 
 describe("GET /api/dashboard", () => {
@@ -320,7 +319,7 @@ describe("GET /api/dashboard", () => {
     expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
   });
 
-  it("returns the initial container, credential-presence, and key state together", async () => {
+  it("returns the initial container and key state together", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await seedHost(env);
@@ -336,7 +335,6 @@ describe("GET /api/dashboard", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       container: { status: string; sshCommand: string };
-      credentials: { llm: Record<string, boolean>; cloudflare: boolean };
       keys: Array<{ label: string; pubkey: string }>;
     };
     expect(body.container).toMatchObject({
@@ -345,7 +343,6 @@ describe("GET /api/dashboard", () => {
       sshCommand: "ssh -p 30500 dev@host-1.codestation.test",
     });
     expect(body.container).not.toHaveProperty("rootDiskGb");
-    expect(body.credentials).toMatchObject({ llm: {}, cloudflare: false });
     expect(body.keys).toMatchObject([{ label: "laptop", pubkey: PUBKEY }]);
   });
 });

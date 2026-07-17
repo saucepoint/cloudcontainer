@@ -34,7 +34,7 @@ export function loadConfig(path = process.env.CS_DAEMON_CONFIG ?? DEFAULT_PATH):
     // Keep existing daemon configs compatible. New hosts explicitly select the
     // restricted `codestation` project during bootstrap.
     project: raw.project ?? "default",
-    tlsCertPath: raw.tlsCertPath,
-    tlsKeyPath: raw.tlsKeyPath,
+    ...(raw.tlsCertPath ? { tlsCertPath: raw.tlsCertPath } : {}),
+    ...(raw.tlsKeyPath ? { tlsKeyPath: raw.tlsKeyPath } : {}),
   };
 }

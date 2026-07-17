@@ -4,17 +4,18 @@
  * payloads exist only in the signed request body (sealed) — never in D1.
  */
 import {
+  AgentsSchema,
+  GithubReposSchema,
   sealJson,
-  TIERS,
   type Agent,
   type JobRequest,
   type ProvisionResult,
 } from "@codestation/contract";
+import { diskReservationGb } from "./capacity.js";
 import { daemonJobStatus, daemonSubmitJob } from "./daemon.js";
 import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";
-import { allocatePort } from "./ports.js";
 import { LIFECYCLE_OPS, pendingStatusFor, successStatusFor } from "./state.js";
-import type { Bindings, ContainerRow, HostRow, JobRow, UserRow } from "./types.js";
+import type { Bindings, ContainerRow, HostRow, JobRow } from "./types.js";
 
 export async function getHost(env: Bindings, hostId: string): Promise<HostRow | null> {
   return env.DB.prepare("SELECT * FROM hosts WHERE id = ?").bind(hostId).first<HostRow>();
@@ -49,7 +50,7 @@ async function userSshKeys(env: Bindings, userId: string): Promise<string[]> {
 }
 
 export function containerAgents(container: ContainerRow): Agent[] {
-  return JSON.parse(container.agents) as Agent[];
+  return AgentsSchema.parse(JSON.parse(container.agents));
 }
 
 function specOf(container: ContainerRow) {
@@ -64,18 +65,8 @@ function specOf(container: ContainerRow) {
 }
 
 function githubReposOf(container: ContainerRow): string[] {
-  return JSON.parse(container.github_repos || "[]") as string[];
+  return GithubReposSchema.parse(JSON.parse(container.github_repos || "[]"));
 }
-
-/** Home and disposable rootfs each receive the advertised disk cap. */
-export function diskReservationGb(homeDiskGb: number): number {
-  return homeDiskGb * 2;
-}
-
-/** Placement requires a recent positive daemon heartbeat. */
-export const HOST_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
-/** Repeated failures quarantine a host before admitting more tenants. */
-export const HOST_FAILURE_THRESHOLD = 3;
 
 /**
  * Build the wire request for a job op. Credentials are decrypted in-memory
@@ -336,147 +327,4 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
   }
 
   return (await getJob(env, job.id)) ?? job;
-}
-
-// ---------------------------------------------------------------------------
-// Placement + provisioning
-// ---------------------------------------------------------------------------
-
-/**
- * Scheduler (§10): place on the active host with the most unallocated
- * *non-reserved* RAM above the required headroom; check CPU, disk, and the
- * daemon heartbeat too. The final capacity check is repeated transactionally
- * by the caller so concurrent signups cannot race past a ceiling.
- */
-export async function pickHost(
-  env: Bindings,
-  cpu: number,
-  ramMb: number,
-  diskGb: number,
-  now: () => number = Date.now,
-): Promise<HostRow | null> {
-  return env.DB.prepare(
-    `SELECT * FROM hosts
-     WHERE status = 'active'
-       AND vcpu_capacity - vcpu_allocated >= ?
-       AND ram_total_mb - ram_reserve_mb - ram_allocated_mb >= ?
-       AND disk_total_gb - disk_allocated_gb >= ?
-       AND last_seen_at IS NOT NULL AND last_seen_at >= ?
-       AND consecutive_failures = 0
-     ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC,
-              vcpu_capacity - vcpu_allocated DESC,
-              id
-     LIMIT 1`,
-  )
-    .bind(
-      cpu,
-      ramMb,
-      diskGb,
-      now() - HOST_HEARTBEAT_MAX_AGE_MS,
-    )
-    .first<HostRow>();
-}
-
-export interface ProvisionInput {
-  agents: Agent[];
-  githubRepos?: string[];
-}
-
-/**
- * Create the container row and dispatch the provision job. Returns the
- * container in `provisioning` state, or `waitlisted` when no host has
- * capacity (§10: the reconciler admits the FIFO waitlist when capacity returns).
- */
-export async function startProvision(
-  env: Bindings,
-  user: UserRow,
-  input: ProvisionInput,
-): Promise<ContainerRow> {
-  const tier = TIERS.free;
-  const containerId = crypto.randomUUID();
-  const now = Date.now();
-  const agents = JSON.stringify(input.agents);
-  const githubRepos = JSON.stringify(input.githubRepos ?? []);
-  const reservedDiskGb = diskReservationGb(tier.diskGb);
-
-  // D1 batches are transactional. Capacity is checked in the INSERT itself,
-  // then `changes()` gates host accounting on that INSERT winning. This avoids
-  // oversubscription when two signups race for the last slot. A unique-port
-  // collision rolls the batch back and is retried with a fresh allocation.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const host = await pickHost(env, tier.cpu, tier.ramMb, reservedDiskGb);
-    if (!host) break;
-    const port = await allocatePort(env, host.id);
-    const heartbeatCutoff = Date.now() - HOST_HEARTBEAT_MAX_AGE_MS;
-    try {
-      const results = (await env.DB.batch([
-        env.DB.prepare(
-          `INSERT INTO containers
-             (id, user_id, host_id, ssh_port, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
-           SELECT ?, ?, h.id, ?, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
-           FROM hosts h
-           WHERE h.id = ? AND h.status = 'active'
-             AND h.vcpu_capacity - h.vcpu_allocated >= ?
-             AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
-             AND h.disk_total_gb - h.disk_allocated_gb >= ?
-             AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
-             AND h.consecutive_failures = 0`,
-        ).bind(
-          containerId,
-          user.id,
-          port,
-          agents,
-          githubRepos,
-          tier.cpu,
-          tier.ramMb,
-          tier.diskGb,
-          now,
-          host.id,
-          tier.cpu,
-          tier.ramMb,
-          reservedDiskGb,
-          heartbeatCutoff,
-        ),
-        env.DB.prepare(
-          `UPDATE hosts
-           SET vcpu_allocated = vcpu_allocated + ?,
-               ram_allocated_mb = ram_allocated_mb + ?,
-               disk_allocated_gb = disk_allocated_gb + ?
-           WHERE id = ? AND changes() = 1`,
-        ).bind(tier.cpu, tier.ramMb, reservedDiskGb, host.id),
-      ])) as Array<{ meta?: { changes?: number } }>;
-
-      if (!results[0]?.meta?.changes) continue;
-      const container = await getContainerForUser(env, user.id);
-      if (!container) throw new Error("container row vanished");
-      await enqueueJob(env, "provision", container, host);
-      return (await getContainerForUser(env, user.id)) ?? container;
-    } catch (error) {
-      // A duplicate request for the same account is idempotent. Otherwise a
-      // concurrent port allocation may have won; retry from fresh DB state.
-      const existing = await getContainerForUser(env, user.id);
-      if (existing) return existing;
-      if (attempt === 3) throw error;
-    }
-  }
-
-  try {
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO containers (id, user_id, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
-         VALUES (?, ?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
-      ).bind(containerId, user.id, agents, githubRepos, tier.cpu, tier.ramMb, tier.diskGb, now),
-      env.DB.prepare(
-        `INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, NULL)
-         ON CONFLICT(user_id) DO UPDATE SET requested_at = excluded.requested_at, admitted_at = NULL`,
-      ).bind(user.id, now),
-    ]);
-  } catch (error) {
-    const existing = await getContainerForUser(env, user.id);
-    if (existing) return existing;
-    throw error;
-  }
-  const row = await getContainerForUser(env, user.id);
-  if (!row) throw new Error("container row vanished");
-  return row;
 }

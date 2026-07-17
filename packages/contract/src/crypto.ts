@@ -102,7 +102,7 @@ export function sealOpenJson<T = unknown>(sealedB64: string, recipientPrivateKey
 // -- at-rest encryption (credential master key) -------------------------------
 
 /** Encrypt with a 32-byte master key (base64). Output: base64(nonce || ct). */
-export function encryptAtRest(plaintext: Uint8Array, masterKeyB64: string): string {
+function encryptAtRest(plaintext: Uint8Array, masterKeyB64: string): string {
   const key = fromB64(masterKeyB64);
   if (key.length !== 32) throw new Error("master key must be 32 bytes");
   const nonce = randomBytes(NONCE_LEN);
@@ -113,7 +113,7 @@ export function encryptAtRest(plaintext: Uint8Array, masterKeyB64: string): stri
   return toB64(out);
 }
 
-export function decryptAtRest(ciphertextB64: string, masterKeyB64: string): Uint8Array {
+function decryptAtRest(ciphertextB64: string, masterKeyB64: string): Uint8Array {
   const key = fromB64(masterKeyB64);
   const data = fromB64(ciphertextB64);
   const nonce = data.slice(0, NONCE_LEN);

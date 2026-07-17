@@ -4,10 +4,10 @@ import { availableParallelism, freemem, loadavg, totalmem, uptime } from "node:o
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import {
+  HealthResponseSchema,
   JobRequestSchema,
   MemoryNonceStore,
   verifyRequest,
-  type HealthResponse,
   type JobStatusResponse,
   type StatsResponse,
 } from "@codestation/contract";
@@ -38,18 +38,18 @@ export function buildApp(opts: {
       headers: { get: (n) => c.req.header(n) ?? null },
       publicKeyB64: config.workerRpcPublicKey,
       nonceStore: nonces,
-      now: opts.now,
+      ...(opts.now ? { now: opts.now } : {}),
     });
     if (failure) {
       console.log(JSON.stringify({ event: "rpc_rejected", reason: failure }));
       return c.json({ error: failure }, 401);
     }
     c.set("rawBody", body);
-    await next();
+    return next();
   });
 
   app.get("/health", (c) => {
-    const res: HealthResponse = { ok: true, hostId: config.hostId, version: VERSION };
+    const res = HealthResponseSchema.parse({ ok: true, hostId: config.hostId, version: VERSION });
     return c.json(res);
   });
 

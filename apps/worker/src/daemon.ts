@@ -29,7 +29,7 @@ async function daemonFetch(
       ...headers,
       ...(body ? { "content-type": "application/json" } : {}),
     },
-    body: body || undefined,
+    ...(body ? { body } : {}),
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
 }

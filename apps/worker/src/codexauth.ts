@@ -26,7 +26,7 @@ const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEVICE_AUTH_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_SEC = 5;
 
-export interface DeviceAuthStart {
+interface DeviceAuthStart {
   deviceAuthId: string;
   userCode: string;
   verificationUrl: string;
@@ -34,12 +34,12 @@ export interface DeviceAuthStart {
   expiresInSec: number;
 }
 
-export type DevicePollResult =
+type DevicePollResult =
   | { status: "pending" }
   | { status: "authorized"; authJson: string };
 
 /** Ask OpenAI for a one-time user code the person approves in their browser. */
-export async function requestDeviceCode(): Promise<DeviceAuthStart> {
+async function requestDeviceCode(): Promise<DeviceAuthStart> {
   const res = await fetch(`${OPENAI_ISSUER}/api/accounts/deviceauth/usercode`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -70,7 +70,7 @@ export async function requestDeviceCode(): Promise<DeviceAuthStart> {
  * CLI); success yields an authorization code plus the server-minted PKCE pair,
  * which we immediately exchange for tokens.
  */
-export async function pollDeviceAuth(
+async function pollDeviceAuth(
   deviceAuthId: string,
   userCode: string,
 ): Promise<DevicePollResult> {

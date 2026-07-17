@@ -221,7 +221,6 @@ describe("dashboard loading and polling", () => {
     );
 
     expect(load).toContain('api<DashboardSnapshot>("/api/dashboard")');
-    expect(load).toContain("setCredentials(snapshot.credentials)");
     expect(load).toContain("setKeys(snapshot.keys)");
     expect(poll).toContain('api<{ container: ContainerView | null }>("/api/container")');
     expect(poll).not.toContain("/api/credentials");

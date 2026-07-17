@@ -5,17 +5,16 @@ import {
   type CredentialPayload,
 } from "@codestation/contract";
 import { upsertCredentials } from "../src/credentials.js";
+import { HOST_HEARTBEAT_MAX_AGE_MS, pickHost } from "../src/capacity.js";
 import {
   buildJobRequest,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
   getJob,
-  HOST_HEARTBEAT_MAX_AGE_MS,
-  pickHost,
   refreshJob,
-  startProvision,
 } from "../src/jobs.js";
+import { startProvision } from "../src/placement.js";
 import type { Bindings, HostRow, JobRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
 

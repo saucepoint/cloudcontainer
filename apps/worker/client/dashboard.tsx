@@ -1,4 +1,4 @@
-import { AGENT_LABELS, LLM_PROVIDER_LABELS, type JobOp } from "@codestation/contract";
+import { AGENT_LABELS, type JobOp } from "@codestation/contract";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -25,16 +25,8 @@ type SshKey = {
   created_at: number;
 };
 
-type Credentials = {
-  llm: Record<string, boolean>;
-  cloudflare: boolean;
-  wrangler: boolean;
-  github: string | null;
-};
-
 type DashboardSnapshot = {
   container: ContainerView | null;
-  credentials: Credentials;
   keys: SshKey[];
 };
 
@@ -348,7 +340,7 @@ function SshKeys({
                 key="agent-enrollment"
                 initial={reducedMotion ? false : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                {...(reducedMotion ? {} : { exit: { opacity: 0, y: -4 } })}
                 transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
               >
                 <div className="notice">
@@ -370,7 +362,7 @@ function SshKeys({
                 id="keyform"
                 initial={reducedMotion ? false : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                {...(reducedMotion ? {} : { exit: { opacity: 0, y: -4 } })}
                 transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
               >
                 <p className="muted">First create a key if needed, then print the public half:</p>
@@ -396,7 +388,6 @@ function SshKeys({
 function DashboardApp() {
   const [loaded, setLoaded] = React.useState(false);
   const [container, setContainer] = React.useState<ContainerView | null>(null);
-  const [credentials, setCredentials] = React.useState<Credentials | null>(null);
   const [keys, setKeys] = React.useState<SshKey[]>([]);
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
@@ -418,7 +409,6 @@ function DashboardApp() {
       const snapshot = await api<DashboardSnapshot>("/api/dashboard");
       refreshNeeded.current = false;
       applyContainer(snapshot.container);
-      setCredentials(snapshot.credentials);
       setKeys(snapshot.keys);
       setLoaded(true);
     } catch (error) {

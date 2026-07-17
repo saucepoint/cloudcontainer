@@ -168,7 +168,7 @@ export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
   if (!user || user.status !== "active") return deny();
   c.set("user", user);
   c.set("sessionId", sid);
-  await next();
+  return next();
 };
 
 /** Credential changes are an onboarding-only action. Check again on OAuth
@@ -177,7 +177,7 @@ export const requireCredentialSetup: MiddlewareHandler<AppContext> = async (c, n
   if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
     return c.json({ error: CREDENTIALS_LOCKED_ERROR }, 409);
   }
-  await next();
+  return next();
 };
 
 /** Extra strongly-consistent revocation check for destructive operations (§12). */
@@ -185,5 +185,5 @@ export const requireUnrevokedSession: MiddlewareHandler<AppContext> = async (c, 
   if (await isSessionRevoked(c.env, c.get("sessionId"))) {
     return c.json({ error: "session revoked" }, 401);
   }
-  await next();
+  return next();
 };

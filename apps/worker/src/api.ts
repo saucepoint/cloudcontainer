@@ -1,15 +1,9 @@
 import { Hono } from "hono";
 import {
   AGENTS,
-  GithubRepoNameSchema,
-  INPUT_LIMITS,
-  LLM_PROVIDER_LABELS,
-  LLM_PROVIDERS,
-  OAUTH_ONLY_LLM_PROVIDERS,
+  GithubReposSchema,
   toHex,
   type JobOp,
-  type LlmKeys,
-  type LlmProvider,
 } from "@codestation/contract";
 import {
   requireCredentialSetup,
@@ -17,236 +11,36 @@ import {
   requireUser,
 } from "./auth.js";
 import { revokeSession, sha256Hex } from "./sessions.js";
-import {
-  decryptLlmKeys,
-  getCredentialsRow,
-  upsertCredentials,
-  validateCloudflareToken,
-} from "./credentials.js";
+import { upsertCredentials, validateCloudflareToken } from "./credentials.js";
+import { normalizeCredentialInput, type CredentialInput } from "./credential-input.js";
+import { containerView, credentialsView, currentContainerView } from "./container-view.js";
 import {
   githubAccessToken,
-  githubConfigured,
   pushCredentialsToContainer,
   verifyGithubRepositories,
 } from "./github.js";
 import {
-  containerAgents,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
   getHost,
   latestJob,
-  refreshJob,
-  startProvision,
 } from "./jobs.js";
+import { startProvision } from "./placement.js";
 import { readJsonBody } from "./http.js";
 import { allowedUserOps } from "./state.js";
-import type { AppContext, Bindings, ContainerRow, JobRow } from "./types.js";
+import {
+  insertSshKey,
+  sshCommandFor,
+  sshKeysView,
+  sshSetupReady,
+  validPubkey,
+} from "./ssh.js";
+import type { AppContext } from "./types.js";
 
-const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?$/;
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
   "Wait for your server to finish building before changing SSH keys or creating an SSH setup prompt.";
-const OAUTH_ONLY_PROVIDER_SET: ReadonlySet<LlmProvider> = new Set(OAUTH_ONLY_LLM_PROVIDERS);
-
-function isLlmProvider(value: string): value is LlmProvider {
-  return (LLM_PROVIDERS as readonly string[]).includes(value);
-}
-
-export function validPubkey(key: string): boolean {
-  return SSH_KEY_RE.test(key.trim()) && key.trim().length < INPUT_LIMITS.sshKeyBytes;
-}
-
-/** SSH key changes need a ready container so they can be applied immediately. */
-async function sshSetupReady(env: Bindings, userId: string): Promise<boolean> {
-  return (await getContainerForUser(env, userId))?.status === "running";
-}
-
-async function insertSshKey(
-  env: Bindings,
-  userId: string,
-  label: string,
-  pubkey: string,
-): Promise<"inserted" | "duplicate" | "limit"> {
-  const normalized = pubkey.trim();
-  const existing = await env.DB.prepare(
-    "SELECT id FROM ssh_keys WHERE user_id = ? AND pubkey = ? LIMIT 1",
-  )
-    .bind(userId, normalized)
-    .first();
-  if (existing) return "duplicate";
-  const count = await env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM ssh_keys WHERE user_id = ?",
-  )
-    .bind(userId)
-    .first<{ count: number }>();
-  if ((count?.count ?? 0) >= INPUT_LIMITS.sshKeysPerAccount) return "limit";
-  const inserted = await env.DB.prepare(
-    "INSERT OR IGNORE INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(userId, label.slice(0, 64), normalized, Date.now())
-    .run();
-  return inserted.meta.changes ? "inserted" : "duplicate";
-}
-
-interface CredentialInput {
-  llmKeys?: Record<string, unknown>;
-  cloudflareToken?: unknown;
-  wranglerOauth?: unknown;
-}
-
-interface NormalizedCredentialInput {
-  llmKeys: Record<string, string>;
-  cloudflareToken?: string;
-  wranglerOauth?: "";
-}
-
-/** Validate credential names, types, and sizes before encrypting user input. */
-function normalizeCredentialInput(
-  input: CredentialInput,
-): { value: NormalizedCredentialInput } | { error: string } {
-  if (
-    input.llmKeys !== undefined &&
-    (!input.llmKeys || typeof input.llmKeys !== "object" || Array.isArray(input.llmKeys))
-  ) {
-    return { error: "llmKeys must be an object" };
-  }
-
-  const llmKeys: Record<string, string> = {};
-  for (const [provider, raw] of Object.entries(input.llmKeys ?? {})) {
-    if (!isLlmProvider(provider)) {
-      return { error: `unknown model provider: ${provider || "(empty)"}` };
-    }
-    if (typeof raw !== "string") return { error: `credential for ${provider} must be text` };
-    const value = raw.trim();
-    // OAuth-only credentials enter through their sign-in flows; only the
-    // empty string (disconnect) is accepted here.
-    if (value && OAUTH_ONLY_PROVIDER_SET.has(provider)) {
-      return {
-        error: `${LLM_PROVIDER_LABELS[provider]} connects via its sign-in button, not a pasted value`,
-      };
-    }
-    if (value.length > INPUT_LIMITS.tokenBytes) {
-      return { error: `credential for ${provider} is too large` };
-    }
-    llmKeys[provider] = value;
-  }
-
-  if (input.cloudflareToken !== undefined && typeof input.cloudflareToken !== "string") {
-    return { error: "Cloudflare token must be text" };
-  }
-  const cloudflareToken =
-    typeof input.cloudflareToken === "string" ? input.cloudflareToken.trim() : undefined;
-  if (cloudflareToken && cloudflareToken.length > INPUT_LIMITS.cloudflareTokenBytes) {
-    return { error: "Cloudflare token is too large" };
-  }
-  // The wrangler sign-in connects via /api/wrangler/oauth; only disconnection
-  // (empty string) is accepted here.
-  if (input.wranglerOauth !== undefined && input.wranglerOauth !== "") {
-    return { error: "Cloudflare wrangler connects via its sign-in button, not a pasted value" };
-  }
-  return {
-    value: {
-      llmKeys,
-      ...(cloudflareToken !== undefined ? { cloudflareToken } : {}),
-      ...(input.wranglerOauth !== undefined ? { wranglerOauth: "" as const } : {}),
-    },
-  };
-}
-
-/** `ssh -p <port> dev@<host>` for a placed container, or null if it has no host/port yet. */
-async function sshCommandFor(env: Bindings, container: ContainerRow): Promise<string | null> {
-  if (!container.host_id || !container.ssh_port) return null;
-  const host = await getHost(env, container.host_id);
-  return host ? `ssh -p ${container.ssh_port} dev@${host.ssh_hostname}` : null;
-}
-
-/** Do not expose a container's SSH endpoint until the user has a key that can use it. */
-async function hasSshKey(env: Bindings, userId: string): Promise<boolean> {
-  return Boolean(
-    await env.DB.prepare("SELECT 1 FROM ssh_keys WHERE user_id = ? LIMIT 1")
-      .bind(userId)
-      .first(),
-  );
-}
-
-interface ContainerView {
-  id: string;
-  status: string;
-  statusDetail: string | null;
-  agents: string[];
-  tier: string;
-  cpu: number;
-  ramMb: number;
-  diskGb: number;
-  sshCommand: string | null;
-  hostKeyFingerprints: string[];
-  createdAt: number;
-  job: { id: string; op: JobOp; status: string; error: string | null } | null;
-  allowedOps: JobOp[];
-}
-
-async function containerView(
-  env: Bindings,
-  container: ContainerRow,
-  job: JobRow | null,
-): Promise<ContainerView> {
-  const sshCommand =
-    container.status === "running" && (await hasSshKey(env, container.user_id))
-      ? await sshCommandFor(env, container)
-      : null;
-  return {
-    id: container.id,
-    status: container.status,
-    statusDetail: container.status_detail,
-    agents: containerAgents(container),
-    tier: container.tier,
-    cpu: container.cpu,
-    ramMb: container.ram_mb,
-    diskGb: container.disk_gb,
-    sshCommand,
-    hostKeyFingerprints: container.host_key_fingerprints
-      ? (JSON.parse(container.host_key_fingerprints) as string[])
-      : [],
-    createdAt: container.created_at,
-    job: job ? { id: job.id, op: job.op, status: job.status, error: job.error } : null,
-    allowedOps: allowedUserOps(container.status),
-  };
-}
-
-async function currentContainerView(env: Bindings, userId: string): Promise<ContainerView | null> {
-  const container = await getContainerForUser(env, userId);
-  if (!container) return null;
-  let job = await latestJob(env, container.id);
-  if (job && (job.status === "queued" || job.status === "running")) {
-    job = await refreshJob(env, job);
-  }
-  // A completed destroy removes the row while its job is being refreshed.
-  const fresh = await getContainerForUser(env, userId);
-  return fresh ? containerView(env, fresh, job) : null;
-}
-
-async function sshKeysView(env: Bindings, userId: string) {
-  const rows = await env.DB.prepare(
-    "SELECT id, label, pubkey, created_at FROM ssh_keys WHERE user_id = ? ORDER BY created_at, id",
-  )
-    .bind(userId)
-    .all();
-  return rows.results;
-}
-
-async function credentialsView(env: Bindings, userId: string) {
-  const row = await getCredentialsRow(env, userId);
-  const llm = decryptLlmKeys(env, row);
-  // Presence only — credential values never leave the control plane.
-  return {
-    llm: Object.fromEntries(Object.keys(llm).map((key) => [key, true])),
-    cloudflare: Boolean(row?.cloudflare_token),
-    wrangler: Boolean(row?.wrangler_oauth),
-    github: row?.github_login ?? (row?.github_token ? "connected" : null),
-    githubAvailable: githubConfigured(env),
-  };
-}
 
 export const apiRoutes = new Hono<AppContext>()
 
@@ -294,19 +88,17 @@ export const apiRoutes = new Hono<AppContext>()
     if (body.githubRepos !== undefined && !Array.isArray(body.githubRepos)) {
       return c.json({ error: "GitHub repositories must be a list" }, 400);
     }
-    const githubRepos = [...new Set(body.githubRepos ?? [])];
-    if (
-      githubRepos.length > INPUT_LIMITS.githubReposPerProvision ||
-      githubRepos.some((repo) => !GithubRepoNameSchema.safeParse(repo).success)
-    ) {
+    const parsedGithubRepos = GithubReposSchema.safeParse([...new Set(body.githubRepos ?? [])]);
+    if (!parsedGithubRepos.success) {
       return c.json({ error: "invalid GitHub repository selection" }, 400);
     }
+    const githubRepos = parsedGithubRepos.data;
     if (githubRepos.length > 0) {
       try {
         const token = await githubAccessToken(c.env, user.id);
         if (!token) return c.json({ error: "connect GitHub before selecting repositories" }, 409);
-        const accessible = await verifyGithubRepositories(token, githubRepos as string[]);
-        const unavailable = githubRepos.find((repo) => !accessible.has(repo as string));
+        const accessible = await verifyGithubRepositories(token, githubRepos);
+        const unavailable = githubRepos.find((repo) => !accessible.has(repo));
         if (unavailable) {
           return c.json({ error: `GitHub repository is no longer available: ${unavailable}` }, 400);
         }
@@ -333,7 +125,7 @@ export const apiRoutes = new Hono<AppContext>()
 
     const container = await startProvision(c.env, user, {
       agents,
-      githubRepos: githubRepos as string[],
+      githubRepos,
     });
     const job = await latestJob(c.env, container.id);
     return c.json({ container: await containerView(c.env, container, job) }, 202);
@@ -347,12 +139,11 @@ export const apiRoutes = new Hono<AppContext>()
   // One authenticated round trip for the dashboard's initial, mostly-static state.
   .get("/api/dashboard", requireUser, async (c) => {
     const userId = c.get("user").id;
-    const [container, credentials, keys] = await Promise.all([
+    const [container, keys] = await Promise.all([
       currentContainerView(c.env, userId),
-      credentialsView(c.env, userId),
       sshKeysView(c.env, userId),
     ]);
-    return c.json({ container, credentials, keys });
+    return c.json({ container, keys });
   })
 
   // ------------------------------------------------------------------ actions
@@ -436,7 +227,7 @@ export const apiRoutes = new Hono<AppContext>()
       if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
     }
     await upsertCredentials(c.env, c.get("user").id, {
-      llmKeys: normalized.value.llmKeys as LlmKeys,
+      llmKeys: normalized.value.llmKeys,
       ...(normalized.value.cloudflareToken !== undefined
         ? { cloudflareToken: normalized.value.cloudflareToken }
         : {}),

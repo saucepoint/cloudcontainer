@@ -7,150 +7,195 @@ import {
   wranglerOauthFlow,
 } from "./auth-flows.js";
 
-const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter((provider) => !(OAUTH_ONLY_LLM_PROVIDERS as readonly string[]).includes(provider));
-const element = (id: string): any => document.getElementById(id);
+const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
+  (provider) => !(OAUTH_ONLY_LLM_PROVIDERS as readonly string[]).includes(provider),
+);
+
+function element<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+function requiredElement<T extends HTMLElement>(id: string): T {
+  const found = element<T>(id);
+  if (!found) throw new Error(`missing required onboarding element: ${id}`);
+  return found;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function responseError(value: unknown, fallback: string): string {
+  return isRecord(value) && typeof value.error === "string" ? value.error : fallback;
+}
+
 const messageOf = (error: unknown) => error instanceof Error ? error.message : "Unknown error";
-const form = element('wizard');
-form.addEventListener('submit', async (e: SubmitEvent) => {
-  e.preventDefault();
-  const btn = element('go');
-  const err = element('err');
-  err.textContent = '';
+const form = requiredElement<HTMLFormElement>("wizard");
+
+form.addEventListener("submit", async (event: SubmitEvent) => {
+  event.preventDefault();
+  const button = requiredElement<HTMLButtonElement>("go");
+  const errorElement = requiredElement<HTMLElement>("err");
+  errorElement.textContent = "";
   const data = new FormData(form);
   const llmKeys: Record<string, string> = {};
-  for (const k of PASTEABLE_PROVIDERS) {
-    const v = (data.get('llm_' + k) || '').toString().trim();
-    if (v) llmKeys[k] = v;
+  for (const provider of PASTEABLE_PROVIDERS) {
+    const value = (data.get(`llm_${provider}`) || "").toString().trim();
+    if (value) llmKeys[provider] = value;
   }
   const body = {
-    agents: data.getAll('agent').map((a) => a.toString()),
-    sshPubkey: (data.get('sshPubkey') || '').toString().trim(),
+    agents: data.getAll("agent").map((agent) => agent.toString()),
+    sshPubkey: (data.get("sshPubkey") || "").toString().trim(),
     llmKeys,
-    cloudflareToken: (data.get('cloudflareToken') || '').toString().trim() || undefined,
-    githubRepos: data.getAll('githubRepo').map((repo) => repo.toString()),
+    cloudflareToken: (data.get("cloudflareToken") || "").toString().trim() || undefined,
+    githubRepos: data.getAll("githubRepo").map((repository) => repository.toString()),
   };
   if (body.agents.length === 0) {
-    err.textContent = 'Pick at least one agent first.';
-    err.focus();
+    errorElement.textContent = "Pick at least one agent first.";
+    errorElement.focus();
     return;
   }
-  btn.disabled = true;
-  const spinner = document.createElement('span');
-  spinner.className = 'spinner';
-  spinner.setAttribute('aria-hidden', 'true');
-  btn.replaceChildren(spinner, 'Starting…');
+  button.disabled = true;
+  const spinner = document.createElement("span");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  button.replaceChildren(spinner, "Starting…");
   try {
-    const res = await fetch('/api/provision', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
+    const response = await fetch("/api/provision", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || 'provisioning failed');
-    location.href = '/dashboard';
-  } catch (e2) {
-    err.textContent = messageOf(e2);
-    err.focus();
-    btn.disabled = false;
-    btn.textContent = 'Create server →';
+    const json: unknown = await response.json();
+    if (!response.ok) throw new Error(responseError(json, "provisioning failed"));
+    location.href = "/dashboard";
+  } catch (error) {
+    errorElement.textContent = messageOf(error);
+    errorElement.focus();
+    button.disabled = false;
+    button.textContent = "Create server →";
   }
 });
 
-// Sign-in flows store their credential server-side the moment they complete,
-// so they need no field in the provision body.
-function wireSignin(id: string, flowFn: (element: HTMLElement, done: () => void) => void) {
-  const btn = element(id + '-signin');
-  btn.addEventListener('click', () => {
+// Sign-in flows store credentials server-side as soon as they complete.
+function wireSignin(id: string, flow: (target: HTMLElement, done: () => void) => void): void {
+  const button = requiredElement<HTMLButtonElement>(`${id}-signin`);
+  const target = requiredElement<HTMLElement>(`${id}-flow`);
+  const connected = requiredElement<HTMLElement>(`${id}-connected`);
+  button.addEventListener("click", () => {
     if (isAuthFlowActive()) return;
-    flowFn(element(id + '-flow'), () => {
-      element(id + '-flow').replaceChildren();
-      btn.style.display = 'none';
-      element(id + '-connected').style.display = '';
+    flow(target, () => {
+      target.replaceChildren();
+      button.style.display = "none";
+      connected.style.display = "";
     });
   });
 }
-wireSignin('claude', claudeOauthFlow);
-wireSignin('codex', codexDeviceFlow);
-wireSignin('copilot', copilotDeviceFlow);
-wireSignin('wrangler', wranglerOauthFlow);
 
-const githubConnect = element('github-connect');
-const githubReauthorize = element('github-reauthorize');
+wireSignin("claude", claudeOauthFlow);
+wireSignin("codex", codexDeviceFlow);
+wireSignin("copilot", copilotDeviceFlow);
+wireSignin("wrangler", wranglerOauthFlow);
+
+const githubConnect = element<HTMLAnchorElement>("github-connect");
+const githubReauthorize = element<HTMLButtonElement>("github-reauthorize");
 if (githubConnect || githubReauthorize) {
-  const agentSelectionKey = 'codestation-github-agents';
+  const agentSelectionKey = "codestation-github-agents";
   try {
-    const saved = JSON.parse(sessionStorage.getItem(agentSelectionKey) || '[]');
-    const selected = new Set(Array.isArray(saved) ? saved.filter((agent) => typeof agent === 'string') : []);
-    for (const input of form.querySelectorAll('input[name="agent"]')) {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(agentSelectionKey) || "[]");
+    const selected = new Set(
+      Array.isArray(saved) ? saved.filter((agent): agent is string => typeof agent === "string") : [],
+    );
+    for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) {
       input.checked = selected.has(input.value);
     }
-  } catch (_) {
-    // Storage can be unavailable or contain data from an older UI; both are safe to ignore.
+  } catch {
+    // Storage can be unavailable or contain data from an older UI.
   }
-  try { sessionStorage.removeItem(agentSelectionKey); } catch (_) {}
+  try {
+    sessionStorage.removeItem(agentSelectionKey);
+  } catch {
+    // Storage is an optional convenience.
+  }
 
   const saveGithubAgents = () => {
     try {
-      sessionStorage.setItem(agentSelectionKey, JSON.stringify(
-        new FormData(form).getAll('agent').map((agent) => agent.toString())
-      ));
-    } catch (_) {}
+      sessionStorage.setItem(
+        agentSelectionKey,
+        JSON.stringify(new FormData(form).getAll("agent").map((agent) => agent.toString())),
+      );
+    } catch {
+      // Storage is an optional convenience.
+    }
   };
-  if (githubConnect) githubConnect.addEventListener('click', saveGithubAgents);
-  if (githubReauthorize) githubReauthorize.addEventListener('click', async () => {
+  githubConnect?.addEventListener("click", saveGithubAgents);
+  githubReauthorize?.addEventListener("click", async () => {
     saveGithubAgents();
     githubReauthorize.disabled = true;
     try {
-      const res = await fetch('/auth/github/reauth?return_to=/onboarding', { method: 'POST' });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.authorizationUrl) throw new Error(json.error || 'Could not reset GitHub authorization.');
-      location.href = json.authorizationUrl;
+      const response = await fetch("/auth/github/reauth?return_to=/onboarding", { method: "POST" });
+      const json: unknown = await response.json().catch(() => ({}));
+      const authorizationUrl = isRecord(json) ? json.authorizationUrl : undefined;
+      if (!response.ok || typeof authorizationUrl !== "string") {
+        throw new Error(responseError(json, "Could not reset GitHub authorization."));
+      }
+      location.href = authorizationUrl;
     } catch (error) {
-      const status = element('github-status');
-      status.textContent = messageOf(error) || 'Could not reset GitHub authorization.';
+      requiredElement<HTMLElement>("github-status").textContent =
+        messageOf(error) || "Could not reset GitHub authorization.";
       githubReauthorize.disabled = false;
     }
   });
 }
 
-const selectedGithubRepositories = new Set<string>();
 type GithubRepository = {
   fullName: string;
   private: boolean;
   archived: boolean;
   description?: string | null;
 };
+
+function isGithubRepository(value: unknown): value is GithubRepository {
+  return isRecord(value)
+    && typeof value.fullName === "string"
+    && typeof value.private === "boolean"
+    && typeof value.archived === "boolean"
+    && (value.description === undefined
+      || value.description === null
+      || typeof value.description === "string");
+}
+
+const selectedGithubRepositories = new Set<string>();
 const knownGithubRepositories = new Map<string, GithubRepository>();
 
-function renderGithubRepositories(repositories: GithubRepository[]) {
-  const list = element('github-repos');
-  const visible = new Map<string, GithubRepository>(repositories.map((repo) => [repo.fullName, repo]));
+function renderGithubRepositories(repositories: GithubRepository[]): void {
+  const list = requiredElement<HTMLElement>("github-repos");
+  const visible = new Map(repositories.map((repository) => [repository.fullName, repository]));
   for (const fullName of selectedGithubRepositories) {
-    const repo = knownGithubRepositories.get(fullName);
-    if (repo) visible.set(fullName, repo);
+    const repository = knownGithubRepositories.get(fullName);
+    if (repository) visible.set(fullName, repository);
   }
-  const choices = [...visible.values()].map((repo, index) => {
-    const visibility = repo.private ? 'private' : 'public';
-    const archived = repo.archived ? ' · archived' : '';
-    const label = document.createElement('label');
-    const input = document.createElement('input');
-    const copy = document.createElement('span');
-    const name = document.createElement('strong');
-    const metadata = document.createElement('small');
-    label.className = 'repo-choice';
+  const choices = [...visible.values()].map((repository, index) => {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    const metadata = document.createElement("small");
+    label.className = "repo-choice";
     label.htmlFor = `github-repo-${index}`;
-    input.type = 'checkbox';
+    input.type = "checkbox";
     input.id = `github-repo-${index}`;
-    input.name = 'githubRepo';
-    input.value = repo.fullName;
-    input.checked = selectedGithubRepositories.has(repo.fullName);
-    input.disabled = !input.checked && selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
-    name.textContent = repo.fullName;
-    metadata.textContent = visibility + archived;
+    input.name = "githubRepo";
+    input.value = repository.fullName;
+    input.checked = selectedGithubRepositories.has(repository.fullName);
+    input.disabled =
+      !input.checked && selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
+    name.textContent = repository.fullName;
+    metadata.textContent = `${repository.private ? "private" : "public"}${repository.archived ? " · archived" : ""}`;
     copy.append(name, metadata);
-    if (repo.description) {
-      const description = document.createElement('small');
-      description.textContent = repo.description;
+    if (repository.description) {
+      const description = document.createElement("small");
+      description.textContent = repository.description;
       copy.append(description);
     }
     label.append(input, copy);
@@ -159,54 +204,59 @@ function renderGithubRepositories(repositories: GithubRepository[]) {
   list.replaceChildren(...choices);
 }
 
-async function loadGithubRepositories(query: string) {
-  const list = element('github-repos');
+async function loadGithubRepositories(query: string): Promise<void> {
+  const list = element<HTMLElement>("github-repos");
   if (!list) return;
-  const status = element('github-status');
+  const status = requiredElement<HTMLElement>("github-status");
   if (!query.trim()) {
     renderGithubRepositories([]);
-    status.textContent = 'Search for a repository by owner or name.';
+    status.textContent = "Search for a repository by owner or name.";
     return;
   }
-  const spinner = document.createElement('span');
-  spinner.className = 'spinner';
-  spinner.setAttribute('aria-hidden', 'true');
-  status.replaceChildren(spinner, 'Searching GitHub…');
+  const spinner = document.createElement("span");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  status.replaceChildren(spinner, "Searching GitHub…");
   try {
-    const res = await fetch('/api/github/repos?q=' + encodeURIComponent(query));
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      if (res.status === 409) {
-        status.textContent = 'Connect GitHub to search repositories.';
+    const response = await fetch(`/api/github/repos?q=${encodeURIComponent(query)}`);
+    const json: unknown = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 409) {
+        status.textContent = "Connect GitHub to search repositories.";
         return;
       }
-      throw new Error(json.error || 'Could not load repositories');
+      throw new Error(responseError(json, "Could not load repositories"));
     }
-    const repositories = Array.isArray(json.repositories) ? json.repositories : [];
-    for (const repo of repositories) knownGithubRepositories.set(repo.fullName, repo);
+    const rawRepositories = isRecord(json) && Array.isArray(json.repositories)
+      ? json.repositories
+      : [];
+    const repositories = rawRepositories.filter(isGithubRepository);
+    for (const repository of repositories) {
+      knownGithubRepositories.set(repository.fullName, repository);
+    }
     status.textContent = repositories.length
-      ? 'Choose up to ' + INPUT_LIMITS.githubReposPerProvision + ' repositories.'
-      : 'No accessible repositories match your search.';
+      ? `Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.`
+      : "No accessible repositories match your search.";
     renderGithubRepositories(repositories);
   } catch (error) {
-    status.textContent = messageOf(error) || 'Could not load GitHub repositories.';
+    status.textContent = messageOf(error) || "Could not load GitHub repositories.";
   }
 }
 
-const githubSearch = element('github-repo-search');
-const githubRepoList = element('github-repos');
-if (githubRepoList) githubRepoList.addEventListener('change', (event: Event) => {
-  const target = event.target as HTMLInputElement;
-  if (!target.matches('input[name="githubRepo"]')) return;
-  if (target.checked) selectedGithubRepositories.add(target.value);
-  else selectedGithubRepositories.delete(target.value);
-  const checked = selectedGithubRepositories.size;
-  for (const input of githubRepoList.querySelectorAll('input:not(:checked)')) {
-    input.disabled = checked >= INPUT_LIMITS.githubReposPerProvision;
+const githubSearch = element<HTMLInputElement>("github-repo-search");
+const githubRepoList = element<HTMLElement>("github-repos");
+githubRepoList?.addEventListener("change", (event: Event) => {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  if (!event.target.matches('input[name="githubRepo"]')) return;
+  if (event.target.checked) selectedGithubRepositories.add(event.target.value);
+  else selectedGithubRepositories.delete(event.target.value);
+  for (const input of githubRepoList.querySelectorAll<HTMLInputElement>("input:not(:checked)")) {
+    input.disabled = selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
   }
 });
+
 let githubSearchTimer: ReturnType<typeof setTimeout> | undefined;
-if (githubSearch) githubSearch.addEventListener('input', () => {
+githubSearch?.addEventListener("input", () => {
   clearTimeout(githubSearchTimer);
   githubSearchTimer = setTimeout(() => loadGithubRepositories(githubSearch.value), 250);
 });
