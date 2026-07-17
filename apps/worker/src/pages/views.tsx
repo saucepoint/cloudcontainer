@@ -64,10 +64,13 @@ async function startWorldIdSignIn() {
     const builder = savedSessionId
       ? IDKit.proveSession(savedSessionId, config)
       : IDKit.createSession(config);
-    // A session needs one proof-of-human credential. Keep that credential as
-    // the root constraint, matching the documented request shape and avoiding
-    // an unnecessary one-item constraint tree at the World App boundary.
-    const request = await builder.constraints(IDKit.CredentialRequest('proof_of_human'));
+    // World App expects a constraint tree even with only one acceptable
+    // credential. The documented session request wraps proof-of-human in
+    // any(...); omitting that wrapper produces a different bridge payload
+    // that some World App clients reject before they can authorize.
+    const request = await builder.constraints(
+      IDKit.any(IDKit.CredentialRequest('proof_of_human')),
+    );
 
     if (request.connectorURI) {
       if (/Mobi|Android/i.test(navigator.userAgent)) {

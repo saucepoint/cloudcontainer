@@ -45,10 +45,9 @@ describe("World ID environment wiring", () => {
     expect(html).toContain("localStorage.removeItem('cs_world_id_session')");
   });
 
-  it("sends proof-of-human as the session flow's root constraint", () => {
+  it("sends World ID's documented proof-of-human session constraint tree", () => {
     const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(html).toContain("IDKit.CredentialRequest('proof_of_human')");
-    expect(html).not.toContain("IDKit.any(");
+    expect(html).toContain("IDKit.any(IDKit.CredentialRequest('proof_of_human'))");
   });
 });
 
