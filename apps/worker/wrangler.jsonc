@@ -34,10 +34,10 @@
     // World ID app from the Worldcoin Developer Portal (public identifier).
     // Must be upgraded to World ID 4.0 (Developer Portal → "Enable World ID 4.0" banner)
     // before RP_SIGNING_KEY/WORLD_ID_RP_ID below are valid.
-    "WORLD_ID_APP_ID": "app_21d4835daba5b66694f08b17d898d4b1",
+    "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
     // World ID 4.0 RP id, minted alongside the signing key when the app is
     // registered/upgraded for v4 (Developer Portal → configure_world_id). Public identifier.
-    "WORLD_ID_RP_ID": "rp_acfc6b195c1110a6",
+    "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
     // Must match the Developer Portal app/RP and the client used to approve
     // proofs. Real World App devices use "production"; the simulator uses
     // "staging". Keep this independent from DEV_AUTH.
