@@ -1,17 +1,18 @@
-/**
- * Render smoke tests for the server-rendered pages: the inline <script>
- * payloads are plain strings that tsc never sees, so parse each one with the
- * Function constructor to catch syntax errors at test time.
- */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { DashboardPage } from "../src/pages/dashboard.js";
 import { LandingPage, OnboardingPage } from "../src/pages/views.js";
 
-function scriptsOf(html: string): string[] {
+function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1] ?? "")
     .filter((s) => s.trim());
 }
+
+const landingClient = readFileSync(new URL("../client/landing.ts", import.meta.url), "utf8");
+const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
+const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
+const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false, worldIdEnvironment: "production" })],
@@ -19,15 +20,13 @@ const pages: Array<[string, () => unknown]> = [
   ["dashboard", () => DashboardPage({})],
 ];
 
-describe("inline page JS parses", () => {
+describe("compiled page clients", () => {
   for (const [name, render] of pages) {
-    it(name, () => {
+    it(`${name} uses external modules without inline behavior`, () => {
       const html = String(render());
-      const scripts = scriptsOf(html);
-      expect(scripts.length).toBeGreaterThan(0);
-      for (const s of scripts) {
-        expect(() => new Function(s)).not.toThrow();
-      }
+      expect(html).toContain(`<script type="module" src="/${name}.js"></script>`);
+      expect(inlineScriptsOf(html)).toEqual([]);
+      expect(html).not.toContain("onclick=");
     });
   }
 });
@@ -35,19 +34,18 @@ describe("inline page JS parses", () => {
 describe("World ID environment wiring", () => {
   it("renders the configured environment independently of dev auth", () => {
     const html = String(LandingPage({ devAuth: true, worldIdEnvironment: "production" }));
-    expect(html).toContain("environment: 'production'");
+    expect(html).toContain('data-world-id-environment="production"');
+    expect(landingClient).toContain("btn?.dataset.worldIdEnvironment");
     expect(html).toContain("Dev login");
   });
 
   it("discards stale non-v4 session IDs before calling proveSession", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(html).toContain("/^session_[0-9a-f]{128}$/i");
-    expect(html).toContain("localStorage.removeItem('cs_world_id_session')");
+    expect(landingClient).toContain("/^session_[0-9a-f]{128}$/i");
+    expect(landingClient).toContain("localStorage.removeItem('cs_world_id_session')");
   });
 
   it("sends World ID's documented proof-of-human session constraint tree", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(html).toContain("IDKit.any(IDKit.CredentialRequest('proof_of_human'))");
+    expect(landingClient).toContain("IDKit.any(IDKit.CredentialRequest('proof_of_human'))");
   });
 });
 
@@ -62,7 +60,8 @@ describe("subscription sign-in wiring", () => {
   it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
     const html = String(OnboardingPage({}));
     for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
-      expect(html).toContain(flow);
+      expect(authFlowsClient).toContain(`export const ${flow}`);
+      expect(onboardingClient).toContain(flow);
     }
     expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
@@ -92,9 +91,9 @@ describe("subscription sign-in wiring", () => {
     for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
       expect(html).not.toContain(flow);
     }
-    expect(html).toContain("Set during setup");
-    expect(html).toContain("manual terminal commands");
-    expect(html).not.toContain("/api/credentials");
+    expect(dashboardClient).toContain("Set during setup");
+    expect(dashboardClient).toContain("manual terminal commands");
+    expect(dashboardClient).not.toContain("/api/credentials");
     expect(html).not.toContain("Changes apply without a restart");
   });
 });
@@ -136,10 +135,10 @@ describe("GitHub repository onboarding", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
     expect(enabled).toContain("Connect GitHub");
     expect(enabled).toContain("Reauthorize GitHub");
-    expect(enabled).toContain("/auth/github/reauth");
+    expect(onboardingClient).toContain("/auth/github/reauth");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
-    expect(enabled).toContain("/api/github/repos");
-    expect(enabled).toContain('name=\"githubRepo\"');
+    expect(onboardingClient).toContain("/api/github/repos");
+    expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
     expect(enabled).toContain('id=\"github-repo-search\"');
 
@@ -149,67 +148,69 @@ describe("GitHub repository onboarding", () => {
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
-    const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("const selected = new Set(");
-    expect(html).toContain("input.checked = selected.has(input.value)");
-    expect(html).toContain("sessionStorage.removeItem(agentSelectionKey)");
-    expect(html).not.toContain("data-checked");
+    expect(onboardingClient).toContain("const selected = new Set(");
+    expect(onboardingClient).toContain("input.checked = selected.has(input.value)");
+    expect(onboardingClient).toContain("sessionStorage.removeItem(agentSelectionKey)");
+    expect(String(OnboardingPage({ githubAvailable: true }))).not.toContain("data-checked");
   });
 });
 
 describe("dashboard loading and polling", () => {
   it("loads one dashboard snapshot, then polls only container state without replacing forms", () => {
-    const html = String(DashboardPage({}));
-    const script = scriptsOf(html).find((value) => value.includes("loadDashboard")) ?? "";
-    const load = script.slice(script.indexOf("window.loadDashboard"), script.indexOf("document.addEventListener"));
-    const poll = script.slice(script.indexOf("async function pollContainer"), script.indexOf("window.act"));
+    const load = dashboardClient.slice(
+      dashboardClient.indexOf("const loadDashboard"),
+      dashboardClient.indexOf("React.useEffect(() => { void loadDashboard()"),
+    );
+    const poll = dashboardClient.slice(
+      dashboardClient.indexOf("const pollContainer = async"),
+      dashboardClient.indexOf("const act"),
+    );
 
-    expect(load).toContain("api('/api/dashboard')");
-    expect(load).toContain("renderCreds(snapshot.credentials)");
-    expect(load).toContain("renderKeys(knownKeys)");
-    expect(poll).toContain("api('/api/container')");
-    expect(poll).not.toContain("renderCreds(");
-    expect(poll).not.toContain("renderKeys(");
+    expect(load).toContain('api<DashboardSnapshot>("/api/dashboard")');
+    expect(load).toContain("setCredentials(snapshot.credentials)");
+    expect(load).toContain("setKeys(snapshot.keys)");
+    expect(poll).toContain('api<{ container: ContainerView | null }>("/api/container")');
     expect(poll).not.toContain("/api/credentials");
     expect(poll).not.toContain("/api/keys");
   });
 
   it("uses non-overlapping, visibility-aware polling with distinct build and waitlist delays", () => {
-    const html = String(DashboardPage({}));
-    expect(html).toContain("if (c.status === 'waitlisted') return 30000");
-    expect(html).toContain("if (isBusy(c)) return 5000");
-    expect(html).toContain("setTimeout(pollContainer, delay)");
-    expect(html).toContain("pollInFlight");
-    expect(html).toContain("document.hidden");
-    expect(html).toContain("visibilitychange");
-    expect(html).not.toContain("setInterval(");
+    expect(dashboardClient).toContain('if (container.status === "waitlisted") return 30_000');
+    expect(dashboardClient).toContain("if (isBusy(container)) return 5_000");
+    expect(dashboardClient).toContain("setTimeout(pollContainer, delay)");
+    expect(dashboardClient).toContain("pollInFlight");
+    expect(dashboardClient).toContain("document.hidden");
+    expect(dashboardClient).toContain("visibilitychange");
+    expect(dashboardClient).not.toContain("setInterval(");
   });
 });
 
 describe("beginner-friendly provisioning UI", () => {
   it("puts SSH access before credentials and only unlocks key setup after a successful build", () => {
-    const html = String(DashboardPage({}));
-    expect(html.indexOf("SSH access")).toBeLessThan(html.indexOf("Credentials"));
-    expect(html).toContain("Copy SSH command");
-    expect(html).toContain("Set up SSH with an agent");
-    expect(html).toContain("Enroll another device");
-    expect(html).toContain("ssh-keygen -t ed25519");
-    expect(html).toContain("Never paste your private key");
-    expect(html).toContain('id="enroll"');
-    expect(html).toContain("waitlisted: 'Waiting for capacity'");
-    expect(html).toContain("running: 'Ready'");
-    expect(html).toContain("statusRefreshNeeded");
-    expect(html).toContain("function canManageSshKeys(c)");
-    expect(html).toContain("c.status === 'running'");
-    expect(html).toContain("SSH setup unlocks after the server is ready");
-    expect(html).toContain("Finish building your server before creating an SSH setup prompt");
-    expect(html).toContain("c.status === 'running' && knownKeys.length === 0");
-    expect(html).toContain("Add an SSH key to reveal your connection command");
-    expect(html).toContain("You cannot see the SSH host or port until a key has been added");
-    expect(html.indexOf("c.status === 'running' && knownKeys.length === 0")).toBeLessThan(
-      html.indexOf("if (currentSshCommand)"),
+    const renderedDashboard = dashboardClient.slice(dashboardClient.indexOf("if (!loaded)"));
+    expect(renderedDashboard.indexOf('id="ssh-heading"')).toBeLessThan(
+      renderedDashboard.indexOf("<CredentialsCard"),
     );
-    expect(html).toContain("refreshKeysAndConnection");
+    expect(dashboardClient).toContain("Copy SSH command");
+    expect(dashboardClient).toContain("Set up SSH with an agent");
+    expect(dashboardClient).toContain("Enroll another device");
+    expect(dashboardClient).toContain("ssh-keygen -t ed25519");
+    expect(dashboardClient).toContain("Never paste your private key");
+    expect(dashboardClient).toContain('id="enroll"');
+    expect(dashboardClient).toContain('waitlisted: "Waiting for capacity"');
+    expect(dashboardClient).toContain('running: "Ready"');
+    expect(dashboardClient).toContain("refreshNeeded");
+    expect(dashboardClient).toContain("function canManageSshKeys(container");
+    expect(dashboardClient).toContain('container?.status === "running"');
+    expect(dashboardClient).toContain("SSH setup unlocks after the server is ready");
+    expect(dashboardClient).toContain("Finish building the server before adding keys or creating an agent setup prompt");
+    expect(dashboardClient).toContain('container.status === "running" && !hasKeys');
+    expect(dashboardClient).toContain("Add an SSH key to reveal your connection command");
+    expect(dashboardClient).toContain("You cannot see the SSH host or port until a key has been added");
+    expect(dashboardClient.indexOf('container.status === "running" && !hasKeys')).toBeLessThan(
+      dashboardClient.indexOf("if (container.sshCommand)"),
+    );
+    expect(dashboardClient).toContain("refreshKeysAndConnection");
   });
 
   it("explains agent choices without recommending one", () => {
@@ -247,11 +248,9 @@ describe("page accessibility and recovery affordances", () => {
 
   it("has live status regions and visible retryable dashboard errors", () => {
     const html = String(DashboardPage({}));
-    expect(html).toContain('id="page-error"');
-    expect(html).toContain('id="action-error"');
-    expect(html).toContain('role="alert" aria-live="assertive"');
-    expect(html).toContain('role="status" aria-live="polite"');
-    expect(html).toContain("Try again");
+    expect(dashboardClient).toContain('role="alert" aria-live="assertive"');
+    expect(dashboardClient).toContain('role="status" aria-live="polite"');
+    expect(dashboardClient).toContain("Try again");
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
   });

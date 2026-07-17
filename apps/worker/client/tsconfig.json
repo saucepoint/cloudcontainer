@@ -7,5 +7,5 @@
     "moduleResolution": "Bundler",
     "types": ["react", "react-dom"]
   },
-  "include": ["ui.tsx"]
+  "include": ["*.ts", "*.tsx"]
 }

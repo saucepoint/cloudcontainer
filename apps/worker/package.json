@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:client": "esbuild client/ui.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --outfile=public/ui.js",
+    "build:client": "rm -f public/*.js && esbuild client/ui.tsx client/landing.ts client/onboarding.ts client/dashboard.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
     "predev": "npm run build:client",
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",

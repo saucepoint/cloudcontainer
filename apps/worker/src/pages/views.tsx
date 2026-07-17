@@ -8,7 +8,6 @@ import {
   type Agent,
   type LlmProvider,
 } from "@codestation/contract";
-import { AUTH_FLOWS_JS } from "./authflows.js";
 import { Layout } from "./layout.js";
 
 /** Providers the wizard form can submit directly; OAuth-only ones are stored
@@ -26,122 +25,6 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
 };
 
 const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";
-const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
-const WORLD_ID_SESSION_KEY = "cs_world_id_session";
-const WORLD_ID_SESSION_ID_RE = /^session_[0-9a-f]{128}$/i;
-
-const worldIdJs = (environment: "production" | "staging") => `
-const btn = document.getElementById('worldid-btn');
-const status = document.getElementById('worldid-status');
-const qrWrap = document.getElementById('worldid-qr');
-const WORLD_ID_SESSION_ID_RE = ${WORLD_ID_SESSION_ID_RE};
-
-async function startWorldIdSignIn() {
-  if (typeof IDKit === 'undefined') {
-    status.textContent = 'Could not load World ID. Check your connection and reload.';
-    return;
-  }
-  btn.disabled = true;
-  status.textContent = 'Connecting to World ID…';
-  qrWrap.innerHTML = '';
-  try {
-    const contextRes = await fetch('/auth/session/rp-context');
-    const context = await contextRes.json().catch(() => ({}));
-    if (!contextRes.ok) throw new Error(context.error || 'Could not start World ID sign-in.');
-    const { app_id, rp_context } = context;
-    let savedSessionId = null;
-    try {
-      const stored = localStorage.getItem('${WORLD_ID_SESSION_KEY}');
-      if (stored && WORLD_ID_SESSION_ID_RE.test(stored)) {
-        savedSessionId = stored;
-      } else if (stored) {
-        // Older builds could leave a non-v4 value here. IDKit.proveSession rejects
-        // it before a request is created, which otherwise makes login look stuck.
-        localStorage.removeItem('${WORLD_ID_SESSION_KEY}');
-      }
-    } catch (_) {}
-    const config = { app_id, rp_context, environment: '${environment}' };
-    const builder = savedSessionId
-      ? IDKit.proveSession(savedSessionId, config)
-      : IDKit.createSession(config);
-    // World App expects a constraint tree even with only one acceptable
-    // credential. The documented session request wraps proof-of-human in
-    // any(...); omitting that wrapper produces a different bridge payload
-    // that some World App clients reject before they can authorize.
-    const request = await builder.constraints(
-      IDKit.any(IDKit.CredentialRequest('proof_of_human')),
-    );
-
-    if (request.connectorURI) {
-      if (/Mobi|Android/i.test(navigator.userAgent)) {
-        status.textContent = 'Opening World App…';
-        window.location.href = request.connectorURI;
-      } else {
-        status.textContent = 'Scan with World App';
-        const { default: QRCode } = await import('${QRCODE_ESM}');
-        const canvas = document.createElement('canvas');
-        qrWrap.appendChild(canvas);
-        await QRCode.toCanvas(canvas, request.connectorURI, { width: 220, margin: 1 });
-      }
-    }
-
-    const completion = await request.pollUntilCompletion({ timeout: 180000 });
-    if (!completion.success) {
-      // World App sometimes presents a generic error without exposing its
-      // protocol code in the native UI. Record only that code and the opaque
-      // bridge request ID; never send the proof, session ID, or user data.
-      try {
-        await fetch('/auth/session/failure', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code: completion.error, request_id: request.requestId }),
-          keepalive: true,
-        });
-      } catch (_) {}
-      const messages = {
-        timeout: 'Timed out waiting for World App.',
-        cancelled: 'Cancelled in World App.',
-        user_rejected: 'Cancelled in World App.',
-        verification_rejected: 'Cancelled in World App.',
-        invalid_network: 'World ID environment mismatch. This site must use production with the real World App.',
-        invalid_rp_signature: 'World ID rejected this site’s RP signing key.',
-        unknown_rp: 'World ID does not recognize this site’s RP ID.',
-        inactive_rp: 'This site’s World ID registration is not active yet.',
-        world_id_4_not_available: 'Your World App does not have a World ID 4.0 credential yet.',
-        credential_unavailable: 'Your World App does not have the required proof-of-human credential.',
-        malformed_request: 'World ID rejected this site’s request configuration.',
-        connection_failed: 'The connection to World App was lost. Please try again.',
-        failed_by_host_app: 'World App could not process this request. Please try again.',
-        generic_error: 'World App could not process this request. Please try again.',
-        unexpected_response: 'World App returned an unexpected response. Please try again.',
-        duplicate_nonce: 'This World ID request was already used. Please start again.',
-        timestamp_too_old: 'This World ID request expired. Please start again.',
-        timestamp_too_far_in_future: 'Your device time appears incorrect. Please correct it and try again.',
-        invalid_timestamp: 'Your device time appears incorrect. Please correct it and try again.',
-      };
-      throw new Error(messages[completion.error] || ('World ID error: ' + completion.error));
-    }
-
-    status.textContent = 'Verifying…';
-    qrWrap.innerHTML = '';
-    const res = await fetch('/auth/session/verify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idkitResponse: completion.result }),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || 'Sign-in failed.');
-
-    try { localStorage.setItem('${WORLD_ID_SESSION_KEY}', completion.result.session_id); } catch (_) {}
-    location.href = json.redirect;
-  } catch (e) {
-    status.textContent = e.message || 'Something went wrong. Please try again.';
-    btn.disabled = false;
-  }
-}
-
-btn.addEventListener('click', startWorldIdSignIn);
-`;
 
 export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production" | "staging" }> = ({
   devAuth,
@@ -165,7 +48,7 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
       </ul>
     </div>
     <div class="card landing-signin">
-      <button id="worldid-btn" class="btn" type="button">
+      <button id="worldid-btn" class="btn" type="button" data-world-id-environment={worldIdEnvironment}>
         Continue with World ID →
       </button>
       {devAuth ? (
@@ -180,186 +63,11 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
       </p>
       <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
       <script src={IDKIT_SRC}></script>
-      <script type="module" dangerouslySetInnerHTML={{ __html: worldIdJs(worldIdEnvironment) }} />
+      <script type="module" src="/landing.js"></script>
     </div>
   </Layout>
 );
 
-const ONBOARDING_JS = `
-const form = document.getElementById('wizard');
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = document.getElementById('go');
-  const err = document.getElementById('err');
-  err.textContent = '';
-  const data = new FormData(form);
-  const llmKeys = {};
-  for (const k of ${JSON.stringify(PASTEABLE_PROVIDERS)}) {
-    const v = (data.get('llm_' + k) || '').toString().trim();
-    if (v) llmKeys[k] = v;
-  }
-  const body = {
-    agents: data.getAll('agent').map((a) => a.toString()),
-    sshPubkey: (data.get('sshPubkey') || '').toString().trim(),
-    llmKeys,
-    cloudflareToken: (data.get('cloudflareToken') || '').toString().trim() || undefined,
-    githubRepos: data.getAll('githubRepo').map((repo) => repo.toString()),
-  };
-  if (body.agents.length === 0) {
-    err.textContent = 'Pick at least one agent first.';
-    err.focus();
-    return;
-  }
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Starting…';
-  try {
-    const res = await fetch('/api/provision', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || 'provisioning failed');
-    location.href = '/dashboard';
-  } catch (e2) {
-    err.textContent = e2.message;
-    err.focus();
-    btn.disabled = false;
-    btn.textContent = 'Create server →';
-  }
-});
-
-// Sign-in flows store their credential server-side the moment they complete,
-// so they need no field in the provision body.
-function wireSignin(id, flowFn) {
-  const btn = document.getElementById(id + '-signin');
-  btn.addEventListener('click', () => {
-    if (window.afActive) return;
-    flowFn(document.getElementById(id + '-flow'), () => {
-      document.getElementById(id + '-flow').innerHTML = '';
-      btn.style.display = 'none';
-      document.getElementById(id + '-connected').style.display = '';
-    });
-  });
-}
-wireSignin('claude', window.claudeOauthFlow);
-wireSignin('codex', window.codexDeviceFlow);
-wireSignin('copilot', window.copilotDeviceFlow);
-wireSignin('wrangler', window.wranglerOauthFlow);
-
-const githubConnect = document.getElementById('github-connect');
-const githubReauthorize = document.getElementById('github-reauthorize');
-if (githubConnect || githubReauthorize) {
-  const agentSelectionKey = 'codestation-github-agents';
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(agentSelectionKey) || '[]');
-    const selected = new Set(Array.isArray(saved) ? saved.filter((agent) => typeof agent === 'string') : []);
-    for (const input of form.querySelectorAll('input[name="agent"]')) {
-      input.checked = selected.has(input.value);
-    }
-  } catch (_) {
-    // Storage can be unavailable or contain data from an older UI; both are safe to ignore.
-  }
-  try { sessionStorage.removeItem(agentSelectionKey); } catch (_) {}
-
-  const saveGithubAgents = () => {
-    try {
-      sessionStorage.setItem(agentSelectionKey, JSON.stringify(
-        new FormData(form).getAll('agent').map((agent) => agent.toString())
-      ));
-    } catch (_) {}
-  };
-  if (githubConnect) githubConnect.addEventListener('click', saveGithubAgents);
-  if (githubReauthorize) githubReauthorize.addEventListener('click', async () => {
-    saveGithubAgents();
-    githubReauthorize.disabled = true;
-    try {
-      const res = await fetch('/auth/github/reauth?return_to=/onboarding', { method: 'POST' });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.authorizationUrl) throw new Error(json.error || 'Could not reset GitHub authorization.');
-      location.href = json.authorizationUrl;
-    } catch (error) {
-      const status = document.getElementById('github-status');
-      status.textContent = error.message || 'Could not reset GitHub authorization.';
-      githubReauthorize.disabled = false;
-    }
-  });
-}
-
-const selectedGithubRepositories = new Set();
-const knownGithubRepositories = new Map();
-
-function renderGithubRepositories(repositories) {
-  const list = document.getElementById('github-repos');
-  const visible = new Map(repositories.map((repo) => [repo.fullName, repo]));
-  for (const fullName of selectedGithubRepositories) {
-    const repo = knownGithubRepositories.get(fullName);
-    if (repo) visible.set(fullName, repo);
-  }
-  list.innerHTML = [...visible.values()].map((repo, index) => {
-    const visibility = repo.private ? 'private' : 'public';
-    const archived = repo.archived ? ' · archived' : '';
-    const description = repo.description ? '<small>' + onEsc(repo.description) + '</small>' : '';
-    const checked = selectedGithubRepositories.has(repo.fullName) ? ' checked' : '';
-    return '<label class="repo-choice" for="github-repo-' + index + '">' +
-      '<input type="checkbox" id="github-repo-' + index + '" name="githubRepo" value="' +
-        onEsc(repo.fullName) + '"' + checked + '>' +
-      '<span><strong>' + onEsc(repo.fullName) + '</strong>' +
-        '<small>' + visibility + archived + '</small>' + description + '</span></label>';
-  }).join('');
-}
-
-async function loadGithubRepositories(query) {
-  const list = document.getElementById('github-repos');
-  if (!list) return;
-  const status = document.getElementById('github-status');
-  if (!query.trim()) {
-    renderGithubRepositories([]);
-    status.textContent = 'Search for a repository by owner or name.';
-    return;
-  }
-  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>Searching GitHub…';
-  try {
-    const res = await fetch('/api/github/repos?q=' + encodeURIComponent(query));
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      if (res.status === 409) {
-        status.textContent = 'Connect GitHub to search repositories.';
-        return;
-      }
-      throw new Error(json.error || 'Could not load repositories');
-    }
-    const repositories = Array.isArray(json.repositories) ? json.repositories : [];
-    for (const repo of repositories) knownGithubRepositories.set(repo.fullName, repo);
-    status.textContent = repositories.length
-      ? 'Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.'
-      : 'No accessible repositories match your search.';
-    renderGithubRepositories(repositories);
-  } catch (error) {
-    status.textContent = error.message || 'Could not load GitHub repositories.';
-  }
-}
-
-const onEsc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const githubSearch = document.getElementById('github-repo-search');
-const githubRepoList = document.getElementById('github-repos');
-if (githubRepoList) githubRepoList.addEventListener('change', (event) => {
-  if (!event.target.matches('input[name="githubRepo"]')) return;
-  if (event.target.checked) selectedGithubRepositories.add(event.target.value);
-  else selectedGithubRepositories.delete(event.target.value);
-  const checked = selectedGithubRepositories.size;
-  for (const input of githubRepoList.querySelectorAll('input:not(:checked)')) {
-    input.disabled = checked >= ${INPUT_LIMITS.githubReposPerProvision};
-  }
-});
-let githubSearchTimer;
-if (githubSearch) githubSearch.addEventListener('input', () => {
-  clearTimeout(githubSearchTimer);
-  githubSearchTimer = setTimeout(() => loadGithubRepositories(githubSearch.value), 250);
-});
-`;
-
-/** One "Sign in with …" subscription block, shared markup for the wizard. */
 const SigninProvider: FC<{
   id: string;
   title: string;
@@ -585,7 +293,6 @@ export const OnboardingPage: FC<{ githubAvailable?: boolean }> = ({ githubAvaila
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>
-    <script dangerouslySetInnerHTML={{ __html: AUTH_FLOWS_JS }} />
-    <script dangerouslySetInnerHTML={{ __html: ONBOARDING_JS }} />
+    <script type="module" src="/onboarding.js"></script>
   </Layout>
 );
