@@ -87,6 +87,17 @@ async function startWorldIdSignIn() {
 
     const completion = await request.pollUntilCompletion({ timeout: 180000 });
     if (!completion.success) {
+      // World App sometimes presents a generic error without exposing its
+      // protocol code in the native UI. Record only that code and the opaque
+      // bridge request ID; never send the proof, session ID, or user data.
+      try {
+        await fetch('/auth/session/failure', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code: completion.error, request_id: request.requestId }),
+          keepalive: true,
+        });
+      } catch (_) {}
       const messages = {
         timeout: 'Timed out waiting for World App.',
         cancelled: 'Cancelled in World App.',
@@ -100,6 +111,13 @@ async function startWorldIdSignIn() {
         credential_unavailable: 'Your World App does not have the required proof-of-human credential.',
         malformed_request: 'World ID rejected this site’s request configuration.',
         connection_failed: 'The connection to World App was lost. Please try again.',
+        failed_by_host_app: 'World App could not process this request. Please try again.',
+        generic_error: 'World App could not process this request. Please try again.',
+        unexpected_response: 'World App returned an unexpected response. Please try again.',
+        duplicate_nonce: 'This World ID request was already used. Please start again.',
+        timestamp_too_old: 'This World ID request expired. Please start again.',
+        timestamp_too_far_in_future: 'Your device time appears incorrect. Please correct it and try again.',
+        invalid_timestamp: 'Your device time appears incorrect. Please correct it and try again.',
       };
       throw new Error(messages[completion.error] || ('World ID error: ' + completion.error));
     }
@@ -140,11 +158,9 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
         </li>
         <li>
           Pi, Claude Code, Codex, and/or OpenCode
-          <span class="ok">included</span>
         </li>
         <li>
           SSH, tmux, git, Node, Python, and more
-          <span class="ok">included</span>
         </li>
       </ul>
     </div>

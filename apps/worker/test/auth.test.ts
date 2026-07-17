@@ -135,6 +135,35 @@ describe("/auth/session/verify", () => {
   });
 });
 
+describe("/auth/session/failure", () => {
+  it("logs only a sanitized World App failure code and opaque request ID", async () => {
+    const { env } = makeEnv();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const res = await app().request(
+      "/auth/session/failure",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          code: "generic_error",
+          request_id: "01234567-89ab-cdef-0123-456789abcdef",
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(204);
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "worldid_client_failed",
+        code: "generic_error",
+        requestId: "01234567-89ab-cdef-0123-456789abcdef",
+      }),
+    );
+  });
+});
+
 describe("logout", () => {
   it("revokes the session and clears the cookie", async () => {
     const { env, kv } = makeEnv({ DEV_AUTH: "1" });

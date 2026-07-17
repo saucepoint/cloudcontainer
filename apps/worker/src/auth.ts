@@ -80,6 +80,22 @@ export const authRoutes = new Hono<AppContext>()
   .get("/auth/session/rp-context", (c) => {
     return c.json({ app_id: c.env.WORLD_ID_APP_ID, rp_context: signSessionRequest(c.env) });
   })
+  // Capture a World App protocol outcome when the native client only shows a
+  // generic error. The browser intentionally sends no proof, identity, or
+  // session value to this endpoint.
+  .post("/auth/session/failure", async (c) => {
+    const body = await readJsonBody<{ code?: unknown; request_id?: unknown }>(c);
+    const code =
+      typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code)
+        ? body.code
+        : "unknown";
+    const requestId =
+      typeof body?.request_id === "string" && /^[0-9a-f-]{36}$/i.test(body.request_id)
+        ? body.request_id
+        : undefined;
+    console.log(JSON.stringify({ event: "worldid_client_failed", code, requestId }));
+    return c.body(null, 204);
+  })
   .post("/auth/session/verify", async (c) => {
     const body = await readJsonBody<{ idkitResponse?: unknown }>(c);
     if (!body || typeof body !== "object" || !("idkitResponse" in body)) {
