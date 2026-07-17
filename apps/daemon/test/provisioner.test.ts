@@ -288,6 +288,76 @@ describe("provision command construction", () => {
     }
   });
 
+  it("configures selected Pi and OpenCode with ChatGPT and Claude subscription OAuth", async () => {
+    const calls: Call[] = [];
+    const codexAuth = JSON.stringify({
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: "CANARY-codex-id",
+        access_token: "CANARY-codex-access",
+        refresh_token: "CANARY-codex-refresh",
+        account_id: "acct-42",
+      },
+      last_refresh: "2026-07-17T10:00:00.000Z",
+    });
+    const sealed = sealJson(
+      {
+        llmKeys: {
+          claude_subscription_token: "CANARY-oat01-claude-123",
+          codex_subscription_token: codexAuth,
+        },
+      },
+      hostKeys.publicKey,
+    );
+    const request = provisionRequest(sealed);
+    request.spec.agents = ["pi", "opencode"];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(request);
+
+    const piMerge = calls.find((c) => c.stdin?.includes("/home/dev/.pi/agent/auth.json"));
+    expect(piMerge?.stdin).toContain('"anthropic":{"type":"oauth"');
+    expect(piMerge?.stdin).toContain('"openai-codex":{"type":"oauth"');
+    expect(piMerge?.stdin).toContain('"access":"CANARY-codex-access"');
+    expect(piMerge?.stdin).toContain('"refresh":"CANARY-codex-refresh"');
+    expect(piMerge?.stdin).toContain("...current, ...add");
+    expect(piMerge?.stdin).toContain("fs.chmodSync(file, 0o600)");
+
+    const opencodeMerge = calls.find((c) =>
+      c.stdin?.includes("/home/dev/.local/share/opencode/auth.json"),
+    );
+    expect(opencodeMerge?.stdin).toContain('"anthropic":{"type":"oauth"');
+    expect(opencodeMerge?.stdin).toContain('"openai":{"type":"oauth"');
+    expect(opencodeMerge?.stdin).toContain('"accountId":"acct-42"');
+    expect(opencodeMerge?.stdin).toContain('"access":"CANARY-oat01-claude-123"');
+    expect(opencodeMerge?.stdin).toContain("...current, ...add");
+    for (const c of calls) {
+      expect(c.args.join(" ")).not.toContain("CANARY-");
+    }
+  });
+
+  it("does not configure unselected open-source agents with subscription OAuth", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      {
+        llmKeys: {
+          claude_subscription_token: "CANARY-oat01-claude-123",
+          codex_subscription_token: JSON.stringify({
+            tokens: {
+              access_token: "CANARY-codex-access",
+              refresh_token: "CANARY-codex-refresh",
+            },
+          }),
+        },
+      },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    expect(calls.some((c) => c.stdin?.includes("/home/dev/.pi/agent/auth.json"))).toBe(false);
+    expect(calls.some((c) => c.stdin?.includes("/home/dev/.local/share/opencode/auth.json"))).toBe(false);
+  });
+
   it("merges Copilot and OpenCode Go into OpenCode's auth store via a self-deleting dev-run script", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(

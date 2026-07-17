@@ -37,6 +37,8 @@ const LLM_ENV_VARS: Record<LlmProvider, readonly string[]> = {
 
 /** Where the Codex CLI keeps its subscription (ChatGPT sign-in) credentials. */
 const CODEX_AUTH_PATH = "/home/dev/.codex/auth.json";
+/** Pi's provider credential store; selected subscription auth is merged here. */
+const PI_AUTH_PATH = "/home/dev/.pi/agent/auth.json";
 /** Claude Code's machine-local state (separate from settings and credentials). */
 const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
 /** OpenCode's credential store; subscription entries are merged into it. */
@@ -73,13 +75,14 @@ export class Provisioner {
         // fields keep daemon-first rolling deploys compatible with old Workers.
         if (request.sshKeys && request.dashboardUrl) {
           const creds = this.unseal(request.sealedCredentials);
+          const agents = await this.agentsOf(name);
           await this.writeAuthorizedKeys(name, request.sshKeys);
-          await this.writeCredentials(name, creds);
+          await this.writeCredentials(name, creds, agents);
           await this.incus.writeFile(
             name,
             "/etc/motd",
             renderMotd({
-              agents: await this.agentsOf(name),
+              agents,
               credentials: creds,
               sshKeyCount: request.sshKeys.length,
               dashboardUrl: request.dashboardUrl,
@@ -117,8 +120,8 @@ export class Provisioner {
         return null;
       case "refresh-credentials": {
         const creds = this.unseal(request.sealedCredentials);
-        await this.writeCredentials(name, creds);
         const agents = await this.agentsOf(name);
+        await this.writeCredentials(name, creds, agents);
         const keyCount = await this.authorizedKeyCount(name);
         await this.incus.writeFile(
           name,
@@ -174,7 +177,7 @@ export class Provisioner {
       );
 
       await this.writeAuthorizedKeys(name, sshKeys);
-      await this.writeCredentials(name, creds);
+      await this.writeCredentials(name, creds, spec.agents);
       await this.cloneGithubRepositories(name, request.githubRepos);
       await this.incus.writeFile(
         name,
@@ -245,7 +248,11 @@ export class Provisioner {
    * Write agent credential files (0600, owned by dev) and wire them into the
    * login shell. Config files over process-wide env vars where possible (§13).
    */
-  private async writeCredentials(name: string, creds: CredentialPayload): Promise<void> {
+  private async writeCredentials(
+    name: string,
+    creds: CredentialPayload,
+    agents: readonly Agent[],
+  ): Promise<void> {
     const llm = creds.llmKeys ?? {};
     const lines: string[] = ["# managed by codestation — rewritten on credential changes"];
     const add = (envVar: string, value: string | undefined) => {
@@ -306,13 +313,75 @@ export class Provisioner {
       await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
     }
 
+    // Pi and OpenCode can use the same subscription authorization completed
+    // in the dashboard. Only configure an open-source harness when the user
+    // selected it; preserve credentials connected from inside the container.
+    // Claude's setup token is a non-refreshing OAuth bearer token, while the
+    // Codex blob contains the access/refresh pair both harnesses expect.
+    const piEntries: Record<string, unknown> = {};
+    const opencodeEntries: Record<string, unknown> = {};
+    if (llm.claude_subscription_token) {
+      const oauth = {
+        type: "oauth",
+        refresh: llm.claude_subscription_token,
+        access: llm.claude_subscription_token,
+        expires: Number.MAX_SAFE_INTEGER,
+      };
+      if (agents.includes("pi")) piEntries.anthropic = oauth;
+      if (agents.includes("opencode")) opencodeEntries.anthropic = oauth;
+    }
+    if (
+      llm.codex_subscription_token &&
+      (agents.includes("pi") || agents.includes("opencode"))
+    ) {
+      let parsed: {
+        last_refresh?: unknown;
+        tokens?: {
+          access_token?: unknown;
+          refresh_token?: unknown;
+          account_id?: unknown;
+        };
+      };
+      try {
+        const value = JSON.parse(llm.codex_subscription_token) as unknown;
+        if (!value || typeof value !== "object") throw new Error();
+        parsed = value as typeof parsed;
+      } catch {
+        // Never let JSON parser diagnostics echo credential fragments into a
+        // job error stored by the control plane.
+        throw new Error("invalid Codex subscription auth payload");
+      }
+      const access = parsed.tokens?.access_token;
+      const refresh = parsed.tokens?.refresh_token;
+      if (typeof access !== "string" || typeof refresh !== "string") {
+        throw new Error("invalid Codex subscription auth payload");
+      }
+      const refreshedAt =
+        typeof parsed.last_refresh === "string" ? Date.parse(parsed.last_refresh) : Number.NaN;
+      const oauth = {
+        type: "oauth",
+        refresh,
+        access,
+        expires: (Number.isFinite(refreshedAt) ? refreshedAt : Date.now()) + 60 * 60 * 1000,
+      };
+      if (agents.includes("pi")) piEntries["openai-codex"] = oauth;
+      if (agents.includes("opencode")) {
+        opencodeEntries.openai = {
+          ...oauth,
+          ...(typeof parsed.tokens?.account_id === "string"
+            ? { accountId: parsed.tokens.account_id }
+            : {}),
+        };
+      }
+    }
+    await this.mergeAgentAuth(name, "pi-auth-merge.cjs", PI_AUTH_PATH, piEntries);
+
     // GitHub Copilot and OpenCode Go live in OpenCode's auth store. Merged in
     // by a short node script (node is baked into the base image) so providers
     // connected in-shell via `opencode auth login` survive; write-only like
     // the Codex file. The script embeds the tokens, so it is dev-owned 0600
     // and removes itself after the merge. Runs after the chown -R above so
     // dev can delete it from its directory.
-    const opencodeEntries: Record<string, unknown> = {};
     if (llm.github_copilot) {
       // OpenCode's github-copilot provider keeps the GitHub OAuth token as
       // "refresh" and mints short-lived Copilot API tokens from it on demand.
@@ -395,6 +464,29 @@ export class Provisioner {
         "rm -f /home/dev/.config/gh/hosts.yml /home/dev/.git-credentials",
       );
     }
+  }
+
+  private async mergeAgentAuth(
+    name: string,
+    scriptName: string,
+    authPath: string,
+    entries: Record<string, unknown>,
+  ): Promise<void> {
+    if (Object.keys(entries).length === 0) return;
+    const scriptPath = `/home/dev/.config/codestation/${scriptName}`;
+    const script = [
+      `const fs = require("fs");`,
+      `const file = ${JSON.stringify(authPath)};`,
+      `const add = ${JSON.stringify(entries)};`,
+      `fs.mkdirSync(require("path").dirname(file), { recursive: true });`,
+      `let current = {};`,
+      `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
+      `fs.writeFileSync(file, JSON.stringify({ ...current, ...add }, null, 2) + "\\n", { mode: 0o600 });`,
+      `fs.chmodSync(file, 0o600);`,
+      `fs.rmSync(__filename);`,
+    ].join("\n");
+    await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
+    await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
   }
 
   /** sync-keys touched only keys; refresh the MOTD from on-disk credential *presence*. */
