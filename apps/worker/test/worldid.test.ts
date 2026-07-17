@@ -34,4 +34,38 @@ describe("World ID proof verification", () => {
       /400.*invalid_rp_signature/,
     );
   });
+
+  it("uses the verifier response and rejects a false verification result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: true, session_id: "session_verified" }), {
+          status: 200,
+        }),
+      ),
+    );
+
+    await expect(verifySessionProof(makeEnv().env, proof)).resolves.toEqual({
+      sessionId: "session_verified",
+      sessionNullifier: "nullifier",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: false }), { status: 200 }),
+      ),
+    );
+    await expect(verifySessionProof(makeEnv().env, proof)).rejects.toThrow(
+      "verifier returned success=false",
+    );
+  });
+
+  it("rejects a successful verifier response that is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
+
+    await expect(verifySessionProof(makeEnv().env, proof)).rejects.toThrow(
+      "verifier returned invalid JSON",
+    );
+  });
 });

@@ -28,11 +28,13 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
 const IDKIT_SRC = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.1/dist/idkit.global.js";
 const QRCODE_ESM = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 const WORLD_ID_SESSION_KEY = "cs_world_id_session";
+const WORLD_ID_SESSION_ID_RE = /^session_[0-9a-f]{128}$/i;
 
 const worldIdJs = (environment: "production" | "staging") => `
 const btn = document.getElementById('worldid-btn');
 const status = document.getElementById('worldid-status');
 const qrWrap = document.getElementById('worldid-qr');
+const WORLD_ID_SESSION_ID_RE = ${WORLD_ID_SESSION_ID_RE};
 
 async function startWorldIdSignIn() {
   if (typeof IDKit === 'undefined') {
@@ -48,7 +50,16 @@ async function startWorldIdSignIn() {
     if (!contextRes.ok) throw new Error(context.error || 'Could not start World ID sign-in.');
     const { app_id, rp_context } = context;
     let savedSessionId = null;
-    try { savedSessionId = localStorage.getItem('${WORLD_ID_SESSION_KEY}'); } catch (_) {}
+    try {
+      const stored = localStorage.getItem('${WORLD_ID_SESSION_KEY}');
+      if (stored && WORLD_ID_SESSION_ID_RE.test(stored)) {
+        savedSessionId = stored;
+      } else if (stored) {
+        // Older builds could leave a non-v4 value here. IDKit.proveSession rejects
+        // it before a request is created, which otherwise makes login look stuck.
+        localStorage.removeItem('${WORLD_ID_SESSION_KEY}');
+      }
+    } catch (_) {}
     const config = { app_id, rp_context, environment: '${environment}' };
     const builder = savedSessionId
       ? IDKit.proveSession(savedSessionId, config)

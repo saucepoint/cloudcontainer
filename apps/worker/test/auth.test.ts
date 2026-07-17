@@ -3,7 +3,7 @@
  * same findOrCreateUser path as a verified session proof: signup uniqueness,
  * banned-nullifier enforcement (AC1), and login/logout.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { hmacNullifier } from "@codestation/contract";
 import { authRoutes } from "../src/auth.js";
@@ -13,6 +13,8 @@ import { makeEnv, seedContainer, seedHost, seedUser } from "./helpers/env.js";
 function app() {
   return new Hono<AppContext>().route("/", authRoutes);
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("/auth/dev gating", () => {
   it("is a 404 unless DEV_AUTH=1 or a matching DEV_AUTH_TOKEN is presented", async () => {
@@ -91,6 +93,45 @@ describe("signup and login via session identity", () => {
 
     const res = await app().request("/auth/dev?sub=eve", {}, env);
     expect(res.status).toBe(403);
+  });
+});
+
+describe("/auth/session/verify", () => {
+  it("creates the session for the identity confirmed by the verifier", async () => {
+    const { env } = makeEnv();
+    const submittedSessionId = `session_${"b".repeat(128)}`;
+    const verifiedSessionId = `session_${"c".repeat(128)}`;
+    const idkitResponse = {
+      protocol_version: "4.0",
+      environment: "production",
+      session_id: submittedSessionId,
+      responses: [{ session_nullifier: ["nullifier", "action"] }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: true, session_id: verifiedSessionId }), {
+          status: 200,
+        }),
+      ),
+    );
+
+    const res = await app().request(
+      "/auth/session/verify",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idkitResponse }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { redirect: string }).toEqual({ redirect: "/onboarding" });
+    const users = await env.DB.prepare("SELECT world_id_session_id FROM users").all<{
+      world_id_session_id: string;
+    }>();
+    expect(users.results).toEqual([{ world_id_session_id: verifiedSessionId }]);
   });
 });
 

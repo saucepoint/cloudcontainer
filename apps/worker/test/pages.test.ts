@@ -38,6 +38,12 @@ describe("World ID environment wiring", () => {
     expect(html).toContain("environment: 'production'");
     expect(html).toContain("Dev login");
   });
+
+  it("discards stale non-v4 session IDs before calling proveSession", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html).toContain("/^session_[0-9a-f]{128}$/i");
+    expect(html).toContain("localStorage.removeItem('cs_world_id_session')");
+  });
 });
 
 describe("landing page call to action", () => {

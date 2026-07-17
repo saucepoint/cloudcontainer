@@ -43,6 +43,10 @@ export interface WorldIdSessionIdentity {
   sessionNullifier: string | null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * Forward an IDKit session-proof result to the Developer Portal for verification.
  * The payload is passed through byte-for-byte per the integration guide — no
@@ -70,22 +74,41 @@ export async function verifySessionProof(
     },
     body: JSON.stringify(idkitResponse),
   });
+  const responseBody = await res.text();
+  let verifierResponse: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(responseBody);
+    if (isRecord(parsed)) verifierResponse = parsed;
+  } catch {
+    // The status code below remains the primary failure signal. A successful
+    // verifier response is JSON, so a non-JSON 2xx response is rejected below.
+  }
   if (!res.ok) {
     // The verifier response contains an error code/detail, not the submitted
     // proof. Preserve it in Worker logs so RP/key/environment mistakes can be
     // distinguished without exposing proof material.
-    const detail = (await res.text()).slice(0, 1_000);
-    throw new Error(`world id proof verification failed: ${res.status} ${detail}`);
+    throw new Error(`world id proof verification failed: ${res.status} ${responseBody.slice(0, 1_000)}`);
   }
-  const json = idkitResponse as {
+  if (verifierResponse && "success" in verifierResponse && verifierResponse.success !== true) {
+    throw new Error(`world id proof verification failed: verifier returned success=${String(verifierResponse.success)}`);
+  }
+  if (!verifierResponse) {
+    throw new Error("world id proof verification failed: verifier returned invalid JSON");
+  }
+  const submitted = idkitResponse as {
     session_id?: unknown;
     responses?: Array<{ session_nullifier?: unknown }>;
   };
-  if (typeof json.session_id !== "string" || !json.session_id) {
+  const verifiedSessionId = verifierResponse.session_id;
+  const sessionId =
+    typeof verifiedSessionId === "string" && verifiedSessionId
+      ? verifiedSessionId
+      : submitted.session_id;
+  if (typeof sessionId !== "string" || !sessionId) {
     throw new Error("verified payload missing session_id");
   }
-  const nullifier = json.responses?.[0]?.session_nullifier;
+  const nullifier = submitted.responses?.[0]?.session_nullifier;
   const sessionNullifier =
     Array.isArray(nullifier) && typeof nullifier[0] === "string" ? nullifier[0] : null;
-  return { sessionId: json.session_id, sessionNullifier };
+  return { sessionId, sessionNullifier };
 }
