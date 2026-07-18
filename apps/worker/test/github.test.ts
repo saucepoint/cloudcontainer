@@ -28,6 +28,22 @@ async function login(env: Bindings, user: UserRow): Promise<Record<string, strin
 }
 
 describe("GitHub App connection", () => {
+  it("starts installation and user authorization from the singular connection route", async () => {
+    const { env } = makeEnv(githubConfig);
+    const user = await seedUser(env);
+    const response = await app().request(
+      "/auth/github?return_to=/onboarding",
+      { headers: await login(env, user) },
+      env,
+    );
+
+    expect(response.status).toBe(302);
+    const destination = new URL(response.headers.get("location")!);
+    expect(destination.origin).toBe("https://github.com");
+    expect(destination.pathname).toBe("/apps/codestation-test/installations/new");
+    expect(destination.searchParams.get("state")).toMatch(/^[a-f\d]{32}$/);
+  });
+
   it("keeps OAuth and repository access available when the installation slug is missing", async () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-id",
