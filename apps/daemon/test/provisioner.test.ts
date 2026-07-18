@@ -76,8 +76,8 @@ describe("provision command construction", () => {
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=8GiB"));
     const init = flat.find((f) => f.startsWith("init codestation-base cs-aaaaaaaabbbb"));
-    expect(init).toContain("limits.cpu=1");
-    expect(init).toContain("limits.cpu.allowance=100%");
+    expect(init).toContain("limits.cpu=2");
+    expect(init).toContain("limits.cpu.allowance=200%");
     expect(init).toContain("limits.memory=2048MiB");
     expect(init).toContain("limits.memory.enforce=hard");
     // Restricted Incus projects classify limits.memory.swap as low-level
@@ -502,6 +502,20 @@ describe("resize / destroy", () => {
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
     expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=32GiB");
     expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=32GiB");
+  });
+
+  it("keeps the provisioned CPU floor when the presented tier has one vCPU", async () => {
+    const calls: Call[] = [];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run({
+      op: "resize",
+      jobId: "j",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 8, sshPort: 30500 },
+    });
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
+    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
   });
 
   it("destroy is idempotent when the container is already gone", async () => {
