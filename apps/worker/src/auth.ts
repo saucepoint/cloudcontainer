@@ -179,13 +179,9 @@ export const authRoutes = new Hono<AppContext>()
     c.header("set-cookie", cookie);
     return c.json({ redirect: location });
   })
-  // World ID bypass, two modes: DEV_AUTH="1" opens it for local dev (visible
-  // "Dev login" button); the DEV_AUTH_TOKEN secret enables it on a deployment
-  // via /auth/dev?token=… without exposing signup to the public.
+  // Local-only World ID bypass, exposed only when explicitly enabled for development.
   .get("/auth/dev", async (c) => {
-    const tokenOk =
-      Boolean(c.env.DEV_AUTH_TOKEN) && c.req.query("token") === c.env.DEV_AUTH_TOKEN;
-    if (c.env.DEV_AUTH !== "1" && !tokenOk) return c.notFound();
+    if (c.env.DEV_AUTH !== "1") return c.notFound();
     const sub = c.req.query("sub") ?? "dev-user";
     const login = await findOrCreateUser(c.env, "dev", `dev|${sub}`, null);
     if (!login) return c.text("banned", 403);

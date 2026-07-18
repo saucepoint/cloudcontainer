@@ -121,7 +121,6 @@ Optional secrets:
 
 - GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` Worker
   variable; also set `GITHUB_APP_SLUG` to enable the installation chooser
-- DEV_AUTH_TOKEN, for a controlled deployed development bypass
 
 Generate service keys with:
 
@@ -246,26 +245,6 @@ list and roll it back:
 Rolling back Worker code does not reverse D1 migrations or roll back a daemon.
 Shared-contract changes therefore need backward compatibility or an explicitly
 coordinated release.
-
-### Deployed development bypass
-
-Keep DEV_AUTH=0. To enable a token-gated bypass temporarily:
-
-    cd apps/worker
-    npx wrangler secret put DEV_AUTH_TOKEN
-
-Then use:
-
-    https://BASE_URL/auth/dev?token=TOKEN&sub=TEST_ID
-
-The token is a shared bearer secret in the query string and may appear in
-browser history or request metadata. Use it only for controlled development.
-Remove it when finished:
-
-    npx wrangler secret delete DEV_AUTH_TOKEN
-
-Without a matching secret the route returns 404. A successful request creates
-or reuses the dev-prefixed test account and creates a KV session.
 
 ## Adding and maintaining hosts
 

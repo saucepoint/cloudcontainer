@@ -257,7 +257,7 @@ usable with keyboard alone. Specifically:
 
 ---
 
-## 5. Identity, sessions, and development bypass
+## 5. Identity and sessions
 
 ### World ID
 
@@ -311,12 +311,7 @@ solely to prevent immediate re-signup by a banned identity.
 ### Development bypass
 
 DEV_AUTH=1 may expose a visible local-only development login. Deployed
-environments keep DEV_AUTH=0. A DEV_AUTH_TOKEN Worker secret can separately
-enable a token-gated auth/dev route for controlled testing.
-
-The deployed bypass is a shared bearer token in a query string. It can appear
-in browser history and edge request metadata, so it is a development aid, not a
-production authentication mechanism. Remove the secret when it is not needed.
+environments keep DEV_AUTH=0.
 
 ---
 

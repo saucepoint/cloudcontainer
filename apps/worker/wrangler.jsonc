@@ -62,7 +62,4 @@
   //   INVITE_ADMIN_SECRET      — high-entropy bearer secret used only by the
   //                              admin invite-generation script/endpoint
   //   GITHUB_APP_CLIENT_SECRET — GitHub App client secret (optional)
-  //   DEV_AUTH_TOKEN           — optional: enables /auth/dev?token=<value> on the
-  //                              deployment (World ID bypass for testing; delete the
-  //                              secret to turn it off)
 }
