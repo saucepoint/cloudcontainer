@@ -17,14 +17,14 @@ function app() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("/auth/dev gating", () => {
-  it("is a 404 unless DEV_AUTH=1 or a matching DEV_AUTH_TOKEN is presented", async () => {
-    const { env } = makeEnv(); // DEV_AUTH="0", no token secret
+  it("is available only when DEV_AUTH=1, regardless of legacy secret values", async () => {
+    const { env } = makeEnv(); // DEV_AUTH="0"
+    Object.assign(env, { DEV_AUTH_TOKEN: "sekrit" });
     expect((await app().request("/auth/dev?sub=x", {}, env)).status).toBe(404);
+    expect((await app().request("/auth/dev?sub=x&token=sekrit", {}, env)).status).toBe(404);
 
-    const tokened = makeEnv({ DEV_AUTH_TOKEN: "sekrit" }).env;
-    expect((await app().request("/auth/dev?sub=x", {}, tokened)).status).toBe(404);
-    expect((await app().request("/auth/dev?sub=x&token=wrong", {}, tokened)).status).toBe(404);
-    expect((await app().request("/auth/dev?sub=x&token=sekrit", {}, tokened)).status).toBe(302);
+    const local = makeEnv({ DEV_AUTH: "1" }).env;
+    expect((await app().request("/auth/dev?sub=x&token=ignored", {}, local)).status).toBe(302);
   });
 });
 
