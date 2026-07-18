@@ -151,8 +151,12 @@ the release notes. Verify with an ephemeral container:
       incus launch codestation-base cs-image-smoke
       incus exec cs-image-smoke -- sh -lc "
         id dev
-        for tool in ssh git gh python3 uv node rg fd jq sqlite3; do
+        for tool in ssh git gh python3 uv node rg fd bat jq sqlite3 cmake \
+          rsync nano zip tree less man; do
           command -v \$tool
+        done
+        for package in libssl-dev libsqlite3-dev manpages; do
+          dpkg-query -s "\$package" | grep -Fx 'Status: install ok installed'
         done
         for agent in pi claude codex opencode; do
           command -v \$agent

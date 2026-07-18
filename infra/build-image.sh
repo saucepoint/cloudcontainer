@@ -8,23 +8,24 @@ set -euo pipefail
 NAME=cs-image-build
 ALIAS="${ALIAS:-codestation-base}"
 BASE="${BASE:-images:debian/13}"
+PROJECT="${PROJECT:-default}"
 
-incus delete -f "$NAME" 2>/dev/null || true
-incus launch "$BASE" "$NAME"
+incus --project "$PROJECT" delete -f "$NAME" 2>/dev/null || true
+incus --project "$PROJECT" launch "$BASE" "$NAME"
 
 echo "waiting for network…"
 for i in $(seq 1 60); do
-  incus exec "$NAME" -- sh -c 'getent hosts deb.debian.org >/dev/null 2>&1' && break
+  incus --project "$PROJECT" exec "$NAME" -- sh -c 'getent hosts deb.debian.org >/dev/null 2>&1' && break
   sleep 2
 done
 
-incus exec "$NAME" -- sh -eu <<'SETUP'
+incus --project "$PROJECT" exec "$NAME" -- sh -eu <<'SETUP'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
-  openssh-server sudo git gh build-essential python3 python3-venv \
-  curl zsh tmux ripgrep fd-find jq unzip sqlite3 ca-certificates gnupg \
-  unattended-upgrades locales
+  openssh-server sudo git gh build-essential cmake libssl-dev libsqlite3-dev \
+  python3 python3-venv curl zsh tmux ripgrep fd-find bat jq unzip zip sqlite3 \
+  rsync nano tree less man-db manpages ca-certificates gnupg unattended-upgrades locales
 
 # uv (python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
@@ -40,8 +41,9 @@ apt-get install -y -qq nodejs
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 
-# fd symlink (debian names it fdfind)
+# Debian names these commands fdfind and batcat.
 ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+ln -sf "$(command -v batcat)" /usr/local/bin/bat
 
 # dev user: passwordless sudo, no password auth anywhere
 useradd -m -s /bin/zsh dev || true
@@ -98,7 +100,7 @@ apt-get clean
 rm -f /etc/ssh/ssh_host_*
 SETUP
 
-incus stop "$NAME"
-incus publish "$NAME" --alias "$ALIAS" --reuse
-incus delete "$NAME"
+incus --project "$PROJECT" stop "$NAME"
+incus --project "$PROJECT" publish "$NAME" --alias "$ALIAS" --reuse
+incus --project "$PROJECT" delete "$NAME"
 echo "image '$ALIAS' published."

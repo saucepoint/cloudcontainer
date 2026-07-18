@@ -323,10 +323,10 @@ environments keep DEV_AUTH=0.
 
 The codestation-base image is Debian 13 and contains:
 
-- openssh-server, sudo, git, GitHub CLI, build-essential;
+- openssh-server, sudo, git, GitHub CLI, build-essential, CMake, and OpenSSL and SQLite development libraries;
 - Python 3, virtual environments, and uv;
 - system-wide Node.js 22;
-- curl, zsh, tmux, ripgrep, fd, jq, unzip, and sqlite3;
+- curl, rsync, zsh, tmux, ripgrep, fd, bat, jq, zip, unzip, sqlite3, nano, tree, less, and manpages;
 - unattended-upgrades; and
 - Pi, Claude Code, Codex, and OpenCode installed from the package versions that
   were current when the image was built.
