@@ -18,6 +18,20 @@ npm run dev:daemon     # watch the daemon locally
 
 For Worker database work, run `cd apps/worker && npm run db:migrate:local` before Wrangler. `DEV_AUTH=1` is strictly local-only. Use `npm run deploy -- --dry-run` to exercise release gates without remote changes; follow `infra/RUNBOOK.md` for host changes.
 
+## Local Git Worktrees
+
+The repository root is the primary `main` checkout. Create linked task worktrees beneath `.worktrees/<task-name>` so parallel changes stay contained in this repository. This directory is excluded locally through `.git/info/exclude`; do not add it to the shared `.gitignore` or commit its contents.
+
+```sh
+git worktree add -b feat/<name> .worktrees/<name> main  # new branch
+git worktree add .worktrees/<name> feat/<name>           # existing branch
+git worktree list
+git worktree remove .worktrees/<name>
+git worktree prune
+```
+
+Each worktree has its own dependencies and local configuration. Do not copy credentials, `.dev.vars`, or daemon configuration between worktrees.
+
 ## Coding Style & Naming Conventions
 
 Write strict ESM TypeScript. Match the existing style: two-space indentation, double quotes, semicolons, trailing commas, and `.js` relative imports. Use `camelCase` for values/functions, `PascalCase` for types/interfaces, and `UPPER_SNAKE_CASE` for constants. Prefer `import type` for type-only imports. No formatter or linter is configured; preserve surrounding formatting and run `npm run typecheck`.
