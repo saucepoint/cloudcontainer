@@ -234,22 +234,20 @@ describe("onboarding wizard order", () => {
 });
 
 describe("GitHub repository onboarding", () => {
-  it("offers App installation, separate OAuth reauthorization, and repository selection", () => {
-    const enabled = String(OnboardingPage({
-      githubAvailable: true,
-      githubInstallationAvailable: true,
-    }));
-    expect(enabled).toContain("Install or manage GitHub access");
-    expect(enabled).toContain("Reauthorize GitHub");
-    expect(onboardingClient).toContain("/auth/github/reauth");
-    expect(enabled).toContain("/auth/github/install?return_to=/onboarding");
+  it("offers one combined GitHub connection action and repository selection", () => {
+    const enabled = String(OnboardingPage({ githubAvailable: true }));
+    expect(enabled).toContain("Connect or update GitHub");
+    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).not.toContain("Reauthorize GitHub");
+    expect(enabled).not.toContain("/auth/github/install");
+    expect(onboardingClient).not.toContain("/auth/github/reauth");
     expect(onboardingClient).toContain("/api/github/repos");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
     expect(enabled).toContain('id=\"github-repo-search\"');
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
-    expect(disabled).not.toContain("Connect or reconnect GitHub");
+    expect(disabled).not.toContain("Connect or update GitHub");
     expect(disabled).not.toContain('id=\"github-repos\"');
   });
 
