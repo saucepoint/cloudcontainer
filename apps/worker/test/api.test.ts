@@ -417,12 +417,16 @@ describe("SSH key management", () => {
     await seedContainer(env, { status: "provisioning", host_id: null, ssh_port: null });
     const headers = await login(env, user);
 
-    expect((await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env)).status).toBe(
-      409,
-    );
-    expect((await app().request("/api/enrollment", { method: "POST", headers }, env)).status).toBe(
-      409,
-    );
+    const keyResponse = await app().request("/api/keys", json({ pubkey: PUBKEY }, headers), env);
+    expect(keyResponse.status).toBe(409);
+    expect(await keyResponse.json()).toEqual({
+      error: "Wait for your workbench to finish building before changing SSH keys or creating an SSH setup prompt.",
+    });
+    const enrollmentResponse = await app().request("/api/enrollment", { method: "POST", headers }, env);
+    expect(enrollmentResponse.status).toBe(409);
+    expect(await enrollmentResponse.json()).toEqual({
+      error: "Wait for your workbench to finish building before changing SSH keys or creating an SSH setup prompt.",
+    });
     expect((await env.DB.prepare("SELECT * FROM ssh_keys").all()).results).toHaveLength(0);
   });
 
@@ -592,7 +596,7 @@ describe("credentials endpoint", () => {
     expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
 
-  it("locks credential changes once a server has been created", async () => {
+  it("locks credential changes once a workbench has been created", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await upsertCredentials(env, user.id, { llmKeys: { openai: "CANARY-existing" } });
@@ -605,7 +609,9 @@ describe("credentials endpoint", () => {
       env,
     );
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: expect.stringContaining("manual terminal commands") });
+    expect(await res.json()).toEqual({
+      error: "Credentials are set while you set up your workbench. To change them after provisioning, use manual terminal commands.",
+    });
     expect(decryptLlmKeys(env, await getCredentialsRow(env, user.id))).toEqual({
       openai: "CANARY-existing",
     });
