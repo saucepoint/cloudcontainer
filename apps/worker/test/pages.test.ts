@@ -251,13 +251,12 @@ describe("GitHub repository onboarding", () => {
     expect(disabled).not.toContain('id=\"github-repos\"');
   });
 
-  it("keeps repository selection visible when only GitHub OAuth is configured", () => {
+  it("keeps repository selection visible when GitHub is configured", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).toContain('id=\"github-repo-search\"');
     expect(enabled).toContain('id=\"github-repos\"');
-    expect(enabled).not.toContain("/auth/github/install?return_to=/onboarding");
   });
 
   it("hides GitHub setup from onboarding without an App slug", async () => {
