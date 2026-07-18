@@ -16,7 +16,7 @@ function inlineScriptsOf(html: string): string[] {
     .filter((s) => s.trim());
 }
 
-const landingClient = readFileSync(new URL("../client/landing.ts", import.meta.url), "utf8");
+const landingClient = readFileSync(new URL("../client/landing.tsx", import.meta.url), "utf8");
 const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
@@ -49,7 +49,7 @@ describe("World ID environment wiring", () => {
   it("renders the configured environment independently of dev auth", () => {
     const html = String(LandingPage({ devAuth: true, worldIdEnvironment: "production" }));
     expect(html).toContain('data-world-id-environment="production"');
-    expect(landingClient).toContain('button!.dataset.worldIdEnvironment === "staging"');
+    expect(landingClient).toContain('worldIdEnvironment === "staging"');
     expect(html).toContain("Dev login");
   });
 
@@ -80,19 +80,29 @@ describe("World ID environment wiring", () => {
 });
 
 describe("landing page call to action", () => {
-  it("shows server information before the World ID sign-in", () => {
+  it("shows server information before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(html.indexOf("free tier")).toBeLessThan(html.indexOf("Continue with World ID"));
+    expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
   it("offers returning passkey login, World ID, and one-time invite signup", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(html).toContain("Sign in with a passkey");
-    expect(html).toContain("Continue with World ID");
-    expect(html).toContain('id="invite-code"');
-    expect(html).toContain('maxlength="8"');
+    expect(landingClient).toContain("Sign in with a passkey");
+    expect(landingClient).toContain("Continue with World ID");
+    expect(landingClient).toContain('id="invite-code"');
+    expect(landingClient).toContain("maxLength={8}");
     expect(landingClient).toContain("startAuthentication({ optionsJSON })");
     expect(landingClient).toContain("startRegistration({ optionsJSON })");
+  });
+
+  it("groups every auth path in Base UI tabs", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+
+    expect(html).toContain('id="landing-auth-root"');
+    expect(landingClient).toContain('import { Tabs } from "@base-ui/react/tabs"');
+    expect(landingClient).toContain('<Tabs.Root defaultValue="passkey"');
+    expect(landingClient).toContain('<Tabs.List className="auth-tab-list"');
+    expect(landingClient).toContain('<Tabs.Tab value="world-id"');
+    expect(landingClient).toContain('<Tabs.Panel value="invite" keepMounted');
   });
 });
 

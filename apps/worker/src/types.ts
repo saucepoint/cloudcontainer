@@ -32,8 +32,6 @@ export type Bindings = Omit<
   GITHUB_APP_CLIENT_SECRET?: string;
   /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
   INVITE_ADMIN_SECRET?: string;
-  /** Optional: enables token-gated /auth/dev?token=… on a deployment (World ID bypass for testing). */
-  DEV_AUTH_TOKEN?: string;
 };
 
 export interface UserRow {
