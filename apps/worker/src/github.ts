@@ -313,7 +313,10 @@ export const githubRoutes = new Hono<AppContext>()
       return c.text(CREDENTIALS_LOCKED_ERROR, 409);
     }
     const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-    return c.redirect(await beginGithubAuthorization(c.env, c.get("user").id, returnTo));
+    const destination = githubInstallationConfigured(c.env)
+      ? await beginGithubInstallation(c.env, c.get("user").id, returnTo)
+      : await beginGithubAuthorization(c.env, c.get("user").id, returnTo);
+    return c.redirect(destination);
   })
   .post("/auth/github/reauth", requireUser, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
