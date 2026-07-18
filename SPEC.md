@@ -83,8 +83,10 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - World ID proof-of-human authentication with World ID 4.0 and Orb v3 support,
   passwordless passkey login, and single-use administrator invite signup.
 - One free environment per account.
-- Free resources: 1 vCPU, 2048 MiB RAM, an 8 GiB persistent home volume,
-  and an 8 GiB disposable root filesystem.
+- Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
+  an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
+  The daemon provisions a 2-vCPU Incus limit for developer experience; this
+  provisioned limit is intentionally different from the presented allocation.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
 - Optional SSH key, enrollment-token flow, model credentials, Cloudflare token,
@@ -589,9 +591,11 @@ user primary keys or resource foreign keys.
 - Public-key-only SSH and unique per-environment host keys.
 - A dedicated restricted Incus project with aggregate CPU, memory, process,
   disk, and instance ceilings.
-- Per-tenant one-CPU allowance, hard 2 GiB memory without swap, 1024-process
-  ceiling, isolated unprivileged idmap, an 8 GiB home-volume quota, and an
-  8 GiB root-disk quota; host accounting reserves CPU and both disks.
+- Per-tenant 2-vCPU provisioned allowance, hard 2 GiB memory without swap,
+  1024-process ceiling, isolated unprivileged idmap, an 8 GiB home-volume
+  quota, and an 8 GiB root-disk quota. The web interface intentionally
+  presents the free tier as 1 vCPU; host accounting continues to reserve that
+  presented allocation alongside both disks.
 - No nesting, privileged containers, raw low-level Incus configuration, or
   Docker-in-container support.
 - NIC MAC/IPv4/IPv6 anti-spoofing, east-west port isolation, and a 100 Mbit/s

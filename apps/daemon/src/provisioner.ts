@@ -14,6 +14,10 @@ import { CredentialInstaller } from "./credential-installer.js";
 import { containerName, homeVolumeName, shellQuote, type Incus } from "./incus.js";
 import { renderMotd } from "./motd.js";
 
+// The Worker’s `spec.cpu` is the public, presented allocation. Give every
+// environment two vCPUs on the host so interactive development stays snappy.
+const PROVISIONED_VCPU_FLOOR = 2;
+
 export class Provisioner {
   private credentialInstaller: CredentialInstaller;
 
@@ -59,7 +63,7 @@ export class Provisioner {
         await this.incus.stop(name);
         return null;
       case "resize":
-        await this.incus.setLimits(name, request.spec.cpu, request.spec.ramMb);
+        await this.incus.setLimits(name, this.provisionedCpu(request.spec.cpu), request.spec.ramMb);
         await this.incus.setRootDiskLimit(name, request.spec.diskGb);
         await this.incus.resizeHomeVolume(
           this.config.storagePool,
@@ -115,7 +119,13 @@ export class Provisioner {
     }
 
     try {
-      await this.incus.init(this.config.baseImage, name, request.containerId, spec.cpu, spec.ramMb);
+      await this.incus.init(
+        this.config.baseImage,
+        name,
+        request.containerId,
+        this.provisionedCpu(spec.cpu),
+        spec.ramMb,
+      );
       await this.incus.setRootDiskLimit(name, spec.diskGb);
       await this.incus.attachHome(name, this.config.storagePool, volume);
       await this.incus.addSshProxy(name, spec.sshPort);
@@ -164,6 +174,10 @@ export class Provisioner {
       }
       throw error;
     }
+  }
+
+  private provisionedCpu(presentedCpu: number): number {
+    return Math.max(PROVISIONED_VCPU_FLOOR, presentedCpu);
   }
 
   /** Clone requested repositories once into ~/repos/repository-name. */
