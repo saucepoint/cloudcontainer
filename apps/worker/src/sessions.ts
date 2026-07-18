@@ -4,7 +4,7 @@ import type { Bindings } from "./types.js";
 const SESSION_TTL_SEC = 7 * 24 * 3600;
 export const SESSION_COOKIE = "cs_session";
 
-function randomToken(): string {
+export function randomToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return toHex(bytes);

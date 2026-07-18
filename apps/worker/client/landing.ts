@@ -10,6 +10,13 @@ import {
   type RpContext,
 } from "@worldcoin/idkit-core";
 import QRCode from "qrcode";
+import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  startRegistration,
+  type PublicKeyCredentialCreationOptionsJSON,
+  type PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/browser";
 
 const SESSION_STORAGE_KEY = "cs_world_id_session";
 const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
@@ -44,6 +51,92 @@ type RpContextResponse = {
 const button = document.querySelector<HTMLButtonElement>("#worldid-btn");
 const status = document.querySelector<HTMLElement>("#worldid-status");
 const qrContainer = document.querySelector<HTMLElement>("#worldid-qr");
+const passkeyButton = document.querySelector<HTMLButtonElement>("#passkey-login-btn");
+const passkeyStatus = document.querySelector<HTMLElement>("#passkey-status");
+const inviteForm = document.querySelector<HTMLFormElement>("#invite-form");
+const inviteInput = document.querySelector<HTMLInputElement>("#invite-code");
+const inviteButton = document.querySelector<HTMLButtonElement>("#invite-btn");
+const inviteStatus = document.querySelector<HTMLElement>("#invite-status");
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  if (error.name === "NotAllowedError") return "The passkey prompt was cancelled or timed out.";
+  return error.message || fallback;
+}
+
+async function postJson<T>(path: string, body?: object): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const json: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = typeof (json as { error?: unknown } | null)?.error === "string"
+      ? (json as { error: string }).error
+      : fallbackForStatus(response.status);
+    throw new Error(message);
+  }
+  return json as T;
+}
+
+function fallbackForStatus(statusCode: number): string {
+  return statusCode === 401 ? "Sign-in failed." : "Could not complete that request.";
+}
+
+async function startPasskeySignIn(): Promise<void> {
+  passkeyButton!.disabled = true;
+  passkeyStatus!.textContent = "Waiting for your passkey…";
+  try {
+    const optionsJSON = await postJson<PublicKeyCredentialRequestOptionsJSON>(
+      "/auth/passkey/authenticate/options",
+    );
+    const response = await startAuthentication({ optionsJSON });
+    passkeyStatus!.textContent = "Verifying…";
+    const result = await postJson<{ redirect: string }>(
+      "/auth/passkey/authenticate/verify",
+      { response },
+    );
+    window.location.assign(result.redirect);
+  } catch (error) {
+    passkeyStatus!.textContent = errorMessage(error, "Passkey sign-in failed. Please try again.");
+    passkeyButton!.disabled = false;
+  }
+}
+
+async function registerWithInvite(): Promise<void> {
+  const code = inviteInput!.value.trim().toUpperCase();
+  inviteInput!.value = code;
+  if (!/^[A-Z0-9]{8}$/.test(code)) {
+    inviteStatus!.textContent = "Enter the eight letters and numbers from your invite.";
+    inviteInput!.focus();
+    return;
+  }
+
+  inviteButton!.disabled = true;
+  inviteInput!.disabled = true;
+  inviteStatus!.textContent = "Preparing your required passkey…";
+  try {
+    const optionsJSON = await postJson<PublicKeyCredentialCreationOptionsJSON>(
+      "/auth/invite/register/options",
+      { code },
+    );
+    const response = await startRegistration({ optionsJSON });
+    inviteStatus!.textContent = "Creating your account…";
+    const result = await postJson<{ redirect: string }>(
+      "/auth/invite/register/verify",
+      { response },
+    );
+    window.location.assign(result.redirect);
+  } catch (error) {
+    inviteStatus!.textContent = errorMessage(error, "Invite signup failed. Please try again.");
+    inviteButton!.disabled = false;
+    inviteInput!.disabled = false;
+  }
+}
 
 function isSessionId(value: unknown): value is `session_${string}` {
   return typeof value === "string" && SESSION_ID_PATTERN.test(value);
@@ -180,4 +273,22 @@ async function startWorldIdSignIn(): Promise<void> {
 
 if (button && status && qrContainer) {
   button.addEventListener("click", () => void startWorldIdSignIn());
+}
+
+if (passkeyButton && passkeyStatus && inviteForm && inviteInput && inviteButton && inviteStatus) {
+  if (!browserSupportsWebAuthn()) {
+    passkeyButton.disabled = true;
+    inviteButton.disabled = true;
+    passkeyStatus.textContent = "This browser does not support passkeys.";
+    inviteStatus.textContent = "Use a passkey-capable browser to redeem an invite.";
+  } else {
+    passkeyButton.addEventListener("click", () => void startPasskeySignIn());
+    inviteInput.addEventListener("input", () => {
+      inviteInput.value = inviteInput.value.replace(/[^a-z0-9]/gi, "").toUpperCase();
+    });
+    inviteForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void registerWithInvite();
+    });
+  }
 }

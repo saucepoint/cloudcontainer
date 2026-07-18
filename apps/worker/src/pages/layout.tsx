@@ -153,6 +153,13 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .qr canvas { background: #fff; padding: 10px; border: 1px solid var(--line); }
 .landing-title { max-width: 650px; }
 .landing-signin { max-width: 580px; }
+.landing-signin h2 { margin-bottom: 0.25rem; }
+.auth-option { display: grid; gap: 0.5rem; padding: 1.1rem 0; border-bottom: 1px solid var(--line); }
+.auth-option:last-of-type { border-bottom: 0; }
+.auth-option p { margin: 0; }
+.auth-option > .btn { justify-self: start; }
+.auth-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
+.auth-code-row input { letter-spacing: 0.18em; text-transform: uppercase; }
 .spec-list li { justify-content: flex-start; }
 .spec-list .ok { margin-left: auto; font-family: var(--mono); font-size: 0.75rem; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; background: rgb(32 32 29 / 0.32);
@@ -179,6 +186,8 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .card-head { align-items: flex-start; flex-wrap: wrap; }
   .command-row { grid-template-columns: 1fr; }
   .command-row .btn { justify-self: start; }
+  .auth-code-row { grid-template-columns: 1fr; gap: 0.35rem; }
+  .auth-code-row .btn { justify-self: start; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
@@ -210,11 +219,14 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
               code<span>station</span>
             </a>
             {loggedIn ? (
-              <form method="post" action="/auth/logout" style="margin:0">
-                <button class="btn secondary" type="submit">
-                  Sign out
-                </button>
-              </form>
+              <nav class="row" aria-label="Account" style="margin:0">
+                <a class="btn secondary" href="/security">Security</a>
+                <form method="post" action="/auth/logout" style="margin:0">
+                  <button class="btn secondary" type="submit">
+                    Sign out
+                  </button>
+                </form>
+              </nav>
             ) : null}
           </header>
           <main id="main-content">{children}</main>

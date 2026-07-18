@@ -720,10 +720,23 @@ describe("account deletion (U8)", () => {
       .bind(PUBKEY, Date.now())
       .run();
     await env.DB.prepare("INSERT INTO credentials_encrypted (user_id) VALUES ('user-1')").run();
+    await env.DB.prepare(
+      `INSERT INTO passkeys
+         (credential_id, user_id, public_key, device_type, backed_up, created_at)
+       VALUES ('passkey-1', 'user-1', ?, 'multiDevice', 1, ?)`,
+    )
+      .bind(new Uint8Array([1, 2, 3]), Date.now())
+      .run();
 
     const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
     expect(res.status).toBe(200);
-    for (const table of ["users", "ssh_keys", "credentials_encrypted"]) {
+    for (const table of [
+      "users",
+      "auth_identities",
+      "passkeys",
+      "ssh_keys",
+      "credentials_encrypted",
+    ]) {
       expect((await env.DB.prepare(`SELECT * FROM ${table}`).all()).results).toHaveLength(0);
     }
     // Session unusable afterwards.

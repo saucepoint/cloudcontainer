@@ -312,8 +312,9 @@ export const apiRoutes = new Hono<AppContext>()
       // Waitlisted row with no host — nothing exists on a host, safe to drop.
       await c.env.DB.prepare("DELETE FROM containers WHERE id = ?").bind(container.id).run();
     }
-    // Purge credentials and keys; the user row goes last. If the account was
-    // banned, the nullifier HMAC in banned_nullifiers persists by design.
+    // Purge credentials and SSH keys; the user row goes last and cascades to
+    // passkeys, external identities, and outstanding auth challenges. Banned
+    // identity HMACs and used invite redemptions persist by design.
     await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM credentials_encrypted WHERE user_id = ?").bind(user.id),
       c.env.DB.prepare("DELETE FROM ssh_keys WHERE user_id = ?").bind(user.id),

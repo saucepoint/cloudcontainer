@@ -2,9 +2,9 @@
 
 **Status:** Normative current-release specification
 
-**Version:** 4.0
+**Version:** 4.1
 
-**Date:** 2026-07-10
+**Date:** 2026-07-18
 **Product:** Beginner-friendly, preconfigured remote environments for agentic coding
 
 This document describes the product that is intended to ship now. Anything
@@ -17,9 +17,10 @@ listed under Roadmap is not a current-release promise or release gate.
 Codestation gives a developer a persistent, SSH-accessible Debian environment
 with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
-only two decisions:
+only two product decisions after authentication:
 
-1. prove they are a unique human with World ID; and
+1. sign in with World ID or use an administrator invite with a required
+   passkey; and
 2. choose one or more coding agents.
 
 SSH keys, model credentials, GitHub, and Cloudflare credentials are optional
@@ -79,7 +80,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- World ID proof-of-human authentication with World ID 4.0 and Orb v3 support.
+- World ID proof-of-human authentication with World ID 4.0 and Orb v3 support,
+  passwordless passkey login, and single-use administrator invite signup.
 - One free environment per account.
 - Free resources: 1 vCPU, 2048 MiB RAM, an 8 GiB persistent home volume,
   and an 8 GiB disposable root filesystem.
@@ -125,9 +127,11 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### 4.1 Sign in
 
-The landing page explains three facts before sign-in:
+The landing page explains the available authentication paths and key service facts:
 
-- World ID is used to enforce one human per account;
+- World ID can prove one human per account without an email;
+- returning accounts with a passkey can sign in directly;
+- an administrator invite is single-use and requires creating a passkey;
 - the current service is free and needs no credit card; and
 - the environment is a shared-kernel cloud container.
 
@@ -135,6 +139,19 @@ For a new sign-in, the user proves the fixed `codestation-login` action with a
 v4 proof-of-human credential or the Orb v3 fallback. The action-scoped
 nullifier is normalized and reused for later sign-ins. A browser that already
 holds a v4 session ID continues to use the session-proof path.
+
+An eight-character uppercase alphanumeric invite is generated only through the
+administrator script. Entering a valid unused code starts passkey registration.
+The code remains unused if registration is cancelled or fails. Successful
+WebAuthn verification atomically persists the user, initial passkey, and
+redemption before creating an application session. Invite-backed accounts have
+no reusable invite login and use a discoverable passkey to return.
+
+The landing page also supports usernameless passkey authentication. A new World
+ID user is offered an optional passkey after first sign-in and may skip it;
+World ID remains a valid return path. Account security remains available later
+to add additional passkeys. Invite-backed accounts are advised to add a second
+passkey as a recovery option.
 
 ### 4.2 Configure and launch
 
@@ -252,18 +269,39 @@ nullifier to a decimal integer, and uses that action-scoped value as the account
 identity. Existing saved v4 sessions remain accepted by their verified
 RP-scoped session_id.
 
-The canonical compatibility column is world_id_session_id and it is UNIQUE;
-it stores either a v4 session ID or a namespaced normalized nullifier. Internal
-relationships use a generated user UUID. The world_id_nullifier column mirrors
-the same identity key and must not be treated as a second proof.
+World ID identifiers live in auth_identities under the `world_id` provider and
+are unique provider subjects; they are not columns on the user profile.
+Internal relationships use a generated user UUID. Each user also has a random,
+non-identifying 32-byte WebAuthn user handle.
 
 For an abuse ban, the service stores an HMAC-SHA256 of the canonical identity
 key in banned_nullifiers. This keyed value may remain after account deletion
 solely to prevent immediate re-signup by a banned identity.
 
+### Invites and passkeys
+
+- Invite codes contain exactly eight random uppercase alphanumeric characters.
+- `INVITE_ADMIN_SECRET` is a high-entropy Cloudflare Worker secret. The
+  generation endpoint requires it as a bearer token and compares fixed-size
+  hashes in constant time.
+- D1 stores only each invite's HMAC-SHA-256, keyed by the Worker secret so a
+  D1-only leak cannot be searched offline. A redemption record persists after
+  account deletion so the code cannot become reusable. Rotating the secret
+  invalidates outstanding unused invites.
+- The raw code is returned once to the administrator script and is never logged.
+- Passkeys are discoverable credentials with resident keys and user
+  verification required. D1 stores credential ID, public key, counter,
+  transports, device type, backup state, and non-secret timestamps.
+- Registration and authentication challenges expire after five minutes. D1
+  stores only a hash of the HttpOnly ceremony cookie, and `DELETE ... RETURNING`
+  consumes each challenge before verification to prevent replay.
+- WebAuthn verifies the exact request origin and RP hostname. Production
+  ceremonies require HTTPS; HTTP is accepted only for localhost development.
+
 ### Application sessions
 
-- A successful proof creates a random 32-byte session ID.
+- A successful World ID, invite-registration, development, or passkey flow
+  creates a random 32-byte session ID.
 - Session data lives in KV with a seven-day TTL.
 - The cookie is HttpOnly, SameSite=Lax, Path=/, and Secure on HTTPS.
 - Logout deletes KV state and records the session-ID hash in D1.
@@ -526,7 +564,12 @@ operations synchronize keys and credentials.
 
 | Table | Important invariant |
 |---|---|
-| users | Internal UUID primary key; world_id_session_id unique |
+| users | Internal UUID primary key; random WebAuthn user handle; signup method |
+| auth_identities | Unique external provider subject; at most one per user |
+| passkeys | Credential ID unique; public key and monotonic signature counter |
+| invite_codes | Keyed HMAC-SHA-256 only; raw eight-character code is never stored |
+| invite_redemptions | One permanent redemption per invite; user link clears on account deletion |
+| auth_challenges | Hashed ceremony cookie; five-minute expiry; atomically consumed |
 | ssh_keys | Multiple public keys per user; never private keys |
 | containers | user_id unique; at most one environment per account; selected GitHub repositories are non-secret JSON metadata |
 | hosts | Capacity, status, SSH hostname, daemon endpoint, and X25519 public key |
@@ -539,8 +582,8 @@ operations synchronize keys and credentials.
 | session_revocations | Hashes of revoked application sessions |
 | banned_nullifiers | HMAC only, retained for abuse prevention |
 
-All foreign references use internal IDs. World ID identifiers are never primary
-keys or foreign keys.
+All account foreign references use internal IDs. World ID identifiers are never
+user primary keys or resource foreign keys.
 
 ---
 
@@ -574,9 +617,10 @@ keys or foreign keys.
 
 The account-delete control is disabled while a real host environment exists.
 The user first destroys the environment, then confirms account deletion.
-Deletion purges credentials, SSH keys, enrollment tokens, OAuth state, waitlist
-state, and the user row, and revokes the current session. A hostless waitlisted
-row can be removed as part of deletion. A prior abuse-ban HMAC may remain.
+Deletion purges credentials, SSH keys, passkeys, external identities,
+enrollment tokens, OAuth state, waitlist state, and the user row, and revokes
+the current session. A hostless waitlisted row can be removed as part of
+deletion. A prior abuse-ban HMAC and a used-invite redemption may remain.
 
 ### Current operational limitations
 
@@ -592,7 +636,8 @@ row can be removed as part of deletion. A prior abuse-ban HMAC may remain.
   renewal can lose an active in-memory job.
 - There is no automated alerting, SLO reporting, or tested disaster recovery.
 - GitHub integration is absent when its application credentials are unset.
-- The static development-bypass token is intentionally weaker than World ID.
+- The static development-bypass token is intentionally weaker than production
+  World ID and passkey authentication.
 - Agent packages and fallback installers currently resolve the latest npm
   release at image-build or fallback time. Exact version pins, recorded build
   metadata, and an SBOM are supply-chain hardening gaps.
@@ -643,8 +688,11 @@ and soak acceptance is defined in infra/MULTITENANT_TESTING.md.
 Current automated coverage includes:
 
 - shared schema, signing, replay-window, encryption, sealing, and tamper tests;
-- World ID-backed account-path behavior through the gated development auth
-  seam, bans, sessions, and revocation;
+- World ID-backed account behavior through the gated development auth seam,
+  bans, sessions, and revocation;
+- admin-secret invite generation, HMAC-only invite storage, mandatory initial
+  passkey persistence, one-time redemption races, optional World ID passkey
+  attachment, passwordless login counters, and challenge replay rejection;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
   and reconciler logic;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -659,8 +707,10 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. a real or World ID simulator sign-in;
-2. the all-optional-fields-skipped path;
+1. a real or World ID simulator sign-in, optional passkey attachment, and
+   subsequent passkey sign-in;
+2. invite generation, invite signup with its required passkey, attempted invite
+   reuse, and the all-optional-onboarding-fields-skipped path;
 3. provision to SSH using a pasted key;
 4. provision to SSH using enrollment;
 5. command availability for all four agents and base tools;
@@ -685,8 +735,11 @@ A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
 1. **Identity:** a valid v4 proof-of-human, Orb v3, or retained v4 session proof
-   creates or reuses the account for its verified identity; a banned identity
-   is refused; logout revokes the application session.
+   creates or reuses the account for its verified identity; a valid invite is
+   consumed exactly once only after its required passkey is verified; a World
+   ID account may attach a passkey; either World ID or a registered passkey can
+   reaccess the appropriate account; a banned identity is refused; logout
+   revokes the application session.
 2. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.
@@ -731,8 +784,8 @@ manual checks above have been completed for affected areas.
 
 ## 15. Success measures
 
-The primary product measure is median time from first successful World ID proof
-to first successful SSH connection. Supporting measures are:
+The primary product measure is median time from first successful account
+authentication to first successful SSH connection. Supporting measures are:
 
 - onboarding completion and optional-field skip rates;
 - wait time and FIFO admission rate;

@@ -8,6 +8,7 @@ import {
   isSessionRevoked,
   readCookie,
   revokeSession,
+  randomToken,
   SESSION_COOKIE,
   sessionCookie,
 } from "./sessions.js";
@@ -24,16 +25,30 @@ export async function credentialsCanBeChanged(env: Bindings, userId: string): Pr
   return !container;
 }
 
-async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
+export async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 
-/** Look up or create the account for a verified World ID identity. Returns null if banned. */
-async function findOrCreateUser(env: Bindings, identityKey: string): Promise<UserRow | null> {
-  const existing = await env.DB.prepare("SELECT * FROM users WHERE world_id_session_id = ?")
-    .bind(identityKey)
+interface IdentityLogin {
+  user: UserRow;
+  isNew: boolean;
+}
+
+/** Look up or create an account for a verified external identity. Returns null if banned. */
+async function findOrCreateUser(
+  env: Bindings,
+  provider: "world_id" | "dev",
+  identityKey: string,
+  protocolVersion: string | null,
+): Promise<IdentityLogin | null> {
+  const existing = await env.DB.prepare(
+    `SELECT u.* FROM auth_identities i
+     JOIN users u ON u.id = i.user_id
+     WHERE i.provider = ? AND i.provider_subject = ?`,
+  )
+    .bind(provider, identityKey)
     .first<UserRow>();
-  if (existing) return existing.status === "banned" ? null : existing;
+  if (existing) return existing.status === "banned" ? null : { user: existing, isNew: false };
 
   // The v4 session ID or action-scoped normalized nullifier bounds an accepted
   // identity to one account. The HMAC match survives account deletion (§13).
@@ -45,31 +60,65 @@ async function findOrCreateUser(env: Bindings, identityKey: string): Promise<Use
   if (banned) return null;
 
   const id = crypto.randomUUID();
+  const now = Date.now();
   try {
-    await env.DB.prepare(
-      "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES (?, ?, ?, ?)",
-    )
-      .bind(id, identityKey, identityKey, Date.now())
-      .run();
-    return getUser(env, id);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+           (id, webauthn_user_id, signup_method, created_at, last_authenticated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).bind(id, randomToken(), provider, now, now),
+      env.DB.prepare(
+        `INSERT INTO auth_identities
+           (provider, provider_subject, user_id, protocol_version, created_at, last_authenticated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).bind(provider, identityKey, id, protocolVersion, now, now),
+    ]);
+    const user = await getUser(env, id);
+    if (!user) throw new Error("created user could not be loaded");
+    return { user, isNew: true };
   } catch (error) {
     // Two tabs can complete the same proof concurrently. The unique identity
     // chooses the winner; the other request logs into it.
-    const winner = await env.DB.prepare("SELECT * FROM users WHERE world_id_session_id = ?")
-      .bind(identityKey)
+    const winner = await env.DB.prepare(
+      `SELECT u.* FROM auth_identities i
+       JOIN users u ON u.id = i.user_id
+       WHERE i.provider = ? AND i.provider_subject = ?`,
+    )
+      .bind(provider, identityKey)
       .first<UserRow>();
-    if (winner) return winner.status === "banned" ? null : winner;
+    if (winner) {
+      return winner.status === "banned" ? null : { user: winner, isNew: false };
+    }
     throw error;
   }
 }
 
-async function loginAndRedirect(env: Bindings, user: UserRow, secure: boolean) {
-  const sid = await createSession(env, user.id);
+export async function postLoginPath(env: Bindings, userId: string): Promise<string> {
   const container = await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?")
-    .bind(user.id)
+    .bind(userId)
     .first();
-  const location = container ? "/dashboard" : "/onboarding";
-  return { location, cookie: sessionCookie(sid, secure) };
+  return container ? "/dashboard" : "/onboarding";
+}
+
+export async function loginAndRedirect(
+  env: Bindings,
+  user: UserRow,
+  secure: boolean,
+  location?: string,
+) {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET last_authenticated_at = ? WHERE id = ?").bind(now, user.id),
+    env.DB.prepare(
+      "UPDATE auth_identities SET last_authenticated_at = ? WHERE user_id = ?",
+    ).bind(now, user.id),
+  ]);
+  const sid = await createSession(env, user.id);
+  return {
+    location: location ?? await postLoginPath(env, user.id),
+    cookie: sessionCookie(sid, secure),
+  };
 }
 
 export const authRoutes = new Hono<AppContext>()
@@ -114,9 +163,19 @@ export const authRoutes = new Hono<AppContext>()
       return c.json({ error: "World ID verification failed. Please try again." }, 502);
     }
 
-    const user = await findOrCreateUser(c.env, identity.identityKey);
-    if (!user) return c.json({ error: "This World ID is not eligible for an account." }, 403);
-    const { location, cookie } = await loginAndRedirect(c.env, user, c.env.BASE_URL.startsWith("https"));
+    const login = await findOrCreateUser(
+      c.env,
+      "world_id",
+      identity.identityKey,
+      identity.protocolVersion,
+    );
+    if (!login) return c.json({ error: "This World ID is not eligible for an account." }, 403);
+    const { location, cookie } = await loginAndRedirect(
+      c.env,
+      login.user,
+      c.req.url.startsWith("https://"),
+      login.isNew ? "/security?welcome=1" : undefined,
+    );
     c.header("set-cookie", cookie);
     return c.json({ redirect: location });
   })
@@ -128,12 +187,12 @@ export const authRoutes = new Hono<AppContext>()
       Boolean(c.env.DEV_AUTH_TOKEN) && c.req.query("token") === c.env.DEV_AUTH_TOKEN;
     if (c.env.DEV_AUTH !== "1" && !tokenOk) return c.notFound();
     const sub = c.req.query("sub") ?? "dev-user";
-    const user = await findOrCreateUser(c.env, `dev|${sub}`);
-    if (!user) return c.text("banned", 403);
+    const login = await findOrCreateUser(c.env, "dev", `dev|${sub}`, null);
+    if (!login) return c.text("banned", 403);
     const { location, cookie } = await loginAndRedirect(
       c.env,
-      user,
-      c.env.BASE_URL.startsWith("https"),
+      login.user,
+      c.req.url.startsWith("https://"),
     );
     return new Response(null, {
       status: 302,
@@ -157,7 +216,7 @@ export const authRoutes = new Hono<AppContext>()
 /** Load the session user; JSON 401 for /api paths, redirect to landing otherwise. */
 export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
   const deny = () =>
-    c.req.path.startsWith("/api")
+    c.req.path.startsWith("/api") || c.req.path.startsWith("/auth/passkey/register")
       ? c.json({ error: "unauthenticated" }, 401)
       : c.redirect("/");
   const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);

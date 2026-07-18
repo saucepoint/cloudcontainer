@@ -30,17 +30,42 @@ export type Bindings = Omit<
   NULLIFIER_HMAC_KEY: string;
   WORKER_RPC_PRIVATE_KEY: string;
   GITHUB_APP_CLIENT_SECRET?: string;
+  /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
+  INVITE_ADMIN_SECRET?: string;
   /** Optional: enables token-gated /auth/dev?token=… on a deployment (World ID bypass for testing). */
   DEV_AUTH_TOKEN?: string;
 };
 
 export interface UserRow {
   id: string;
-  world_id_nullifier: string;
-  world_id_session_id: string;
+  webauthn_user_id: string;
+  signup_method: "world_id" | "invite" | "dev";
   status: "active" | "banned" | "deleted";
   subscription_status: string;
   created_at: number;
+  last_authenticated_at: number | null;
+}
+
+export interface AuthIdentityRow {
+  provider: "world_id" | "dev";
+  provider_subject: string;
+  user_id: string;
+  protocol_version: string | null;
+  created_at: number;
+  last_authenticated_at: number | null;
+}
+
+export interface PasskeyRow {
+  credential_id: string;
+  user_id: string;
+  public_key: ArrayBuffer | Uint8Array;
+  counter: number;
+  transports: string;
+  device_type: "singleDevice" | "multiDevice";
+  backed_up: 0 | 1;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
 }
 
 export interface HostRow {

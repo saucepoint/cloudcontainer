@@ -42,7 +42,13 @@ describe("signup and login via session identity", () => {
 
     const users = await env.DB.prepare("SELECT * FROM users").all<UserRow>();
     expect(users.results).toHaveLength(1);
-    expect(users.results[0]?.world_id_session_id).toBe("dev|alice");
+    expect(users.results[0]?.signup_method).toBe("dev");
+    const identity = await env.DB.prepare(
+      "SELECT provider, provider_subject FROM auth_identities WHERE user_id = ?",
+    )
+      .bind(users.results[0]?.id)
+      .first<{ provider: string; provider_subject: string }>();
+    expect(identity).toEqual({ provider: "dev", provider_subject: "dev|alice" });
   });
 
   it("concurrent completions of the same proof converge on one account", async () => {
@@ -55,7 +61,8 @@ describe("signup and login via session identity", () => {
 
     expect(responses.map((response) => response.status)).toEqual([302, 302]);
     const users = await env.DB.prepare(
-      "SELECT * FROM users WHERE world_id_session_id = 'dev|racing'",
+      `SELECT u.* FROM users u JOIN auth_identities i ON i.user_id = u.id
+       WHERE i.provider = 'dev' AND i.provider_subject = 'dev|racing'`,
     ).all();
     expect(users.results).toHaveLength(1);
   });
@@ -63,11 +70,12 @@ describe("signup and login via session identity", () => {
   it("redirects returning users with a container straight to the dashboard", async () => {
     const { env } = makeEnv({ DEV_AUTH: "1" });
     await seedHost(env);
-    // Seed the user exactly as a previous dev login would have created it.
-    await env.DB.prepare(
-      "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES ('u1', 'dev|bob', 'dev|bob', 0)",
-    ).run();
-    await seedContainer(env, { user_id: "u1" });
+    await app().request("/auth/dev?sub=bob", {}, env);
+    const user = await env.DB.prepare(
+      "SELECT user_id FROM auth_identities WHERE provider_subject = 'dev|bob'",
+    ).first<{ user_id: string }>();
+    if (!user) throw new Error("dev user was not created");
+    await seedContainer(env, { user_id: user.user_id });
 
     const res = await app().request("/auth/dev?sub=bob", {}, env);
     expect(res.headers.get("location")).toBe("/dashboard");
@@ -131,11 +139,12 @@ describe("/auth/session/verify", () => {
     );
 
     expect(res.status).toBe(200);
-    const users = await env.DB.prepare("SELECT world_id_session_id FROM users").all<{
-      world_id_session_id: string;
-    }>();
-    expect(users.results).toEqual([{
-      world_id_session_id: `worldid-nullifier:${BigInt(nullifier).toString(10)}`,
+    const identities = await env.DB.prepare(
+      "SELECT provider_subject, protocol_version FROM auth_identities",
+    ).all<{ provider_subject: string; protocol_version: string }>();
+    expect(identities.results).toEqual([{
+      provider_subject: `worldid-nullifier:${BigInt(nullifier).toString(10)}`,
+      protocol_version: "3.0",
     }]);
   });
 
@@ -175,11 +184,16 @@ describe("/auth/session/verify", () => {
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json()) as { redirect: string }).toEqual({ redirect: "/onboarding" });
-    const users = await env.DB.prepare("SELECT world_id_session_id FROM users").all<{
-      world_id_session_id: string;
-    }>();
-    expect(users.results).toEqual([{ world_id_session_id: submittedSessionId }]);
+    expect((await res.json()) as { redirect: string }).toEqual({
+      redirect: "/security?welcome=1",
+    });
+    const identities = await env.DB.prepare(
+      "SELECT provider_subject, protocol_version FROM auth_identities",
+    ).all<{ provider_subject: string; protocol_version: string }>();
+    expect(identities.results).toEqual([{
+      provider_subject: submittedSessionId,
+      protocol_version: "4.0",
+    }]);
   });
 });
 

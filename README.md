@@ -5,9 +5,10 @@ Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
 
-The current release is a free, World ID-gated service: one Incus system
-container per verified human, reached over public-key SSH. It is intentionally
-described as a cloud container rather than a hardware-isolated VM. Paid plans,
+The current release is a free service reached through World ID or a one-time
+administrator invite: one Incus system container per account, reached over
+public-key SSH. It is intentionally described as a cloud container rather than
+a hardware-isolated VM. Paid plans,
 Stripe, email, backups, and production redundancy are roadmap work, not current
 features. See [SPEC.md](./SPEC.md) for the normative release contract.
 
@@ -25,9 +26,11 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 
 ## User flow
 
-1. The user completes a World ID proof for the fixed `codestation-login`
-   action. IDKit accepts v4 proof-of-human credentials with an Orb v3 fallback;
-   browsers holding an existing v4 session continue to prove that session.
+1. The user signs in with World ID or a passkey, or creates an account with an
+   eight-character, single-use administrator invite. Invite signup creates a
+   discoverable passkey before consuming the code, because that passkey is the
+   account's required return path. A new World ID account can optionally add a
+   passkey and can always continue signing in with World ID.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the server. Later credential
@@ -73,7 +76,10 @@ Prepare local D1 and start the Worker:
 
 The dashboard is normally at http://localhost:8787. DEV_AUTH=1 exposes the
 visible local development login and must not be committed as a deployed value.
-The checked-in Wrangler configuration keeps DEV_AUTH=0.
+The checked-in Wrangler configuration keeps DEV_AUTH=0. WebAuthn permits
+passkeys on localhost over HTTP. To exercise invites locally, put a disposable
+`INVITE_ADMIN_SECRET` in the untracked `.dev.vars` and point `invite:create` at
+`http://localhost:8787`; never commit `.dev.vars`.
 
 To exercise real provisioning, use a Debian 12/13 Linux box or VM with Incus.
 Bootstrap it with [infra/RUNBOOK.md](./infra/RUNBOOK.md), register the host in
@@ -89,7 +95,8 @@ The fast suite never contacts live external services or infrastructure:
 - Daemon tests inject command execution and assert the generated Incus commands.
 - Contract tests exercise signing, replay rejection, encryption, sealing,
   cross-runtime-safe encodings, and tamper failures.
-- GitHub, Cloudflare, World ID, Codex auth endpoints, and daemon HTTP are mocked.
+- GitHub, Cloudflare, World ID, Codex auth endpoints, WebAuthn verification,
+  and daemon HTTP are mocked.
 - CI runs npm ci, npm run typecheck, and npm test on Node.js 22.
 
 There is not yet an automated real-Incus nightly suite. Provision-to-SSH,
@@ -108,6 +115,7 @@ Required Worker secrets:
 - CREDENTIAL_MASTER_KEY
 - NULLIFIER_HMAC_KEY
 - WORKER_RPC_PRIVATE_KEY
+- INVITE_ADMIN_SECRET
 
 Optional secrets:
 
@@ -138,6 +146,7 @@ Copy the returned IDs into wrangler.jsonc, then:
     npx wrangler secret put NULLIFIER_HMAC_KEY
     npx wrangler secret put WORKER_RPC_PRIVATE_KEY
     npx wrangler secret put RP_SIGNING_KEY
+    npx wrangler secret put INVITE_ADMIN_SECRET
     npx wrangler deploy
 
 World ID setup is in the World Developer Portal. The app must be upgraded for
@@ -146,6 +155,28 @@ World ID 4.0, register the `WORLD_ID_ACTION` action, and provide
 signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real World App. Use
 `staging` only when the configured app/RP and World simulator are also staging.
 `DEV_AUTH` does not select the World ID environment.
+
+### Administrator invites
+
+`INVITE_ADMIN_SECRET` is a high-entropy bearer secret shared only between the
+Worker and an administrator running the generation script. The Worker compares
+it in constant time. It returns the raw invite once and stores only an
+HMAC-SHA-256 keyed by that Worker secret in D1; a completed redemption remains
+recorded even if the account is later deleted. Rotating the secret intentionally
+invalidates every outstanding unused invite.
+
+Generate a code against a deployed Worker without putting the admin secret in
+shell history:
+
+    read -rs INVITE_ADMIN_SECRET && export INVITE_ADMIN_SECRET
+    echo
+    npm run invite:create -w apps/worker -- --url https://YOUR_BASE_URL
+    unset INVITE_ADMIN_SECRET
+
+The script prints one eight-character uppercase alphanumeric code. Send it to
+its intended recipient through a private channel. The code is not consumed if
+the recipient cancels or fails the required passkey prompt; it is consumed
+atomically when the account and first passkey are persisted.
 
 For optional GitHub repository access, register a public GitHub App and set
 `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. Set `GITHUB_APP_SLUG` to

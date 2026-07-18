@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
-import { LandingPage, OnboardingPage } from "../src/pages/views.js";
+import { LandingPage, OnboardingPage, SecurityPage } from "../src/pages/views.js";
 import { createSession } from "../src/sessions.js";
 import { makeEnv, seedUser } from "./helpers/env.js";
 
@@ -17,12 +17,19 @@ function inlineScriptsOf(html: string): string[] {
 }
 
 const landingClient = readFileSync(new URL("../client/landing.ts", import.meta.url), "utf8");
+const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
 const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false, worldIdEnvironment: "production" })],
+  ["security", () => SecurityPage({
+    signupMethod: "world_id",
+    passkeyCount: 0,
+    continueHref: "/onboarding",
+    welcome: true,
+  })],
   ["onboarding", () => OnboardingPage({})],
   ["dashboard", () => DashboardPage({})],
 ];
@@ -76,6 +83,40 @@ describe("landing page call to action", () => {
   it("shows server information before the World ID sign-in", () => {
     const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf("Continue with World ID"));
+  });
+
+  it("offers returning passkey login, World ID, and one-time invite signup", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html).toContain("Sign in with a passkey");
+    expect(html).toContain("Continue with World ID");
+    expect(html).toContain('id="invite-code"');
+    expect(html).toContain('maxlength="8"');
+    expect(landingClient).toContain("startAuthentication({ optionsJSON })");
+    expect(landingClient).toContain("startRegistration({ optionsJSON })");
+  });
+});
+
+describe("passkey security page", () => {
+  it("makes passkeys optional for World ID users and encourages a backup for invited users", () => {
+    const worldId = String(SecurityPage({
+      signupMethod: "world_id",
+      passkeyCount: 0,
+      continueHref: "/onboarding",
+      welcome: true,
+    }));
+    expect(worldId).toContain("World ID remains available");
+    expect(worldId).toContain("Skip for now");
+    expect(worldId).toContain('src="/security.js"');
+    expect(securityClient).toContain('"/auth/passkey/register/options"');
+
+    const invited = String(SecurityPage({
+      signupMethod: "invite",
+      passkeyCount: 1,
+      continueHref: "/dashboard",
+      welcome: false,
+    }));
+    expect(invited).toContain("This account uses passkeys to sign in");
+    expect(invited).toContain("Add another passkey");
   });
 });
 

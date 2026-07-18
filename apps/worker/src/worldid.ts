@@ -45,7 +45,7 @@ export function signWorldIdRequest(
   };
 }
 
-interface WorldIdIdentity {
+export interface WorldIdIdentity {
   identityKey: string;
   protocolVersion: "3.0" | "4.0";
 }
@@ -158,7 +158,11 @@ export async function verifyWorldIdProof(
     // A successful verifier response is JSON and is rejected below otherwise.
   }
   if (!res.ok) {
-    throw new Error(`world id proof verification failed: ${res.status} ${responseBody.slice(0, 1_000)}`);
+    const verifierCode =
+      typeof verifierResponse?.code === "string" && /^[a-z0-9_]{1,64}$/.test(verifierResponse.code)
+        ? ` (${verifierResponse.code})`
+        : "";
+    throw new Error(`world id proof verification failed with status ${res.status}${verifierCode}`);
   }
   if (!verifierResponse) {
     throw new Error("world id proof verification failed: verifier returned invalid JSON");

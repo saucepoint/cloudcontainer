@@ -20,7 +20,7 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
 }) => (
   <Layout>
     <h1 class="landing-title">A cloud machine for coding.</h1>
-    <p class="lead">Linux, your coding agents, and SSH. Free for one verified person.</p>
+    <p class="lead">Linux, your coding agents, and SSH. Free with World ID or an invite.</p>
     <div class="card">
       <ul class="check spec-list">
         <li>
@@ -35,23 +35,99 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
         </li>
       </ul>
     </div>
-    <div class="card landing-signin">
-      <button id="worldid-btn" class="btn" type="button" data-world-id-environment={worldIdEnvironment}>
-        Continue with World ID →
-      </button>
+    <div class="card landing-signin" aria-labelledby="signin-heading">
+      <h2 id="signin-heading">Sign in or create an account</h2>
+      <div class="auth-option">
+        <div>
+          <strong>Passkey</strong>
+          <p class="muted">The quickest way back to an account that already has one.</p>
+        </div>
+        <button id="passkey-login-btn" class="btn" type="button">
+          Sign in with a passkey →
+        </button>
+        <p id="passkey-status" class="muted" role="status" aria-live="polite"></p>
+      </div>
+      <div class="auth-option">
+        <div>
+          <strong>World ID</strong>
+          <p class="muted">Sign in or create a free account by proving you are one person.</p>
+        </div>
+        <button id="worldid-btn" class="btn" type="button" data-world-id-environment={worldIdEnvironment}>
+          Continue with World ID →
+        </button>
+        <p id="worldid-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
+      </div>
+      <form id="invite-form" class="auth-option">
+        <div>
+          <strong>Invite code</strong>
+          <p class="muted">Create an account with a one-time code from an administrator. You will add a passkey before the code is used.</p>
+        </div>
+        <label for="invite-code">Eight-character invite code</label>
+        <div class="auth-code-row">
+          <input
+            id="invite-code"
+            name="code"
+            type="text"
+            inputmode="text"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            spellcheck={false}
+            minlength={8}
+            maxlength={8}
+            pattern="[A-Za-z0-9]{8}"
+            required
+          />
+          <button id="invite-btn" class="btn" type="submit">Use invite →</button>
+        </div>
+        <p id="invite-status" class="muted" role="status" aria-live="polite"></p>
+      </form>
       {devAuth ? (
-        <span style="margin-left:0.75rem">
+        <div class="auth-option">
           <a class="btn secondary" href="/auth/dev">
             Dev login
           </a>
-        </span>
+        </div>
       ) : null}
-      <p id="worldid-status" class="muted" style="margin-top:1rem" role="status" aria-live="polite">
-        No email or card. World ID only verifies that you are one person.
-      </p>
-      <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
       <script type="module" src="/landing.js"></script>
     </div>
+  </Layout>
+);
+
+export const SecurityPage: FC<{
+  signupMethod: "world_id" | "invite" | "dev";
+  passkeyCount: number;
+  continueHref: string;
+  welcome: boolean;
+}> = ({ signupMethod, passkeyCount, continueHref, welcome }) => (
+  <Layout title="Account security" loggedIn>
+    <h1>{welcome ? "Your account is ready." : "Account security."}</h1>
+    <p class="lead">
+      {signupMethod === "world_id"
+        ? "World ID remains available whenever you need it. A passkey gives you a faster, phishing-resistant way to sign in."
+        : "This account uses passkeys to sign in. Add another passkey from a second device or password manager if you want a backup."}
+    </p>
+    <section class="card" aria-labelledby="passkeys-heading">
+      <div class="card-head">
+        <h2 id="passkeys-heading">Passkeys</h2>
+        <span id="passkey-count" class="badge running">
+          {passkeyCount} {passkeyCount === 1 ? "passkey" : "passkeys"}
+        </span>
+      </div>
+      <p class="muted">
+        Your fingerprint, face, or device PIN stays on your device. Codestation stores only the public credential needed to verify sign-in.
+      </p>
+      <button id="add-passkey-btn" class="btn" type="button">
+        {passkeyCount > 0 ? "Add another passkey" : "Add a passkey"} →
+      </button>
+      <p id="passkey-setup-status" class="muted" role="status" aria-live="polite"></p>
+    </section>
+    <div class="row">
+      <a id="security-continue" class="btn secondary" href={continueHref}>
+        {welcome && passkeyCount === 0 ? "Skip for now" : "Continue"} →
+      </a>
+    </div>
+    <script type="module" src="/security.js"></script>
   </Layout>
 );
 

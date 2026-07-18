@@ -134,11 +134,18 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
 // -- seed rows -------------------------------------------------------------------
 
 export async function seedUser(env: Bindings, id = "user-1"): Promise<UserRow> {
-  await env.DB.prepare(
-    "INSERT INTO users (id, world_id_nullifier, world_id_session_id, created_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(id, `null-${id}`, `sess-${id}`, Date.now())
-    .run();
+  const now = Date.now();
+  const webauthnUserId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO users (id, webauthn_user_id, signup_method, created_at)
+       VALUES (?, ?, 'world_id', ?)`,
+    ).bind(id, webauthnUserId, now),
+    env.DB.prepare(
+      `INSERT INTO auth_identities (provider, provider_subject, user_id, created_at)
+       VALUES ('world_id', ?, ?, ?)`,
+    ).bind(`test|${id}`, id, now),
+  ]);
   const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
   if (!row) throw new Error("seedUser failed");
   return row;
