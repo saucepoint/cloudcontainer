@@ -1,0 +1,32 @@
+change: github-auth-simplification
+verified_at: "2026-07-18T18:10:30Z"
+verifier: pi
+risk: P1
+phases:
+  typecheck:
+    passed: true
+    command: npm run typecheck
+  tests:
+    passed: true
+    command: npm test
+    test_files: 24
+    tests: 294
+  terminal_verdict:
+    command: npm test
+    exit_code: 0
+    captured_at: "2026-07-18T18:10:30Z"
+    note: Single contiguous full-workspace run.
+  gh_helper_smoke:
+    passed: true
+    command: HOME=<temp> GH_CONFIG_DIR=<temp> gh auth setup-git --hostname github.com
+    result: Git configured !/usr/bin/gh auth git-credential and no .git-credentials file was created.
+  security:
+    passed: true
+    report: specs/security/REVIEW.md
+    high_findings: 0
+  manual:
+    passed: null
+    note: A live GitHub-hosted install/update/OAuth journey requires the configured App and remains a release check.
+  gaps:
+    closed: true
+    remaining_external_check: Verify one granted private repository and one ungranted private repository with the live App.
