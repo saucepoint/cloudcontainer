@@ -33,6 +33,52 @@ function reveal(elements: Element | Element[] | NodeListOf<Element>): void {
   );
 }
 
+const detailAnimations = new WeakMap<HTMLDetailsElement, Animation>();
+
+function collapsedDetailsHeight(details: HTMLDetailsElement, summary: HTMLElement): number {
+  const styles = getComputedStyle(details);
+  return summary.getBoundingClientRect().height
+    + Number.parseFloat(styles.paddingTop)
+    + Number.parseFloat(styles.paddingBottom);
+}
+
+function animateDetailsToggle(
+  event: MouseEvent,
+  details: HTMLDetailsElement,
+  summary: HTMLElement,
+): void {
+  if (event.defaultPrevented || reducedMotion.matches || typeof details.animate !== "function") return;
+  event.preventDefault();
+  if (detailAnimations.has(details)) return;
+
+  const startHeight = details.getBoundingClientRect().height;
+  const opening = !details.open;
+  if (opening) details.open = true;
+  const endHeight = opening
+    ? details.getBoundingClientRect().height
+    : collapsedDetailsHeight(details, summary);
+
+  details.style.height = `${startHeight}px`;
+  details.style.overflow = "hidden";
+  const animation = details.animate(
+    { height: [`${startHeight}px`, `${endHeight}px`] },
+    { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+  detailAnimations.set(details, animation);
+
+  const reset = () => {
+    if (detailAnimations.get(details) !== animation) return;
+    detailAnimations.delete(details);
+    details.style.height = "";
+    details.style.overflow = "";
+  };
+  animation.onfinish = () => {
+    if (!opening) details.open = false;
+    reset();
+  };
+  animation.oncancel = reset;
+}
+
 function ConfirmationDialog(): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [confirmation, setConfirmation] = React.useState<Confirmation>({
@@ -84,3 +130,11 @@ const root = document.getElementById("ui-root");
 if (root) createRoot(root).render(<ConfirmationDialog />);
 
 reveal(document.querySelectorAll("main > h1, main > .lead, main > .card, main > form > .card"));
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const summary = target.closest("summary");
+  if (!(summary instanceof HTMLElement) || !(summary.parentElement instanceof HTMLDetailsElement)) return;
+  animateDetailsToggle(event, summary.parentElement, summary);
+});

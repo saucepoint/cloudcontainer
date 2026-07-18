@@ -131,18 +131,18 @@ function ContainerCard({
   actionBusy: boolean;
 }) {
   if (!container) {
-    return <div className="card"><h2>No server yet</h2><a className="btn" href="/onboarding">Set one up →</a></div>;
+    return <div className="card"><h2>No workbench yet</h2><a className="btn" href="/onboarding">Set up a workbench →</a></div>;
   }
 
   const busy = isBusy(container);
   const runAction = (operation: ContainerAction) => {
     if (operation === "destroy" || operation === "rebuild") {
       askConfirmation(
-        operation === "destroy" ? "Destroy server?" : "Rebuild server?",
+        operation === "destroy" ? "Destroy workbench?" : "Rebuild workbench?",
         operation === "destroy"
-          ? "Destroy the server and ALL its data? This cannot be undone."
+          ? "Destroy the workbench and ALL its data? This cannot be undone."
           : "Rebuild resets everything outside /home/dev. Continue?",
-        operation === "destroy" ? "Destroy server" : "Rebuild server",
+        operation === "destroy" ? "Destroy workbench" : "Rebuild workbench",
         () => action(operation),
       );
       return;
@@ -153,16 +153,16 @@ function ContainerCard({
   return (
     <div className="card" aria-live="polite" aria-busy={busy}>
       <div className="card-head">
-        <h2>{container.agents.map((agent) => AGENT_LABELS[agent] ?? agent).join(" + ")} server</h2>
-        <span className={`badge ${container.status}`} aria-label={`Container status: ${STATUS_LABELS[container.status] ?? container.status}`}>
+        <h2>{container.agents.map((agent) => AGENT_LABELS[agent] ?? agent).join(" + ")} workbench</h2>
+        <span className={`badge ${container.status}`} aria-label={`Workbench status: ${STATUS_LABELS[container.status] ?? container.status}`}>
           <BusyLabel busy={busy}>{STATUS_LABELS[container.status] ?? container.status}</BusyLabel>
         </span>
       </div>
       <p className="muted">{container.cpu} vCPU · {Math.round(container.ramMb / 1024)} GB RAM · {container.diskGb} GB persistent disk · {container.tier}</p>
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
       {container.status === "waitlisted" ? <p>All hosts are full. Your place is saved.</p> : null}
-      {container.status === "stopped" ? <p>Files are safe. Start the server to use SSH.</p> : null}
-      {container.status === "suspended" ? <p className="notice error">This server is suspended. Your files are not currently accessible.</p> : null}
+      {container.status === "stopped" ? <p>Files are safe. Start the workbench to use SSH.</p> : null}
+      {container.status === "suspended" ? <p className="notice error">This workbench is suspended. Your files are not currently accessible.</p> : null}
       {container.status === "upgrade_pending" ? <p className="notice warning">Your upgrade is waiting for host capacity. No action is needed.</p> : null}
       {container.status === "destroying" ? <p><BusyLabel busy>Deleting…</BusyLabel></p> : null}
       {container.status === "error" ? (
@@ -196,7 +196,7 @@ function ContainerCard({
 
 function Connection({ container, hasKeys }: { container: ContainerView | null; hasKeys: boolean }) {
   const [copied, setCopied] = React.useState(false);
-  if (!container) return <p className="muted">Connection details appear after you create a server.</p>;
+  if (!container) return <p className="muted">Connection details appear after you create a workbench.</p>;
   if (container.status === "running" && !hasKeys) {
     return <p className="notice warning"><strong>Add an SSH key to reveal your connection command.</strong> You cannot see the SSH host or port until a key has been added. Choose “Set up SSH with an agent” below for a copyable coding-agent prompt, or add a public key manually.</p>;
   }
@@ -210,13 +210,13 @@ function Connection({ container, hasKeys }: { container: ContainerView | null; h
       <>
         <p><strong>Run this in your terminal</strong></p>
         <div className="command-row"><pre className="ssh">{container.sshCommand}</pre><button type="button" className="btn secondary" onClick={copy}>{copied ? "Copied ✓" : "Copy SSH command"}</button></div>
-        {container.hostKeyFingerprints.length ? <details><summary>Verify this server on your first connection</summary><p className="muted">SSH may ask whether you trust this host. The fingerprint it shows must match one below.</p><pre className="ssh">{container.hostKeyFingerprints.join("\n")}</pre></details> : null}
+        {container.hostKeyFingerprints.length ? <details><summary>Verify this workbench on your first connection</summary><p className="muted">SSH may ask whether you trust this host. The fingerprint it shows must match one below.</p><pre className="ssh">{container.hostKeyFingerprints.join("\n")}</pre></details> : null}
       </>
     );
   }
-  if (container.status === "stopped") return <p className="muted">Start the server to see its SSH command.</p>;
-  if (container.status === "provisioning" || container.status === "waitlisted") return <p className="muted">Your SSH command and SSH setup options will appear here when the server is ready.</p>;
-  return <p className="muted">SSH is not available in the current server state.</p>;
+  if (container.status === "stopped") return <p className="muted">Start the workbench to see its SSH command.</p>;
+  if (container.status === "provisioning" || container.status === "waitlisted") return <p className="muted">Your SSH command and SSH setup options will appear here when the workbench is ready.</p>;
+  return <p className="muted">SSH is not available in the current workbench state.</p>;
 }
 
 function SshKeys({
@@ -291,7 +291,7 @@ function SshKeys({
   });
 
   const prompt = enrollment ? [
-    "Set up SSH access to my Codestation cloud container:",
+    "Set up SSH access to my Codestation cloud workbench:",
     "",
     "1. Ensure an ed25519 SSH keypair exists at ~/.ssh/codestation_ed25519 (create it with ssh-keygen, no passphrase, if missing). Never read or transmit the private key file — only the .pub file is needed.",
     `2. Send a POST request to ${enrollment.endpoint} with header \"content-type: application/json\" and JSON body:`,
@@ -324,13 +324,27 @@ function SshKeys({
           {keys.map((key) => <li key={key.id}><span style={{ fontFamily: "var(--mono)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }}>{key.pubkey.slice(0, 60)}…</span>{ready ? <button type="button" className="link-btn" disabled={Boolean(busy)} onClick={() => remove(key)}><BusyLabel busy={busy === `remove-${key.id}`}>Remove</BusyLabel></button> : null}</li>)}
         </ul>
       )}
-      {!ready ? <p className="notice"><strong>SSH setup unlocks after the server is ready.</strong> Finish building the server before adding keys or creating an agent setup prompt.</p> : (
+      {!ready ? <p className="notice"><strong>SSH setup unlocks after the workbench is ready.</strong></p> : (
         <>
           <div className="row">
-            <button type="button" className="btn" disabled={Boolean(busy)} onClick={openAgentEnrollment}>
+            <button
+              type="button"
+              className={`btn ${enrollmentMode === "agent" ? "" : "secondary"}`}
+              data-active={enrollmentMode === "agent" ? "true" : undefined}
+              aria-pressed={enrollmentMode === "agent"}
+              disabled={Boolean(busy)}
+              onClick={openAgentEnrollment}
+            >
               <BusyLabel busy={busy === "mint"}>{keys.length ? "Enroll another device" : "Set up SSH with an agent"}</BusyLabel>
             </button>
-            <button type="button" className="btn secondary" disabled={Boolean(busy)} onClick={openManualEnrollment}>
+            <button
+              type="button"
+              className={`btn ${enrollmentMode === "manual" ? "" : "secondary"}`}
+              data-active={enrollmentMode === "manual" ? "true" : undefined}
+              aria-pressed={enrollmentMode === "manual"}
+              disabled={Boolean(busy)}
+              onClick={openManualEnrollment}
+            >
               {keys.length ? "Add another key manually" : "Add a key manually"}
             </button>
           </div>
@@ -338,10 +352,11 @@ function SshKeys({
             {enrollmentMode === "agent" && enrollment ? (
               <motion.div
                 key="agent-enrollment"
-                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                {...(reducedMotion ? {} : { exit: { opacity: 0, y: -4 } })}
+                initial={reducedMotion ? false : { opacity: 0, height: 0, y: 4 }}
+                animate={{ opacity: 1, height: "auto", y: 0 }}
+                {...(reducedMotion ? {} : { exit: { opacity: 0, height: 0, y: -4 } })}
                 transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
+                style={{ overflow: "hidden" }}
               >
                 <div className="notice">
                   <strong>Paste this prompt into your local coding agent</strong>
@@ -360,10 +375,11 @@ function SshKeys({
               <motion.div
                 key="manual-enrollment"
                 id="keyform"
-                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                {...(reducedMotion ? {} : { exit: { opacity: 0, y: -4 } })}
+                initial={reducedMotion ? false : { opacity: 0, height: 0, y: 4 }}
+                animate={{ opacity: 1, height: "auto", y: 0 }}
+                {...(reducedMotion ? {} : { exit: { opacity: 0, height: 0, y: -4 } })}
                 transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }}
+                style={{ overflow: "hidden" }}
               >
                 <p className="muted">First create a key if needed, then print the public half:</p>
                 <div className="command-row">
@@ -430,7 +446,7 @@ function DashboardApp() {
         applyContainer(result.container);
         setActionError("");
       } catch (error) {
-        if (!redirectIfSignedOut(error)) setActionError("Could not refresh the server status. We will try again automatically.");
+        if (!redirectIfSignedOut(error)) setActionError("Could not refresh the workbench status. We will try again automatically.");
       } finally {
         pollInFlight.current = false;
         setPollVersion((version) => version + 1);
@@ -488,16 +504,16 @@ function DashboardApp() {
     () => void api("/api/account/delete", { method: "POST" }).then(() => { location.href = "/"; }).catch((error) => setActionError(errorMessage(error, "Could not delete the account."))),
   );
 
-  if (!loaded) return <><h1>Your server.</h1><div className="card" aria-live="polite" aria-busy="true"><p className="muted"><BusyLabel busy>Loading your server…</BusyLabel></p></div></>;
+  if (!loaded) return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><p className="muted"><BusyLabel busy>Loading your workbench…</BusyLabel></p></div></>;
 
   return (
     <>
-      <h1>Your server.</h1>
+      <h1>Your workbench.</h1>
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
       {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
       <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
-      <section className="card" aria-labelledby="danger-heading"><h2 id="danger-heading">Account</h2><button type="button" className="btn danger" disabled={Boolean(container && container.status !== "waitlisted")} onClick={deleteAccount}>Delete account</button><p className="muted" style={{ marginTop: "0.6rem" }}>{container && container.status !== "waitlisted" ? "Destroy your server first. When deletion finishes, you can delete the account." : "Purges all credentials and keys, and removes your account."}</p></section>
+      <section className="card" aria-labelledby="danger-heading"><h2 id="danger-heading">Account</h2><button type="button" className="btn danger" disabled={Boolean(container && container.status !== "waitlisted")} onClick={deleteAccount}>Delete account</button><p className="muted" style={{ marginTop: "0.6rem" }}>{container && container.status !== "waitlisted" ? "Destroy your workbench first. When deletion finishes, you can delete the account." : "Purges all credentials and keys, and removes your account."}</p></section>
     </>
   );
 }

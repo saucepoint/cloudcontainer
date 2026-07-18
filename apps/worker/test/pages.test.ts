@@ -171,6 +171,7 @@ describe("subscription sign-in wiring", () => {
     expect(html).not.toContain("Add API keys or sign in to a provider");
     expect(apiKeys).toBeGreaterThan(agents);
     expect(apiKeys).toBeLessThan(advanced);
+    expect(html.indexOf('<div class="card">', apiKeys)).toBeGreaterThan(apiKeys);
     const section = html.slice(apiKeys, html.indexOf("</details>", apiKeys));
     expect(section).toContain("Sign in with GitHub");
     expect(section).toContain('name="llm_opencode_go"');
@@ -363,7 +364,7 @@ describe("beginner-friendly provisioning UI", () => {
   it("keeps the agent prompt collapsed until requested and prioritizes copying it", () => {
     const enrollmentView = dashboardClient.slice(
       dashboardClient.indexOf('enrollmentMode === "agent" && enrollment'),
-      dashboardClient.indexOf('enrollmentMode === "manual"'),
+      dashboardClient.indexOf(') : enrollmentMode === "manual" ? ('),
     );
     expect(enrollmentView.indexOf('Copy prompt')).toBeLessThan(enrollmentView.indexOf('<details>'));
     expect(enrollmentView).toContain('<summary>Review the setup prompt</summary>');

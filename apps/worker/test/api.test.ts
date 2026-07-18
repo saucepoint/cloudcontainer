@@ -200,11 +200,12 @@ describe("POST /api/provision", () => {
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
 
-  it("refuses a second container (one per account)", async () => {
+  it("refuses a second workbench per account", async () => {
     const { env, headers } = await setup();
     await seedContainer(env);
     const res = await app().request("/api/provision", json({ agents: ["claude"] }, headers), env);
     expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "A workbench already exists for this account." });
   });
 
   it("rejects an invalid Cloudflare token up front", async () => {
@@ -713,6 +714,9 @@ describe("account deletion (U8)", () => {
 
     const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
     expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "destroy your workbench before deleting your account",
+    });
     expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).not.toBeNull();
   });
 
