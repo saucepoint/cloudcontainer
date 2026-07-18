@@ -154,10 +154,18 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .landing-title { max-width: 650px; }
 .landing-signin { max-width: 580px; }
 .landing-signin h2 { margin-bottom: 0.25rem; }
-.auth-option { display: grid; gap: 0.5rem; padding: 1.1rem 0; border-bottom: 1px solid var(--line); }
-.auth-option:last-of-type { border-bottom: 0; }
+.auth-tabs { margin-top: 1rem; }
+.auth-tab-list { display: flex; gap: 0.2rem; padding: 0.2rem; background: var(--surface); border-radius: 5px; }
+.auth-tab { flex: 1 1 0; min-height: 2.4rem; padding: 0.4rem 0.55rem; border: 0; border-radius: 3px; background: transparent;
+  color: var(--muted); font-weight: 600; font-size: 0.84rem; cursor: pointer; }
+.auth-tab:hover { color: var(--accent); }
+.auth-tab[data-active] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgb(32 32 29 / 0.1); }
+.auth-tab-panel { min-width: 0; }
+.auth-option { display: grid; gap: 0.5rem; padding: 1.1rem 0 0; }
 .auth-option p { margin: 0; }
+.auth-option-title { margin: 0; font-size: 1rem; }
 .auth-option > .btn { justify-self: start; }
+.auth-dev-option { margin-top: 1rem; }
 .auth-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
 .auth-code-row input { letter-spacing: 0.18em; text-transform: uppercase; }
 .spec-list li { justify-content: flex-start; }

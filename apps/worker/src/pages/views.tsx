@@ -37,53 +37,9 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
     </div>
     <div class="card landing-signin" aria-labelledby="signin-heading">
       <h2 id="signin-heading">Sign in or create an account</h2>
-      <div class="auth-option">
-        <div>
-          <strong>Passkey</strong>
-          <p class="muted">The quickest way back to an account that already has one.</p>
-        </div>
-        <button id="passkey-login-btn" class="btn" type="button">
-          Sign in with a passkey →
-        </button>
-        <p id="passkey-status" class="muted" role="status" aria-live="polite"></p>
-      </div>
-      <div class="auth-option">
-        <div>
-          <strong>World ID</strong>
-          <p class="muted">Sign in or create a free account by proving you are one person.</p>
-        </div>
-        <button id="worldid-btn" class="btn" type="button" data-world-id-environment={worldIdEnvironment}>
-          Continue with World ID →
-        </button>
-        <p id="worldid-status" class="muted" role="status" aria-live="polite"></p>
-        <div id="worldid-qr" class="qr" role="status" aria-live="polite"></div>
-      </div>
-      <form id="invite-form" class="auth-option">
-        <div>
-          <strong>Invite code</strong>
-          <p class="muted">Create an account with a one-time code from an administrator. You will add a passkey before the code is used.</p>
-        </div>
-        <label for="invite-code">Eight-character invite code</label>
-        <div class="auth-code-row">
-          <input
-            id="invite-code"
-            name="code"
-            type="text"
-            inputmode="text"
-            autocomplete="one-time-code"
-            autocapitalize="characters"
-            spellcheck={false}
-            minlength={8}
-            maxlength={8}
-            pattern="[A-Za-z0-9]{8}"
-            required
-          />
-          <button id="invite-btn" class="btn" type="submit">Use invite →</button>
-        </div>
-        <p id="invite-status" class="muted" role="status" aria-live="polite"></p>
-      </form>
+      <div id="landing-auth-root" data-world-id-environment={worldIdEnvironment}></div>
       {devAuth ? (
-        <div class="auth-option">
+        <div class="auth-dev-option">
           <a class="btn secondary" href="/auth/dev">
             Dev login
           </a>
