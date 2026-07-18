@@ -156,12 +156,15 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .landing-signin h2 { margin-bottom: 0.25rem; }
 .auth-tabs { margin-top: 1rem; }
 .auth-tab-list { display: flex; gap: 0.2rem; padding: 0.2rem; background: var(--surface); border-radius: 5px; }
-.auth-tab { flex: 1 1 0; min-height: 2.4rem; padding: 0.4rem 0.55rem; border: 0; border-radius: 3px; background: transparent;
+.auth-tab { position: relative; flex: 1 1 0; min-height: 2.4rem; padding: 0.4rem 0.55rem; border: 0; border-radius: 3px; background: transparent;
   color: var(--muted); font-weight: 600; font-size: 0.84rem; cursor: pointer; }
 .auth-tab:hover { color: var(--accent); }
-.auth-tab[data-active] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgb(32 32 29 / 0.1); }
+.auth-tab[data-active] { color: var(--ink); }
+.auth-tab-label { position: relative; z-index: 1; }
+.auth-tab-indicator { position: absolute; inset: 0; z-index: 0; border-radius: 3px; background: var(--paper); box-shadow: 0 1px 2px rgb(32 32 29 / 0.1); }
 .auth-tab-panel { min-width: 0; }
 .auth-option { display: grid; gap: 0.5rem; padding: 1.1rem 0 0; }
+.auth-option-form { display: grid; gap: 0.5rem; }
 .auth-option p { margin: 0; }
 .auth-option-title { margin: 0; font-size: 1rem; }
 .auth-option > .btn { justify-self: start; }
