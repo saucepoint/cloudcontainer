@@ -39,12 +39,9 @@ interface GithubRepositoryResponse {
 }
 
 export function githubConfigured(env: Bindings): boolean {
-  return Boolean(env.GITHUB_APP_CLIENT_ID && env.GITHUB_APP_CLIENT_SECRET);
-}
-
-export function githubInstallationConfigured(env: Bindings): boolean {
   return Boolean(
-    githubConfigured(env) &&
+    env.GITHUB_APP_CLIENT_ID &&
+      env.GITHUB_APP_CLIENT_SECRET &&
       typeof env.GITHUB_APP_SLUG === "string" &&
       /^[a-z\d](?:[a-z\d-]{0,98}[a-z\d])?$/i.test(env.GITHUB_APP_SLUG),
   );
@@ -298,7 +295,7 @@ async function revokeGithubAuthorization(env: Bindings, token: string): Promise<
 
 export const githubRoutes = new Hono<AppContext>()
   .get("/auth/github/install", requireUser, async (c) => {
-    if (!githubInstallationConfigured(c.env)) {
+    if (!githubConfigured(c.env)) {
       return c.text("GitHub App installation not configured", 404);
     }
     if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
@@ -313,10 +310,7 @@ export const githubRoutes = new Hono<AppContext>()
       return c.text(CREDENTIALS_LOCKED_ERROR, 409);
     }
     const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-    const destination = githubInstallationConfigured(c.env)
-      ? await beginGithubInstallation(c.env, c.get("user").id, returnTo)
-      : await beginGithubAuthorization(c.env, c.get("user").id, returnTo);
-    return c.redirect(destination);
+    return c.redirect(await beginGithubInstallation(c.env, c.get("user").id, returnTo));
   })
   .post("/auth/github/reauth", requireUser, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
