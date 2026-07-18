@@ -157,8 +157,7 @@ const AgentSignin: FC<{
 
 export const OnboardingPage: FC<{
   githubAvailable?: boolean;
-  githubInstallationAvailable?: boolean;
-}> = ({ githubAvailable = false, githubInstallationAvailable = false }) => (
+}> = ({ githubAvailable = false }) => (
   <Layout title="Set up" loggedIn>
     <h1>Set up a workbench.</h1>
     <p class="notice">
@@ -237,27 +236,20 @@ export const OnboardingPage: FC<{
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
-            {githubInstallationAvailable
-              ? "Install the GitHub App for a personal or organization account, to clone repositories into "
-              : "Connect GitHub, then choose repositories to clone into "}
-            <code>~/repos</code>.
+            Connect GitHub and choose personal or organization repositories. Codestation uses the
+            resulting short-lived access to search, clone into <code>~/repos</code>, and sign in <code>gh</code>.
           </p>
           <div class="row">
             <a
               id="github-connect"
               class="btn secondary"
-              href={githubInstallationAvailable
-                ? "/auth/github/install?return_to=/onboarding"
-                : "/auth/github?return_to=/onboarding"}
+              href="/auth/github?return_to=/onboarding"
             >
-              {githubInstallationAvailable ? "Install or manage GitHub access" : "Connect GitHub"}
+              Connect or update GitHub
             </a>
-            <button id="github-reauthorize" class="btn secondary" type="button">
-              Reauthorize GitHub
-            </button>
           </div>
           <p id="github-status" class="muted" role="status" aria-live="polite">
-            Search by repository name, or enter an exact owner/repository.
+            After connecting, search by repository name or enter an exact owner/repository.
           </p>
           <label for="github-repo-search">Search repositories</label>
           <input id="github-repo-search" type="search" placeholder="repository name or owner/repository" maxLength={256} autocomplete="off" />
