@@ -308,7 +308,7 @@ solely to prevent immediate re-signup by a banned identity.
 - Sensitive operations, including account deletion, check the D1 revocation
   record because KV is eventually consistent.
 
-### Development bypass
+### Local development login
 
 DEV_AUTH=1 may expose a visible local-only development login. Deployed
 environments keep DEV_AUTH=0.

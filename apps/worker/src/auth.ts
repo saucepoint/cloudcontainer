@@ -179,7 +179,7 @@ export const authRoutes = new Hono<AppContext>()
     c.header("set-cookie", cookie);
     return c.json({ redirect: location });
   })
-  // Local-only World ID bypass, exposed only when explicitly enabled for development.
+  // Local-only development login, exposed only when explicitly enabled.
   .get("/auth/dev", async (c) => {
     if (c.env.DEV_AUTH !== "1") return c.notFound();
     const sub = c.req.query("sub") ?? "dev-user";
