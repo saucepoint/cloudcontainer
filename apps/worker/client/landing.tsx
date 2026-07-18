@@ -298,7 +298,7 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
         <section className="auth-option" aria-labelledby="passkey-heading">
           <div>
             <h3 id="passkey-heading" className="auth-option-title">Passkey</h3>
-            <p className="muted">The quickest way back to an account that already has one.</p>
+            <p className="muted">Quickest login for existing users.</p>
           </div>
           <button
             id="passkey-login-btn"
