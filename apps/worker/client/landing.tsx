@@ -18,6 +18,7 @@ import {
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
 import QRCode from "qrcode";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 
@@ -50,6 +51,44 @@ type RpContextResponse = {
   action: string;
   rp_context: RpContext;
 };
+
+type AuthTab = "passkey" | "world-id" | "invite";
+
+function isAuthTab(value: string | number): value is AuthTab {
+  return value === "passkey" || value === "world-id" || value === "invite";
+}
+
+function AnimatedAuthOption({
+  active,
+  value,
+  labelledBy,
+  reducedMotion,
+  children,
+}: {
+  active: boolean;
+  value: AuthTab;
+  labelledBy: string;
+  reducedMotion: boolean | null;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <AnimatePresence initial={false} mode="wait">
+      {active ? (
+        <motion.section
+          key={value}
+          className="auth-option"
+          aria-labelledby={labelledBy}
+          initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          {...(reducedMotion ? {} : { exit: { opacity: 0, y: -8 } })}
+          transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" }}
+        >
+          {children}
+        </motion.section>
+      ) : null}
+    </AnimatePresence>
+  );
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
@@ -140,6 +179,8 @@ async function reportFailure(code: IDKitErrorCodes, requestId: string): Promise<
 
 function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" | "staging" }): React.JSX.Element {
   const supportsWebAuthn = browserSupportsWebAuthn();
+  const reducedMotion = useReducedMotion();
+  const [activeTab, setActiveTab] = React.useState<AuthTab>("passkey");
   const qrContainer = React.useRef<HTMLDivElement>(null);
   const inviteInput = React.useRef<HTMLInputElement>(null);
   const [passkeyStatus, setPasskeyStatus] = React.useState(
@@ -287,15 +328,30 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
   };
 
   return (
-    <Tabs.Root defaultValue="passkey" className="auth-tabs">
+    <Tabs.Root
+      defaultValue="passkey"
+      className="auth-tabs"
+      onValueChange={(value) => {
+        if (isAuthTab(value)) setActiveTab(value);
+      }}
+    >
       <Tabs.List className="auth-tab-list" aria-label="Authentication options">
-        <Tabs.Tab value="passkey" className="auth-tab">Passkey</Tabs.Tab>
-        <Tabs.Tab value="world-id" className="auth-tab">World ID</Tabs.Tab>
-        <Tabs.Tab value="invite" className="auth-tab">Invite Code</Tabs.Tab>
+        <Tabs.Tab value="passkey" className="auth-tab">
+          <span className="auth-tab-label">Passkey</span>
+          {activeTab === "passkey" ? <motion.span aria-hidden className="auth-tab-indicator" layoutId="auth-tab-indicator" transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" }} /> : null}
+        </Tabs.Tab>
+        <Tabs.Tab value="world-id" className="auth-tab">
+          <span className="auth-tab-label">World ID</span>
+          {activeTab === "world-id" ? <motion.span aria-hidden className="auth-tab-indicator" layoutId="auth-tab-indicator" transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" }} /> : null}
+        </Tabs.Tab>
+        <Tabs.Tab value="invite" className="auth-tab">
+          <span className="auth-tab-label">Invite Code</span>
+          {activeTab === "invite" ? <motion.span aria-hidden className="auth-tab-indicator" layoutId="auth-tab-indicator" transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" }} /> : null}
+        </Tabs.Tab>
       </Tabs.List>
 
       <Tabs.Panel value="passkey" keepMounted className="auth-tab-panel">
-        <section className="auth-option" aria-labelledby="passkey-heading">
+        <AnimatedAuthOption active={activeTab === "passkey"} value="passkey" labelledBy="passkey-heading" reducedMotion={reducedMotion}>
           <div>
             <h3 id="passkey-heading" className="auth-option-title">Passkey</h3>
             <p className="muted">Quickest login for existing users.</p>
@@ -310,11 +366,11 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
             Sign in with a passkey →
           </button>
           <p id="passkey-status" className="muted" role="status" aria-live="polite">{passkeyStatus}</p>
-        </section>
+        </AnimatedAuthOption>
       </Tabs.Panel>
 
       <Tabs.Panel value="world-id" keepMounted className="auth-tab-panel">
-        <section className="auth-option" aria-labelledby="worldid-heading">
+        <AnimatedAuthOption active={activeTab === "world-id"} value="world-id" labelledBy="worldid-heading" reducedMotion={reducedMotion}>
           <div>
             <h3 id="worldid-heading" className="auth-option-title">World ID</h3>
             <p className="muted">Sign in or create a free account by proving you are one person.</p>
@@ -330,41 +386,43 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
           </button>
           <p id="worldid-status" className="muted" role="status" aria-live="polite">{worldIdStatus}</p>
           <div ref={qrContainer} id="worldid-qr" className="qr" role="status" aria-live="polite"></div>
-        </section>
+        </AnimatedAuthOption>
       </Tabs.Panel>
 
       <Tabs.Panel value="invite" keepMounted className="auth-tab-panel">
-        <form id="invite-form" className="auth-option" onSubmit={(event) => void registerWithInvite(event)}>
-          <div>
-            <h3 className="auth-option-title">Invite Code</h3>
-            <p className="muted">
-              Create an account with a one-time invite code
-            </p>
-          </div>
-          <div className="auth-code-row">
-            <input
-              ref={inviteInput}
-              id="invite-code"
-              name="code"
-              type="text"
-              inputMode="text"
-              autoComplete="one-time-code"
-              autoCapitalize="characters"
-              spellCheck={false}
-              minLength={8}
-              maxLength={8}
-              pattern="[A-Za-z0-9]{8}"
-              required
-              disabled={!supportsWebAuthn || invitePending}
-              value={inviteCode}
-              onChange={(event) => setInviteCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())}
-            />
-            <button id="invite-btn" className="btn" type="submit" disabled={!supportsWebAuthn || invitePending}>
-              Use invite →
-            </button>
-          </div>
-          <p id="invite-status" className="muted" role="status" aria-live="polite">{inviteStatus}</p>
-        </form>
+        <AnimatedAuthOption active={activeTab === "invite"} value="invite" labelledBy="invite-heading" reducedMotion={reducedMotion}>
+          <form id="invite-form" className="auth-option-form" onSubmit={(event) => void registerWithInvite(event)}>
+            <div>
+              <h3 id="invite-heading" className="auth-option-title">Invite Code</h3>
+              <p className="muted">
+                Create an account with a one-time invite code
+              </p>
+            </div>
+            <div className="auth-code-row">
+              <input
+                ref={inviteInput}
+                id="invite-code"
+                name="code"
+                type="text"
+                inputMode="text"
+                autoComplete="one-time-code"
+                autoCapitalize="characters"
+                spellCheck={false}
+                minLength={8}
+                maxLength={8}
+                pattern="[A-Za-z0-9]{8}"
+                required
+                disabled={!supportsWebAuthn || invitePending}
+                value={inviteCode}
+                onChange={(event) => setInviteCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())}
+              />
+              <button id="invite-btn" className="btn" type="submit" disabled={!supportsWebAuthn || invitePending}>
+                Use invite →
+              </button>
+            </div>
+            <p id="invite-status" className="muted" role="status" aria-live="polite">{inviteStatus}</p>
+          </form>
+        </AnimatedAuthOption>
       </Tabs.Panel>
     </Tabs.Root>
   );

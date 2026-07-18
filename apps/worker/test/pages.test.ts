@@ -99,10 +99,22 @@ describe("landing page call to action", () => {
 
     expect(html).toContain('id="landing-auth-root"');
     expect(landingClient).toContain('import { Tabs } from "@base-ui/react/tabs"');
-    expect(landingClient).toContain('<Tabs.Root defaultValue="passkey"');
+    expect(landingClient).toContain("<Tabs.Root");
+    expect(landingClient).toContain('defaultValue="passkey"');
     expect(landingClient).toContain('<Tabs.List className="auth-tab-list"');
     expect(landingClient).toContain('<Tabs.Tab value="world-id"');
     expect(landingClient).toContain('<Tabs.Panel value="invite" keepMounted');
+  });
+
+  it("animates the active auth tab and panel with reduced-motion support", () => {
+    expect(landingClient).toContain('from "motion/react"');
+    expect(landingClient).toContain("useReducedMotion()");
+    expect(landingClient).toContain('layoutId="auth-tab-indicator"');
+    expect(landingClient).toContain("<AnimatePresence");
+    expect(landingClient).toContain("key={value}");
+    expect(landingClient).toContain('value="passkey"');
+    expect(landingClient).toContain('value="world-id"');
+    expect(landingClient).toContain('value="invite"');
   });
 });
 
