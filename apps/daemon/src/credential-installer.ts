@@ -222,13 +222,10 @@ export class CredentialInstaller {
         mode: "0600",
       });
       await this.incus.shell(name, "chown dev:dev /home/dev/.config/gh");
-      await this.incus.writeFile(
+      await this.incus.shell(
         name,
-        "/home/dev/.git-credentials",
-        `https://x-access-token:${creds.githubToken}@github.com\n`,
-        { owner: "dev:dev", mode: "0600" },
+        'rm -f /home/dev/.git-credentials && su - dev -c "gh auth setup-git --hostname github.com"',
       );
-      await this.incus.shell(name, 'su - dev -c "git config --global credential.helper store"');
     } else {
       await this.incus.shell(
         name,
