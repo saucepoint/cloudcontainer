@@ -159,6 +159,11 @@ describe("provision command construction", () => {
     expect(ghDirectoryChown).toBeGreaterThanOrEqual(0);
     expect(firstClone).toBeGreaterThan(ghDirectoryChown);
     expect(commands.some((command) =>
+      command.includes("gh auth setup-git --hostname github.com")
+    )).toBe(true);
+    expect(commands.some((command) => command.includes("credential.helper store"))).toBe(false);
+    expect(calls.some((call) => call.stdin?.includes("https://x-access-token:"))).toBe(false);
+    expect(commands.some((command) =>
       command.includes("gh repo clone") &&
       command.includes("octocat/hello-world") &&
       command.includes("/home/dev/repos/hello-world"),
