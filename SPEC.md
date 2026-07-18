@@ -422,19 +422,23 @@ paths.
 ### Optional developer integrations
 
 - A scoped Cloudflare API token is validated before storage.
-- A GitHub App flow is shown when its client ID and secret are configured. When
-  an allowlisted public-page slug is also configured, the primary connection
-  action opens the App installation chooser for a personal or organization
-  account and its granted repositories, then continues into user authorization.
-  Without a slug, direct OAuth and repository selection remain available.
-  Reauthorization is a separate OAuth action. The live App must be public and
+- A GitHub App flow is shown only when its client ID, client secret, and valid
+  public-page slug form a complete install-capable configuration. One
+  **Connect or update GitHub** action opens the App installation chooser for a
+  personal or organization account and its granted repositories, then GitHub
+  continues into user authorization. Installation and authorization remain
+  distinct GitHub grants but one product journey; there is no separate direct
+  OAuth or destructive reauthorization action. A working token remains stored
+  unless a replacement callback succeeds. The live App must be public and
   installable on any account, request OAuth during installation, use expiring
   user tokens, and request only read-only Contents permission (plus implicit
   Metadata). Organization approval, permission-change approval, and an active
   SAML session remain GitHub-side prerequisites where applicable.
-- GitHub user-to-server access and refresh tokens are stored encrypted. The
-  control-plane reconciler refreshes expiring access; the refresh token never
-  goes to a host. The access token configures `gh` and Git inside the container.
+- GitHub user-to-server access and refresh tokens are stored encrypted. The App
+  installation itself is not an authentication credential. The control-plane
+  reconciler refreshes expiring user access; the refresh token never goes to a
+  host. The short-lived user access token configures `gh`; Git reuses it through
+  `gh auth git-credential`, without a second `.git-credentials` token copy.
   Onboarding searches only repositories shared by the user and an App
   installation, revalidates selected names at submission, and clones at most 20
   during provision or rebuild. Ungranted private repositories remain invisible

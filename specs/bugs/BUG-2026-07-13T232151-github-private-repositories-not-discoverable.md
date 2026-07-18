@@ -2,9 +2,9 @@
 
 ## Problem
 
-- **Actual behavior:** GitHub repository search returns public repositories but does not surface expected private repositories after the user connects or reauthorizes GitHub.
+- **Original behavior:** GitHub repository search returned public repositories but did not surface expected private repositories after the user authorized GitHub without installing the App.
 - **Expected behavior:** A user can grant the GitHub App access to selected personal or organization repositories and then find those repositories during onboarding.
-- **Reproduction:** Open onboarding, choose **Connect GitHub** or **Reauthorize GitHub**, complete authorization, and search for a private repository on an account where the app has not separately been installed and granted repository access.
+- **Original reproduction:** Open onboarding, authorize GitHub, and search for a private repository on an account where the App has not separately been installed and granted repository access.
 - **Security impact: NONE.** No security exploit path was identified; access is narrower than intended rather than broader.
 
 ## Root Cause Analysis
@@ -54,8 +54,8 @@ Risk level: Medium. Repository setup is blocked, but no unauthorized access occu
    **GREEN:** Add an explicit configured GitHub App installation destination and route users through installation before or together with user authorization.
    **verify:** `cd apps/worker && npm test -- --run test/github.test.ts`
 
-2. **RED:** Write an onboarding test proving the UI explains installation access and provides an installation/manage-access action for personal and organization repositories.
-   **GREEN:** Update the GitHub onboarding controls and status copy; retain reauthorization as a separate action for refreshing the user grant.
+2. **RED:** Write an onboarding test proving the UI explains installation access and provides one connection/update action for personal and organization repositories.
+   **GREEN:** Update the GitHub onboarding controls and status copy; use the installation-first action for initial connection, repository updates, and renewed authorization.
    **verify:** `cd apps/worker && npm test -- --run test/pages.test.ts`
 
 3. **RED:** Replace the false no-installation repository test with behavior that models repositories granted through an installation, including a private repository.
@@ -66,7 +66,7 @@ Risk level: Medium. Repository setup is blocked, but no unauthorized access occu
    **GREEN:** Update setup and release verification instructions so a deployment cannot be considered GitHub-ready after setting only a client ID and secret.
    **verify:** `cd ../.. && rg -n "Contents|Any account|install|SAML" README.md SPEC.md apps/worker`
 
-**REFACTOR:** Centralize GitHub App authorize/install URLs and user-facing access guidance so connection, reauthorization, and installation cannot be conflated again.
+**REFACTOR:** Collapse the installation and authorization entry points into one route while keeping the two GitHub grants explicit in code and documentation.
 
 ## Acceptance Criteria
 
@@ -80,13 +80,16 @@ Risk level: Medium. Repository setup is blocked, but no unauthorized access occu
 
 ## Resolution
 
-When an App slug is configured, the primary onboarding action redirects through
-the GitHub App installation chooser with CSRF state before GitHub continues into
-the existing OAuth callback. Reauthorization remains a separate OAuth-only
-action. The App slug is an explicit, validated Worker binding; when it is absent,
-the existing OAuth connection and repository selector remain available.
+The single **Connect or update GitHub** action redirects through the GitHub App
+installation chooser with CSRF state before GitHub continues into the existing
+OAuth callback. GitHub setup is hidden unless the client ID, secret, and valid
+App slug are all configured. Direct OAuth, the installation alias, and the
+destructive reauthorization endpoint were removed; an existing working token is
+kept unless a replacement callback succeeds.
 
 Granted private repositories remain searchable and are revalidated directly at
 submission; ungranted repositories return GitHub's not-found response and are
-rejected. Existing short-lived user-token delivery continues to authenticate
-`gh` and Git cloning without introducing stored installation credentials.
+rejected. The refreshable short-lived user token authenticates `gh`, and Git now
+reuses it through `gh auth git-credential` instead of storing a duplicate token
+in `.git-credentials`. The App installation grant itself is never treated as a
+credential.
