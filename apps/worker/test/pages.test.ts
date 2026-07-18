@@ -21,6 +21,7 @@ const securityClient = readFileSync(new URL("../client/security.ts", import.meta
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
 const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.meta.url), "utf8");
+const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false, worldIdEnvironment: "production" })],
@@ -80,8 +81,11 @@ describe("World ID environment wiring", () => {
 });
 
 describe("landing page call to action", () => {
-  it("shows server information before the client-rendered sign-in choices", () => {
+  it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html).toContain("A cloud workbench for command-line agents");
+    expect(html).toContain("An always-on workbench for coding and long running jobs. Access from any terminal client on any device.");
+    expect(html).toContain("Free for each unique person");
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
@@ -159,17 +163,31 @@ describe("subscription sign-in wiring", () => {
     expect(html).not.toContain("auth.json");
   });
 
-  it("keeps provider sign-ins and API keys inside one collapsed section", () => {
+  it("places the collapsed API-key section directly below agent selection", () => {
     const html = String(OnboardingPage({}));
-    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
-    expect(html).not.toContain("Model access");
-    expect(apiKeys).toBeGreaterThan(-1);
+    const agents = html.indexOf("1. Coding agents");
+    const apiKeys = html.indexOf("Add API keys");
+    const advanced = html.indexOf("2. Advanced");
+    expect(html).not.toContain("Add API keys or sign in to a provider");
+    expect(apiKeys).toBeGreaterThan(agents);
+    expect(apiKeys).toBeLessThan(advanced);
+    expect(html.indexOf('<div class="card">', apiKeys)).toBeGreaterThan(apiKeys);
     const section = html.slice(apiKeys, html.indexOf("</details>", apiKeys));
     expect(section).toContain("Sign in with GitHub");
     expect(section).toContain('name="llm_opencode_go"');
     expect(section).toContain('name="llm_anthropic"');
     expect(section).toContain('href="https://console.anthropic.com/settings/keys"');
     expect(section).toContain('href="https://platform.openai.com/api-keys"');
+  });
+
+  it("gives the ChatGPT device code a dedicated copy affordance", () => {
+    const codexFlow = authFlowsClient.slice(
+      authFlowsClient.indexOf("export const codexDeviceFlow"),
+      authFlowsClient.indexOf("export const copilotDeviceFlow"),
+    );
+    expect(codexFlow).toContain("copyCode: true");
+    expect(authFlowsClient).toContain('"Copy code"');
+    expect(authFlowsClient).toContain("device-flow-code");
   });
 
   it("dashboard omits credential management after server creation", () => {
@@ -184,34 +202,34 @@ describe("subscription sign-in wiring", () => {
 });
 
 describe("onboarding wizard order", () => {
-  it("goes agents → collapsed provider access → advanced config, with SSH keys inside Advanced", () => {
+  it("keeps API keys below agents and SSH keys inside Advanced", () => {
     const html = String(OnboardingPage({}));
     const agents = html.indexOf("1. Coding agents");
-    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
+    const apiKeys = html.indexOf("Add API keys");
     const advanced = html.indexOf("2. Advanced");
     expect(agents).toBeGreaterThan(-1);
     expect(apiKeys).toBeGreaterThan(agents);
     expect(advanced).toBeGreaterThan(apiKeys);
     // The SSH key field stays behind the Advanced section.
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
-    expect(html.slice(advanced)).toContain("Add an SSH public key myself");
+    expect(html.slice(advanced)).toContain("Add an SSH public key manually");
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
   });
 
   it("places provider access between agent selection and optional GitHub setup", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
     const agents = html.indexOf("1. Coding agents");
-    const apiKeys = html.indexOf("Add API keys or sign in to a provider");
+    const apiKeys = html.indexOf("Add API keys");
     const github = html.indexOf("2. GitHub");
 
     expect(apiKeys).toBeGreaterThan(agents);
     expect(apiKeys).toBeLessThan(github);
   });
 
-  it("warns that credentials can only be changed from the server terminal after setup", () => {
+  it("uses workbench terminology for the immutable setup warning", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("Choose agents and credentials before creating your server");
-    expect(html).toContain("After it is provisioned, changes require manual terminal commands");
+    expect(html).toContain("Configure your workbench with agents, models, and credentials.");
+    expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
   });
 });
 
@@ -317,8 +335,8 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain("refreshNeeded");
     expect(dashboardClient).toContain("function canManageSshKeys(container");
     expect(dashboardClient).toContain('container?.status === "running"');
-    expect(dashboardClient).toContain("SSH setup unlocks after the server is ready");
-    expect(dashboardClient).toContain("Finish building the server before adding keys or creating an agent setup prompt");
+    expect(dashboardClient).toContain("SSH setup unlocks after the workbench is ready");
+    expect(dashboardClient).not.toContain("Finish building the server before adding keys or creating an agent setup prompt");
     expect(dashboardClient).toContain('container.status === "running" && !hasKeys');
     expect(dashboardClient).toContain("Add an SSH key to reveal your connection command");
     expect(dashboardClient).toContain("You cannot see the SSH host or port until a key has been added");
@@ -335,7 +353,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain('enrollmentMode === "agent" && enrollment');
     expect(dashboardClient).toContain('enrollmentMode === "manual"');
     expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="wait">');
-    expect(dashboardClient).toContain('initial={reducedMotion ? false : { opacity: 0, y: 4 }}');
+    expect(dashboardClient).toContain('height: 0');
+    expect(dashboardClient).toContain('height: "auto"');
+    expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "agent"}');
+    expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "manual"}');
     expect(dashboardClient).not.toContain('{enrollment ? <div>');
     expect(dashboardClient).not.toContain('{showForm ? <div id="keyform">');
   });
@@ -343,7 +364,7 @@ describe("beginner-friendly provisioning UI", () => {
   it("keeps the agent prompt collapsed until requested and prioritizes copying it", () => {
     const enrollmentView = dashboardClient.slice(
       dashboardClient.indexOf('enrollmentMode === "agent" && enrollment'),
-      dashboardClient.indexOf('enrollmentMode === "manual"'),
+      dashboardClient.indexOf(') : enrollmentMode === "manual" ? ('),
     );
     expect(enrollmentView.indexOf('Copy prompt')).toBeLessThan(enrollmentView.indexOf('<details>'));
     expect(enrollmentView).toContain('<summary>Review the setup prompt</summary>');
@@ -383,13 +404,16 @@ describe("page accessibility and recovery affordances", () => {
     expect(html).toContain('id="err" class="err" role="alert" aria-live="assertive"');
   });
 
-  it("has live status regions and visible retryable dashboard errors", () => {
+  it("has live status regions, visible retryable dashboard errors, and reduced-motion support", () => {
     const html = String(DashboardPage({}));
     expect(dashboardClient).toContain('role="alert" aria-live="assertive"');
     expect(dashboardClient).toContain('role="status" aria-live="polite"');
     expect(dashboardClient).toContain("Try again");
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
+    expect(uiClient).toContain("HTMLDetailsElement");
+    expect(uiClient).toContain("details.open = true");
+    expect(uiClient).toContain("details.open = false");
   });
 });
 
@@ -417,6 +441,13 @@ describe("interface foundation", () => {
     expect(html).toContain(
       "input:focus, textarea:focus, select:focus { background: #fff; border-color: var(--focus);",
     );
+  });
+
+  it("keeps the landing divider full width while constraining sign-in content", () => {
+    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    expect(html).toContain('class="card landing-signin"');
+    expect(html).toContain('class="landing-signin-content"');
+    expect(html).toContain(".landing-signin-content { max-width: 580px; }");
   });
 
   it("uses spacing, bullets, and grouped surfaces instead of row dividers", () => {

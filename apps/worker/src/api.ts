@@ -40,7 +40,7 @@ import type { AppContext } from "./types.js";
 
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
-  "Wait for your server to finish building before changing SSH keys or creating an SSH setup prompt.";
+  "Wait for your workbench to finish building before changing SSH keys or creating an SSH setup prompt.";
 
 export const apiRoutes = new Hono<AppContext>()
 
@@ -61,7 +61,7 @@ export const apiRoutes = new Hono<AppContext>()
       return c.json({ error: `pick at least one agent: ${AGENTS.join(", ")}` }, 400);
     }
     const existing = await getContainerForUser(c.env, user.id);
-    if (existing) return c.json({ error: "container already exists" }, 409);
+    if (existing) return c.json({ error: "A workbench already exists for this account." }, 409);
 
     if (body.sshPubkey !== undefined && typeof body.sshPubkey !== "string") {
       return c.json({ error: "SSH public key must be text" }, 400);
@@ -151,7 +151,7 @@ export const apiRoutes = new Hono<AppContext>()
     const user = c.get("user");
     const op = c.req.param("op");
     const container = await getContainerForUser(c.env, user.id);
-    if (!container) return c.json({ error: "no container" }, 404);
+    if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
 
     if (op === "retry") {
       if (container.status !== "error") return c.json({ error: "nothing to retry" }, 400);
@@ -306,7 +306,7 @@ export const apiRoutes = new Hono<AppContext>()
     const user = c.get("user");
     const container = await getContainerForUser(c.env, user.id);
     if (container?.host_id) {
-      return c.json({ error: "destroy your container before deleting your account" }, 409);
+      return c.json({ error: "destroy your workbench before deleting your account" }, 409);
     }
     if (container) {
       // Waitlisted row with no host — nothing exists on a host, safe to drop.

@@ -19,8 +19,12 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
   worldIdEnvironment,
 }) => (
   <Layout>
-    <h1 class="landing-title">A cloud machine for coding.</h1>
-    <p class="lead">Linux, your coding agents, and SSH. Free with World ID or an invite.</p>
+    <h1 class="landing-title">A cloud workbench for command-line agents</h1>
+    <p class="lead">
+      An always-on workbench for coding and long running jobs. Access from any terminal client on any device.
+      <br />
+      Free for each unique person
+    </p>
     <div class="card">
       <ul class="check spec-list">
         <li>
@@ -35,17 +39,19 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
         </li>
       </ul>
     </div>
-    <div class="card landing-signin" aria-labelledby="signin-heading">
-      <h2 id="signin-heading">Sign in or create an account</h2>
-      <div id="landing-auth-root" data-world-id-environment={worldIdEnvironment}></div>
-      {devAuth ? (
-        <div class="auth-dev-option">
-          <a class="btn secondary" href="/auth/dev">
-            Dev login
-          </a>
-        </div>
-      ) : null}
-      <script type="module" src="/landing.js"></script>
+    <div class="card landing-signin">
+      <div class="landing-signin-content" aria-labelledby="signin-heading">
+        <h2 id="signin-heading">Sign in or create an account</h2>
+        <div id="landing-auth-root" data-world-id-environment={worldIdEnvironment}></div>
+        {devAuth ? (
+          <div class="auth-dev-option">
+            <a class="btn secondary" href="/auth/dev">
+              Dev login
+            </a>
+          </div>
+        ) : null}
+        <script type="module" src="/landing.js"></script>
+      </div>
     </div>
   </Layout>
 );
@@ -154,9 +160,9 @@ export const OnboardingPage: FC<{
   githubInstallationAvailable?: boolean;
 }> = ({ githubAvailable = false, githubInstallationAvailable = false }) => (
   <Layout title="Set up" loggedIn>
-    <h1>Set up a server.</h1>
+    <h1>Set up a workbench.</h1>
     <p class="notice">
-      Choose agents and credentials before creating your server. After it is provisioned, changes require
+      Configure your workbench with agents, models, and credentials. After it is provisioned, changes require
       manual terminal commands.
     </p>
     <form id="wizard">
@@ -184,11 +190,8 @@ export const OnboardingPage: FC<{
             ))}
           </div>
         </fieldset>
-      </div>
-
-      <div class="card">
-        <details>
-          <summary>Add API keys or sign in to a provider</summary>
+        <details class="onboarding-api-keys">
+          <summary>Add API keys</summary>
           <SigninProvider
             id="copilot"
             title="GitHub Copilot"
@@ -266,7 +269,7 @@ export const OnboardingPage: FC<{
       <div class="card">
         <h2>{githubAvailable ? "3" : "2"}. Advanced <span class="muted">optional</span></h2>
         <details>
-          <summary>Add an SSH public key myself</summary>
+          <summary>Add an SSH public key manually</summary>
           <label for="ssh-pubkey">Public key</label>
           <textarea
             id="ssh-pubkey"
@@ -278,7 +281,7 @@ export const OnboardingPage: FC<{
           <p id="ssh-key-help" class="muted">
             Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
             of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
-            without <code>.pub</code>). Until a key exists the container accepts no logins.
+            without <code>.pub</code>). Until a key exists the workbench accepts no logins.
           </p>
         </details>
         <details>
@@ -314,8 +317,8 @@ export const OnboardingPage: FC<{
         </details>
       </div>
 
-      <button id="go" class="btn create-server-btn" type="submit">
-        Create server →
+      <button id="go" class="btn create-workbench-btn" type="submit">
+        Create workbench →
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>

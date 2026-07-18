@@ -12,6 +12,7 @@ type DeviceStart = {
 };
 type DeviceConfig = {
   contacting: string;
+  copyCode?: boolean;
   signInHint: string;
   startPath: string;
   pollPath: string;
@@ -49,6 +50,23 @@ async function api<T extends object>(path: string, body?: object): Promise<T> {
 const messageOf = (error: unknown) => error instanceof Error ? error.message : "Unknown error";
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function copyText(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = value;
+    input.readOnly = true;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    if (!copied) throw new Error("copy failed");
+  }
+}
+
 function SpinnerMessage({ children }: { children: React.ReactNode }) {
   return <p className="muted"><span className="spinner" aria-hidden="true" />{children}</p>;
 }
@@ -56,6 +74,8 @@ function SpinnerMessage({ children }: { children: React.ReactNode }) {
 function DeviceFlow({ config, complete }: { config: DeviceConfig; complete: () => void }) {
   const [start, setStart] = React.useState<DeviceStart | null>(null);
   const [error, setError] = React.useState("");
+  const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
@@ -88,17 +108,37 @@ function DeviceFlow({ config, complete }: { config: DeviceConfig; complete: () =
     return () => { cancelled = true; };
   }, [complete, config]);
 
+  const copyUserCode = async () => {
+    if (!start) return;
+    try {
+      await copyText(start.userCode);
+      setCopied(true);
+      setCopyError("");
+      setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      setCopyError("Could not copy the code. Select it and copy it manually.");
+    }
+  };
+
   if (error) return <p className="err" role="alert">{error}</p>;
   if (!start) return <SpinnerMessage>{config.contacting}</SpinnerMessage>;
   return (
-    <>
-      <ol style={{ margin: "0.6rem 0 0.6rem 1.2rem" }}>
+    <div className="device-flow">
+      <ol className="device-flow-steps">
         <li>Open <a href={start.verificationUrl} target="_blank" rel="noreferrer">{start.verificationUrl}</a>{config.signInHint}</li>
         <li>Enter this one-time code (expires in {Math.round(start.expiresInSec / 60)} minutes)</li>
       </ol>
-      <pre className="ssh">{start.userCode}</pre>
+      <div className="device-flow-code">
+        <pre className="ssh">{start.userCode}</pre>
+        {config.copyCode ? (
+          <button type="button" className="btn secondary" onClick={() => void copyUserCode()}>
+            {copied ? "Copied ✓" : "Copy code"}
+          </button>
+        ) : null}
+      </div>
+      {copyError ? <p className="err" role="alert">{copyError}</p> : null}
       <SpinnerMessage>Waiting for approval…</SpinnerMessage>
-    </>
+    </div>
   );
 }
 
@@ -178,6 +218,7 @@ const pasteFlow = (config: PasteConfig): AuthFlow => (element, done) => {
 
 export const codexDeviceFlow = deviceFlow({
   contacting: "Contacting OpenAI…",
+  copyCode: true,
   signInHint: " and sign in to ChatGPT",
   startPath: "/api/codex/device",
   pollPath: "/api/codex/device/poll",

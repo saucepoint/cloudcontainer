@@ -16,7 +16,7 @@ import { signWorldIdRequest, verifyWorldIdProof } from "./worldid.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
-  "Credentials are set during server setup. To change them after creating your server, use manual terminal commands.";
+  "Credentials are set while you set up your workbench. To change them after provisioning, use manual terminal commands.";
 
 export async function credentialsCanBeChanged(env: Bindings, userId: string): Promise<boolean> {
   const container = await env.DB.prepare("SELECT 1 FROM containers WHERE user_id = ? LIMIT 1")

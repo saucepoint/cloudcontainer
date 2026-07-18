@@ -73,7 +73,7 @@ form.addEventListener("submit", async (event: SubmitEvent) => {
     errorElement.textContent = messageOf(error);
     errorElement.focus();
     button.disabled = false;
-    button.textContent = "Create server →";
+    button.textContent = "Create workbench →";
   }
 });
 
