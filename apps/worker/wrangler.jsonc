@@ -47,8 +47,8 @@
     "WORLD_ID_ENVIRONMENT": "production",
     // Set to "1" ONLY for local development: enables /auth/dev login bypass.
     "DEV_AUTH": "0",
-    // GitHub App OAuth client id. Set the public-page slug as well to enable
-    // the install-first chooser; OAuth and repository selection do not require it.
+    // GitHub App OAuth client id and public-page slug. GitHub setup is exposed
+    // only when both values and GITHUB_APP_CLIENT_SECRET are configured.
     "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c",
     "GITHUB_APP_SLUG": "codestationdemo"
   }
@@ -61,5 +61,6 @@
   //   WORKER_RPC_PRIVATE_KEY   — base64 Ed25519 private key for daemon RPC signing
   //   INVITE_ADMIN_SECRET      — high-entropy bearer secret used only by the
   //                              admin invite-generation script/endpoint
-  //   GITHUB_APP_CLIENT_SECRET — GitHub App client secret (optional)
+  //   GITHUB_APP_CLIENT_SECRET — GitHub App client secret (optional; requires
+  //                              GITHUB_APP_CLIENT_ID and GITHUB_APP_SLUG)
 }

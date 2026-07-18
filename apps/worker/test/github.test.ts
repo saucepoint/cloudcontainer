@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest } from "@codestation/contract";
-import {
-  githubConfigured,
-  githubInstallationConfigured,
-  githubRoutes,
-} from "../src/github.js";
+import { githubConfigured, githubRoutes } from "../src/github.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { makeEnv, seedContainer, seedUser, stubFetch } from "./helpers/env.js";
@@ -28,36 +24,41 @@ async function login(env: Bindings, user: UserRow): Promise<Record<string, strin
 }
 
 describe("GitHub App connection", () => {
-  it("keeps OAuth and repository access available when the installation slug is missing", async () => {
-    const { env } = makeEnv({
-      GITHUB_APP_CLIENT_ID: "client-id",
-      GITHUB_APP_CLIENT_SECRET: "client-secret",
-    });
+  it("starts installation and user authorization from the singular connection route", async () => {
+    const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
-    const headers = await login(env, user);
-    expect(githubConfigured(env)).toBe(true);
-    expect(githubInstallationConfigured(env)).toBe(false);
-
     const response = await app().request(
-      "/auth/github/install?return_to=/onboarding",
-      { headers },
-      env,
-    );
-    expect(response.status).toBe(404);
-
-    const oauth = await app().request(
       "/auth/github?return_to=/onboarding",
-      { headers },
+      { headers: await login(env, user) },
       env,
     );
-    expect(oauth.status).toBe(302);
-    expect(new URL(oauth.headers.get("location")!).pathname).toBe("/login/oauth/authorize");
+
+    expect(response.status).toBe(302);
+    const destination = new URL(response.headers.get("location")!);
+    expect(destination.origin).toBe("https://github.com");
+    expect(destination.pathname).toBe("/apps/codestation-test/installations/new");
+    expect(destination.searchParams.get("state")).toMatch(/^[a-f\d]{32}$/);
   });
 
-  it("rejects an invalid installation slug", () => {
-    const { env } = makeEnv({ ...githubConfig, GITHUB_APP_SLUG: "not/a/slug" });
-    expect(githubConfigured(env)).toBe(true);
-    expect(githubInstallationConfigured(env)).toBe(false);
+  it("is unavailable unless the install-capable App configuration is complete", async () => {
+    for (const overrides of [
+      {
+        GITHUB_APP_CLIENT_ID: "client-id",
+        GITHUB_APP_CLIENT_SECRET: "client-secret",
+      },
+      { ...githubConfig, GITHUB_APP_SLUG: "not/a/slug" },
+    ]) {
+      const { env } = makeEnv(overrides);
+      const user = await seedUser(env);
+      expect(githubConfigured(env)).toBe(false);
+
+      const response = await app().request(
+        "/auth/github?return_to=/onboarding",
+        { headers: await login(env, user) },
+        env,
+      );
+      expect(response.status).toBe(404);
+    }
   });
 
   it("installs the App before OAuth, then stores only encrypted tokens", async () => {
@@ -66,7 +67,7 @@ describe("GitHub App connection", () => {
     const headers = await login(env, user);
 
     const start = await app().request(
-      "/auth/github/install?return_to=/onboarding",
+      "/auth/github?return_to=/onboarding",
       { headers },
       env,
     );
@@ -116,7 +117,7 @@ describe("GitHub App connection", () => {
     const user = await seedUser(env);
     const headers = await login(env, user);
     const start = await app().request(
-      "/auth/github/install?return_to=https://evil.example",
+      "/auth/github?return_to=https://evil.example",
       { headers },
       env,
     );
@@ -127,10 +128,11 @@ describe("GitHub App connection", () => {
     expect(row?.return_to).toBe("/dashboard");
   });
 
-  it("revokes an existing GitHub authorization before starting a fresh account selection", async () => {
+  it("preserves working credentials while restarting the singular connection flow", async () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
     const headers = await login(env, user);
+    const encryptedGithub = encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY);
     await env.DB.prepare(
       `INSERT INTO credentials_encrypted
          (user_id, github_token, github_refresh_token, github_expires_at, github_login)
@@ -138,49 +140,39 @@ describe("GitHub App connection", () => {
     )
       .bind(
         user.id,
-        encryptJsonAtRest("CANARY-gh-access", env.CREDENTIAL_MASTER_KEY),
+        encryptedGithub,
         encryptJsonAtRest("CANARY-gh-refresh", env.CREDENTIAL_MASTER_KEY),
         Date.now() + 3_600_000,
         "octocat",
       )
       .run();
-    stubFetch((url, init) => {
-      if (
-        url.hostname !== "api.github.com" ||
-        url.pathname !== "/applications/client-id/grant"
-      ) {
-        return null;
-      }
-      expect(init.method).toBe("DELETE");
-      expect(new Headers(init.headers).get("authorization")).toBe(
-        `Basic ${btoa("client-id:client-secret")}`,
-      );
-      expect(init.body).toBe(JSON.stringify({ access_token: "CANARY-gh-access" }));
-      return new Response(null, { status: 204 });
-    });
+    const fetchMock = stubFetch();
 
     const response = await app().request(
-      "/auth/github/reauth?return_to=/onboarding",
+      "/auth/github?return_to=/onboarding",
+      { headers },
+      env,
+    );
+    expect(response.status).toBe(302);
+    expect(new URL(response.headers.get("location")!).pathname).toBe(
+      "/apps/codestation-test/installations/new",
+    );
+    const credentials = await env.DB.prepare(
+      "SELECT github_token, github_login FROM credentials_encrypted WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first<{ github_token: string; github_login: string }>();
+    expect(credentials).toMatchObject({ github_token: encryptedGithub, github_login: "octocat" });
+
+    const legacyInstall = await app().request("/auth/github/install", { headers }, env);
+    const legacyReauth = await app().request(
+      "/auth/github/reauth",
       { method: "POST", headers },
       env,
     );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { authorizationUrl: string };
-    const authorize = new URL(body.authorizationUrl);
-    expect(authorize.pathname).toBe("/login/oauth/authorize");
-    expect(authorize.searchParams.get("client_id")).toBe("client-id");
-    expect(authorize.searchParams.get("prompt")).toBe("select_account");
-    const credentials = await env.DB.prepare(
-      "SELECT github_token, github_refresh_token, github_expires_at, github_login FROM credentials_encrypted WHERE user_id = ?",
-    )
-      .bind(user.id)
-      .first();
-    expect(credentials).toEqual({
-      github_token: null,
-      github_refresh_token: null,
-      github_expires_at: null,
-      github_login: null,
-    });
+    expect(legacyInstall.status).toBe(404);
+    expect(legacyReauth.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not begin, replace, or complete GitHub authorization after server creation", async () => {
@@ -196,18 +188,13 @@ describe("GitHub App connection", () => {
       .run();
     await seedContainer(env, { host_id: null, ssh_port: null });
 
-    for (const path of ["/auth/github/install", "/auth/github"]) {
-      const start = await app().request(`${path}?return_to=/onboarding`, { headers }, env);
-      expect(start.status).toBe(409);
-      expect(await start.text()).toContain("manual terminal commands");
-    }
-
-    const reauth = await app().request(
-      "/auth/github/reauth?return_to=/onboarding",
-      { method: "POST", headers },
+    const start = await app().request(
+      "/auth/github?return_to=/onboarding",
+      { headers },
       env,
     );
-    expect(reauth.status).toBe(409);
+    expect(start.status).toBe(409);
+    expect(await start.text()).toContain("manual terminal commands");
     const credentials = await env.DB.prepare(
       "SELECT github_token, github_login FROM credentials_encrypted WHERE user_id = ?",
     )
@@ -220,7 +207,7 @@ describe("GitHub App connection", () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
     const headers = await login(env, user);
-    const start = await app().request("/auth/github/install?return_to=/onboarding", { headers }, env);
+    const start = await app().request("/auth/github?return_to=/onboarding", { headers }, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
     await seedContainer(env, { host_id: null, ssh_port: null });
 

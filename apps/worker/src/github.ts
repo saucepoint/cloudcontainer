@@ -39,12 +39,9 @@ interface GithubRepositoryResponse {
 }
 
 export function githubConfigured(env: Bindings): boolean {
-  return Boolean(env.GITHUB_APP_CLIENT_ID && env.GITHUB_APP_CLIENT_SECRET);
-}
-
-export function githubInstallationConfigured(env: Bindings): boolean {
   return Boolean(
-    githubConfigured(env) &&
+    env.GITHUB_APP_CLIENT_ID &&
+      env.GITHUB_APP_CLIENT_SECRET &&
       typeof env.GITHUB_APP_SLUG === "string" &&
       /^[a-z\d](?:[a-z\d-]{0,98}[a-z\d])?$/i.test(env.GITHUB_APP_SLUG),
   );
@@ -246,21 +243,6 @@ async function createGithubState(
   return state;
 }
 
-async function beginGithubAuthorization(
-  env: Bindings,
-  userId: string,
-  returnTo: string,
-): Promise<string> {
-  const state = await createGithubState(env, userId, returnTo);
-  const params = new URLSearchParams({
-    client_id: env.GITHUB_APP_CLIENT_ID,
-    redirect_uri: `${env.BASE_URL}/auth/github/callback`,
-    state,
-    prompt: "select_account",
-  });
-  return `https://github.com/login/oauth/authorize?${params}`;
-}
-
 /** Start GitHub's account/repository chooser, which continues into OAuth when configured. */
 async function beginGithubInstallation(
   env: Bindings,
@@ -275,66 +257,14 @@ async function beginGithubInstallation(
   return url.toString();
 }
 
-/** Revoke every user token and grant issued by this GitHub App for this user. */
-async function revokeGithubAuthorization(env: Bindings, token: string): Promise<void> {
-  const basicCredentials = btoa(`${env.GITHUB_APP_CLIENT_ID}:${env.GITHUB_APP_CLIENT_SECRET!}`);
-  const res = await fetch(
-    `https://api.github.com/applications/${encodeURIComponent(env.GITHUB_APP_CLIENT_ID)}/grant`,
-    {
-      method: "DELETE",
-      headers: {
-        authorization: `Basic ${basicCredentials}`,
-        accept: "application/vnd.github+json",
-        "content-type": "application/json",
-        "user-agent": "codestation",
-        "x-github-api-version": "2022-11-28",
-      },
-      body: JSON.stringify({ access_token: token }),
-      signal: AbortSignal.timeout(15_000),
-    },
-  );
-  if (!res.ok) throw new Error(`github authorization revocation endpoint ${res.status}`);
-}
-
 export const githubRoutes = new Hono<AppContext>()
-  .get("/auth/github/install", requireUser, async (c) => {
-    if (!githubInstallationConfigured(c.env)) {
-      return c.text("GitHub App installation not configured", 404);
-    }
-    if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
-      return c.text(CREDENTIALS_LOCKED_ERROR, 409);
-    }
-    const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-    return c.redirect(await beginGithubInstallation(c.env, c.get("user").id, returnTo));
-  })
   .get("/auth/github", requireUser, async (c) => {
     if (!githubConfigured(c.env)) return c.text("GitHub App not configured", 404);
     if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
       return c.text(CREDENTIALS_LOCKED_ERROR, 409);
     }
     const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-    return c.redirect(await beginGithubAuthorization(c.env, c.get("user").id, returnTo));
-  })
-  .post("/auth/github/reauth", requireUser, requireCredentialSetup, async (c) => {
-    if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
-    const userId = c.get("user").id;
-    try {
-      const token = await githubAccessToken(c.env, userId);
-      if (token) await revokeGithubAuthorization(c.env, token);
-      await c.env.DB.prepare(
-        `UPDATE credentials_encrypted
-         SET github_token = NULL, github_refresh_token = NULL, github_expires_at = NULL,
-             github_login = NULL, rotated_at = ?
-         WHERE user_id = ?`,
-      )
-        .bind(Date.now(), userId)
-        .run();
-      const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
-      return c.json({ authorizationUrl: await beginGithubAuthorization(c.env, userId, returnTo) });
-    } catch (err) {
-      console.log(JSON.stringify({ event: "github_reauthorize_failed", error: String(err) }));
-      return c.json({ error: "Could not reset GitHub authorization. Please retry." }, 502);
-    }
+    return c.redirect(await beginGithubInstallation(c.env, c.get("user").id, returnTo));
   })
   .get("/auth/github/callback", requireUser, async (c) => {
     const code = c.req.query("code");

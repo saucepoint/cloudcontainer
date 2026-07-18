@@ -98,8 +98,7 @@ wireSignin("copilot", copilotDeviceFlow);
 wireSignin("wrangler", wranglerOauthFlow);
 
 const githubConnect = element<HTMLAnchorElement>("github-connect");
-const githubReauthorize = element<HTMLButtonElement>("github-reauthorize");
-if (githubConnect || githubReauthorize) {
+if (githubConnect) {
   const agentSelectionKey = "codestation-github-agents";
   try {
     const saved: unknown = JSON.parse(sessionStorage.getItem(agentSelectionKey) || "[]");
@@ -128,24 +127,7 @@ if (githubConnect || githubReauthorize) {
       // Storage is an optional convenience.
     }
   };
-  githubConnect?.addEventListener("click", saveGithubAgents);
-  githubReauthorize?.addEventListener("click", async () => {
-    saveGithubAgents();
-    githubReauthorize.disabled = true;
-    try {
-      const response = await fetch("/auth/github/reauth?return_to=/onboarding", { method: "POST" });
-      const json: unknown = await response.json().catch(() => ({}));
-      const authorizationUrl = isRecord(json) ? json.authorizationUrl : undefined;
-      if (!response.ok || typeof authorizationUrl !== "string") {
-        throw new Error(responseError(json, "Could not reset GitHub authorization."));
-      }
-      location.href = authorizationUrl;
-    } catch (error) {
-      requiredElement<HTMLElement>("github-status").textContent =
-        messageOf(error) || "Could not reset GitHub authorization.";
-      githubReauthorize.disabled = false;
-    }
-  });
+  githubConnect.addEventListener("click", saveGithubAgents);
 }
 
 type GithubRepository = {

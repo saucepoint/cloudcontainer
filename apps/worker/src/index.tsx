@@ -3,7 +3,7 @@ import { apiRoutes } from "./api.js";
 import { adminRoutes } from "./admin.js";
 import { authRoutes, requireUser } from "./auth.js";
 import { codexAuthRoutes } from "./codexauth.js";
-import { githubConfigured, githubInstallationConfigured, githubRoutes } from "./github.js";
+import { githubConfigured, githubRoutes } from "./github.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage, SecurityPage } from "./pages/views.js";
@@ -43,10 +43,7 @@ app.get("/onboarding", requireUser, async (c) => {
   const container = await getContainerForUser(c.env, c.get("user").id);
   if (container) return c.redirect("/dashboard");
   return c.html(
-    <OnboardingPage
-      githubAvailable={githubConfigured(c.env)}
-      githubInstallationAvailable={githubInstallationConfigured(c.env)}
-    />,
+    <OnboardingPage githubAvailable={githubConfigured(c.env)} />,
   );
 });
 

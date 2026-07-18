@@ -119,8 +119,9 @@ Required Worker secrets:
 
 Optional secrets:
 
-- GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` Worker
-  variable; also set `GITHUB_APP_SLUG` to enable the installation chooser
+- GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` and
+  `GITHUB_APP_SLUG` Worker variables. GitHub setup is hidden unless all three
+  values form a complete install-capable App configuration.
 
 Generate service keys with:
 
@@ -177,34 +178,40 @@ its intended recipient through a private channel. The code is not consumed if
 the recipient cancels or fails the required passkey prompt; it is consumed
 atomically when the account and first passkey are persisted.
 
-For optional GitHub repository access, register a public GitHub App and set
-`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. Set `GITHUB_APP_SLUG` to
-enable the installation chooser; without it, onboarding keeps the direct OAuth
-connection and repository selector available. The slug is the final path
-segment of `https://github.com/apps/APP-SLUG`. Configure the first callback URL
-as:
+For optional GitHub repository access, register a public GitHub App and set all
+of `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `GITHUB_APP_SLUG`.
+The slug is the final path segment of `https://github.com/apps/APP-SLUG`.
+Configure the first callback URL as:
 
     https://YOUR_BASE_URL/auth/github/callback
 
 Enable **Request user authorization (OAuth) during installation** and expiring
 user-to-server tokens. Grant **Contents: read-only** repository permission
 (Metadata read access is implicit), make the App installable on **Any account**,
-and do not request broader permissions. The onboarding action then opens the
-App's installation chooser when `GITHUB_APP_SLUG` is configured, so a user can
-select a personal or organization account and grant either all repositories or
-specific repositories.
+and do not request broader permissions. The single onboarding action opens the
+App installation chooser, where a user selects a personal or organization
+account and grants all or specific repositories. GitHub then continues into
+user authorization and returns to the callback.
+
+Installation and authorization remain distinct GitHub grants even though the
+product presents one browser journey. The installation grant is not a `gh`
+credential. The resulting short-lived GitHub App user access token is what the
+control plane uses for repository search and what the container uses for `gh`
+and HTTPS Git access.
 
 Organization installations may require owner approval. If the organization
-uses SAML SSO, the user must start an active SAML session before reauthorizing.
-When permissions change, owners of existing installations must approve the new
-permissions in GitHub. Before release, install the App on a test account, grant
-one private repository, reauthorize, verify that search finds it, and verify
-that an ungranted private repository is rejected.
+uses SAML SSO, the user must start an active SAML session before using
+**Connect or update GitHub** again. When permissions change, owners of existing
+installations must approve the new permissions in GitHub. Before release, use
+the single action on a test account, grant one private repository, verify that
+search and `gh repo clone` can access it, and verify that an ungranted private
+repository is rejected.
 
 The control plane refreshes access tokens; refresh tokens never leave it.
-Provisioning preconfigures both `gh` and Git's HTTPS credential helper with the
-short-lived access token, which can clone only repositories shared by the user
-grant and the App installation.
+Provisioning writes the current short-lived token once to `gh` configuration
+and runs `gh auth setup-git`, so Git reuses `gh auth git-credential` rather than
+storing a duplicate token in `.git-credentials`. Access remains limited to the
+intersection of the user grant and each App installation.
 
 ## Repeat deployment
 
