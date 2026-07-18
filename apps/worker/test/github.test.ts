@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest } from "@codestation/contract";
-import {
-  githubConfigured,
-  githubInstallationConfigured,
-  githubRoutes,
-} from "../src/github.js";
+import { githubConfigured, githubRoutes } from "../src/github.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { makeEnv, seedContainer, seedUser, stubFetch } from "./helpers/env.js";
@@ -44,36 +40,25 @@ describe("GitHub App connection", () => {
     expect(destination.searchParams.get("state")).toMatch(/^[a-f\d]{32}$/);
   });
 
-  it("keeps OAuth and repository access available when the installation slug is missing", async () => {
-    const { env } = makeEnv({
-      GITHUB_APP_CLIENT_ID: "client-id",
-      GITHUB_APP_CLIENT_SECRET: "client-secret",
-    });
-    const user = await seedUser(env);
-    const headers = await login(env, user);
-    expect(githubConfigured(env)).toBe(true);
-    expect(githubInstallationConfigured(env)).toBe(false);
+  it("is unavailable unless the install-capable App configuration is complete", async () => {
+    for (const overrides of [
+      {
+        GITHUB_APP_CLIENT_ID: "client-id",
+        GITHUB_APP_CLIENT_SECRET: "client-secret",
+      },
+      { ...githubConfig, GITHUB_APP_SLUG: "not/a/slug" },
+    ]) {
+      const { env } = makeEnv(overrides);
+      const user = await seedUser(env);
+      expect(githubConfigured(env)).toBe(false);
 
-    const response = await app().request(
-      "/auth/github/install?return_to=/onboarding",
-      { headers },
-      env,
-    );
-    expect(response.status).toBe(404);
-
-    const oauth = await app().request(
-      "/auth/github?return_to=/onboarding",
-      { headers },
-      env,
-    );
-    expect(oauth.status).toBe(302);
-    expect(new URL(oauth.headers.get("location")!).pathname).toBe("/login/oauth/authorize");
-  });
-
-  it("rejects an invalid installation slug", () => {
-    const { env } = makeEnv({ ...githubConfig, GITHUB_APP_SLUG: "not/a/slug" });
-    expect(githubConfigured(env)).toBe(true);
-    expect(githubInstallationConfigured(env)).toBe(false);
+      const response = await app().request(
+        "/auth/github?return_to=/onboarding",
+        { headers: await login(env, user) },
+        env,
+      );
+      expect(response.status).toBe(404);
+    }
   });
 
   it("installs the App before OAuth, then stores only encrypted tokens", async () => {

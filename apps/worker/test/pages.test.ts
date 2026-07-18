@@ -260,7 +260,7 @@ describe("GitHub repository onboarding", () => {
     expect(enabled).not.toContain("/auth/github/install?return_to=/onboarding");
   });
 
-  it("renders repository selection from the onboarding route without an App slug", async () => {
+  it("hides GitHub setup from onboarding without an App slug", async () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-id",
       GITHUB_APP_CLIENT_SECRET: "client-secret",
@@ -276,8 +276,8 @@ describe("GitHub repository onboarding", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain('id="github-repo-search"');
-    expect(html).toContain('id="github-repos"');
+    expect(html).not.toContain('id="github-connect"');
+    expect(html).not.toContain('id="github-repos"');
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
