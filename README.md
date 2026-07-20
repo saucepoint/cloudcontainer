@@ -154,7 +154,8 @@ World ID 4.0, register the `WORLD_ID_ACTION` action, and provide
 `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, `WORLD_ID_ENVIRONMENT`, and the one-time RP
 signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real World App. Use
 `staging` only when the configured app/RP and World simulator are also staging.
-`DEV_AUTH` does not select the World ID environment.
+`DEV_AUTH` does not select the World ID environment. Version 4 sign-in uses
+World ID sessions; retain the action only for the temporary Orb v3 fallback.
 
 ### Administrator invites
 

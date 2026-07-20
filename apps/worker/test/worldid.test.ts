@@ -60,6 +60,7 @@ describe("World ID proof verification", () => {
 
     await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).resolves.toEqual({
       identityKey: `worldid-nullifier:${normalizedNullifier}`,
+      kind: "uniqueness",
       protocolVersion: "3.0",
     });
     expect(fetch).toHaveBeenCalledWith(
@@ -78,6 +79,7 @@ describe("World ID proof verification", () => {
 
     await expect(verifyWorldIdProof(makeEnv().env, v4Proof)).resolves.toEqual({
       identityKey: `worldid-nullifier:${normalizedNullifier}`,
+      kind: "uniqueness",
       protocolVersion: "4.0",
     });
   });
@@ -91,6 +93,7 @@ describe("World ID proof verification", () => {
 
     await expect(verifyWorldIdProof(makeEnv().env, sessionProof)).resolves.toEqual({
       identityKey: sessionProof.session_id,
+      kind: "session",
       protocolVersion: "4.0",
     });
   });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { hmacNullifier } from "@codestation/contract";
 import { authRoutes } from "../src/auth.js";
+import { createSession } from "../src/sessions.js";
 import type { AppContext, UserRow } from "../src/types.js";
 import { makeEnv, seedContainer, seedHost, seedUser } from "./helpers/env.js";
 
@@ -195,6 +196,86 @@ describe("/auth/session/verify", () => {
       protocol_version: "4.0",
     }]);
   });
+
+  it("does not store a reusable account identity from a one-time v4 uniqueness proof", async () => {
+    const { env } = makeEnv();
+    const nullifier = `0x${"c".repeat(64)}`;
+    const idkitResponse = {
+      protocol_version: "4.0",
+      nonce: "proof-nonce",
+      action: "codestation-login",
+      environment: "production",
+      responses: [{
+        identifier: "proof_of_human",
+        issuer_schema_id: 1,
+        proof: ["proof"],
+        expires_at_min: 1,
+        nullifier,
+      }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, nullifier }), { status: 200 }),
+    ));
+
+    const res = await app().request(
+      "/auth/session/verify",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idkitResponse }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "World ID 4 sign-in must use a session proof. Please start again.",
+    });
+    expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(0);
+  });
+
+  it("replaces an active legacy World ID login with a verified v4 session", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const sid = await createSession(env, user.id);
+    const worldIdSession = `session_${"d".repeat(128)}`;
+    const idkitResponse = {
+      protocol_version: "4.0",
+      nonce: "proof-nonce",
+      environment: "production",
+      session_id: worldIdSession,
+      responses: [{
+        identifier: "proof_of_human",
+        issuer_schema_id: 1,
+        proof: ["proof"],
+        expires_at_min: 1,
+        session_nullifier: ["nullifier", "action"],
+      }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, session_id: worldIdSession }), { status: 200 }),
+    ));
+
+    const res = await app().request(
+      "/auth/session/migrate",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `cs_session=${sid}`,
+        },
+        body: JSON.stringify({ idkitResponse }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ migrated: true });
+    const identity = await env.DB.prepare(
+      "SELECT provider_subject, protocol_version FROM auth_identities WHERE user_id = ?",
+    ).bind(user.id).first<{ provider_subject: string; protocol_version: string }>();
+    expect(identity).toEqual({ provider_subject: worldIdSession, protocol_version: "4.0" });
+  });
 });
 
 describe("/auth/session/failure", () => {
@@ -221,6 +302,51 @@ describe("/auth/session/failure", () => {
         event: "worldid_client_failed",
         code: "generic_error",
         requestId: "01234567-89ab-cdef-0123-456789abcdef",
+      }),
+    );
+  });
+
+  it("retains only safe native-bridge diagnostics, never request or proof payloads", async () => {
+    const { env } = makeEnv();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const res = await app().request(
+      "/auth/session/failure",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          code: "generic_error",
+          request_id: "01234567-89ab-cdef-0123-456789abcdef",
+          transport: "mini_app",
+          mini_app: {
+            verify_version: 2,
+            platform: "android",
+            send_channel: "Android.postMessage",
+            minikit_subscribed: true,
+            response_channel: "minikit",
+            proof: "must-not-be-logged",
+          },
+          response_payload: "must-not-be-logged",
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(204);
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "worldid_client_failed",
+        code: "generic_error",
+        requestId: "01234567-89ab-cdef-0123-456789abcdef",
+        transport: "mini_app",
+        miniApp: {
+          verifyVersion: 2,
+          platform: "android",
+          sendChannel: "Android.postMessage",
+          minikitSubscribed: true,
+          responseChannel: "minikit",
+        },
       }),
     );
   });

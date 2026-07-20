@@ -30,6 +30,7 @@ const pages: Array<[string, () => unknown]> = [
     passkeyCount: 0,
     continueHref: "/onboarding",
     welcome: true,
+    worldIdEnvironment: "production",
   })],
   ["onboarding", () => OnboardingPage({})],
   ["dashboard", () => DashboardPage({})],
@@ -59,11 +60,14 @@ describe("World ID environment wiring", () => {
     expect(landingClient).toContain("localStorage.removeItem(SESSION_STORAGE_KEY)");
   });
 
-  it("retains v4 sessions and enables the proof-of-human v3 fallback for new sign-ins", () => {
+  it("creates v4 sessions, preserves the native World App bridge, and explicitly falls back to Orb v3", () => {
     expect(landingClient).toContain('constraints(any(CredentialRequest("proof_of_human")))');
+    expect(landingClient).toContain("IDKit.createSession(baseConfig)");
     expect(landingClient).toContain("allow_legacy_proofs: true");
-    expect(landingClient).toContain(".preset(proofOfHuman())");
-    expect(landingClient).toContain('const mode = savedSessionId ? "session" : "proof"');
+    expect(landingClient).toContain(".preset(orbLegacy())");
+    expect(landingClient).toContain('completion.error === "world_id_4_not_available"');
+    expect(landingClient).toContain("isInWorldApp()");
+    expect(securityClient).toContain("isInWorldApp()");
   });
 
   it("bundles typed IDKit and QR dependencies without a runtime CDN global", () => {
@@ -129,17 +133,22 @@ describe("passkey security page", () => {
       passkeyCount: 0,
       continueHref: "/onboarding",
       welcome: true,
+      worldIdEnvironment: "production",
     }));
     expect(worldId).toContain("World ID remains available");
+    expect(worldId).toContain("Update World ID sign-in");
     expect(worldId).toContain("Skip for now");
     expect(worldId).toContain('src="/security.js"');
     expect(securityClient).toContain('"/auth/passkey/register/options"');
+    expect(securityClient).toContain('IDKit.createSession(config)');
+    expect(securityClient).toContain('"/auth/session/migrate"');
 
     const invited = String(SecurityPage({
       signupMethod: "invite",
       passkeyCount: 1,
       continueHref: "/dashboard",
       welcome: false,
+      worldIdEnvironment: "production",
     }));
     expect(invited).toContain("This account uses passkeys to sign in");
     expect(invited).toContain("Add another passkey");

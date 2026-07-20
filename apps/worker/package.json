@@ -21,7 +21,7 @@
     "@codestation/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "@worldcoin/idkit-core": "^4.2.1",
+    "@worldcoin/idkit-core": "^4.2.2",
     "hono": "^4.7.4",
     "motion": "^12.42.2",
     "qrcode": "^1.5.4",

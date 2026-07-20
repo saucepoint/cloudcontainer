@@ -3,8 +3,10 @@ import {
   CredentialRequest,
   IDKit,
   any,
-  proofOfHuman,
+  isInWorldApp,
+  orbLegacy,
   type IDKitErrorCodes,
+  type IDKitRequest,
   type IDKitRequestConfig,
   type IDKitResultSession,
   type IDKitSessionConfig,
@@ -34,11 +36,14 @@ const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
   unknown_rp: "World ID does not recognize this site’s RP ID.",
   inactive_rp: "This World ID registration is not active yet.",
   world_id_4_not_available: "Your World App does not have a World ID 4.0 credential yet.",
+  world_id_3_not_available: "Your World App no longer has the legacy credential needed for this older account.",
   credential_unavailable: "This World ID is not Orb-verified and cannot prove personhood.",
   malformed_request: "World ID rejected this site’s request configuration.",
   connection_failed: "The connection to World App was lost. Please try again.",
   failed_by_host_app: "World App could not process this request. Please try again.",
   generic_error: "World App could not process this request. Please try again.",
+  nullifier_replayed: "This old one-time World ID proof cannot sign in again. Refresh the page to start a session sign-in.",
+  rp_signature_expired: "The World ID request expired. Please start again.",
   unexpected_response: "World App returned an unexpected response. Please try again.",
   duplicate_nonce: "This World ID request was already used. Please start again.",
   timestamp_too_old: "This World ID request expired. Please start again.",
@@ -164,17 +169,27 @@ async function fetchRpContext(mode: "proof" | "session"): Promise<RpContextRespo
   return context as RpContextResponse;
 }
 
-async function reportFailure(code: IDKitErrorCodes, requestId: string): Promise<void> {
+async function reportFailure(code: IDKitErrorCodes, request: IDKitRequest): Promise<void> {
+  const report = request.getDebugReport();
   try {
     await fetch("/auth/session/failure", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code, request_id: requestId }),
+      body: JSON.stringify({
+        code,
+        request_id: request.requestId,
+        transport: report.transport,
+        mini_app: report.mini_app,
+      }),
       keepalive: true,
     });
   } catch {
     // Diagnostics must never obscure the user-facing failure.
   }
+}
+
+function isWorldAppV1OnlyError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("verify v2 is not supported");
 }
 
 function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" | "staging" }): React.JSX.Element {
@@ -250,7 +265,16 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
   };
 
   const renderConnection = async (connectorURI: string): Promise<void> => {
+    // IDKit has already sent the request through the native bridge. A World
+    // App webview generally has no connector URL, and navigating here would
+    // abandon the in-flight native request before it can return a proof.
+    if (isInWorldApp()) {
+      setWorldIdStatus("Confirm sign-in in World App…");
+      return;
+    }
+
     if (/Mobi|Android/i.test(navigator.userAgent)) {
+      if (!connectorURI) throw new Error("Could not open World App. Please try again.");
       setWorldIdStatus("Opening World App…");
       window.location.assign(connectorURI);
       return;
@@ -258,6 +282,7 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
 
     const container = qrContainer.current;
     if (!container) throw new Error("Could not show the World ID QR code.");
+    if (!connectorURI) throw new Error("Could not start the World ID request. Please try again.");
 
     setWorldIdStatus("Scan with World App");
     const canvas = document.createElement("canvas");
@@ -272,26 +297,57 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
 
     try {
       const savedSessionId = readSavedSessionId();
-      const mode = savedSessionId ? "session" : "proof";
-      const { app_id, action, rp_context } = await fetchRpContext(mode);
+      const { app_id, rp_context } = await fetchRpContext("session");
       const baseConfig: IDKitSessionConfig = {
         app_id,
         rp_context,
         environment: worldIdEnvironment === "staging" ? "staging" : "production",
       };
-      const request = savedSessionId
-        ? await IDKit.proveSession(savedSessionId, baseConfig)
-          .constraints(any(CredentialRequest("proof_of_human")))
-        : await IDKit.request({
-            ...baseConfig,
-            action,
-            allow_legacy_proofs: true,
-          } satisfies IDKitRequestConfig).preset(proofOfHuman());
+      const createLegacyRequest = async (): Promise<IDKitRequest> => {
+        const { app_id: legacyAppId, action, rp_context: legacyRpContext } = await fetchRpContext("proof");
+        return IDKit.request({
+          app_id: legacyAppId,
+          action,
+          rp_context: legacyRpContext,
+          allow_legacy_proofs: true,
+          environment: worldIdEnvironment === "staging" ? "staging" : "production",
+        } satisfies IDKitRequestConfig).preset(orbLegacy());
+      };
+
+      let request: IDKitRequest;
+      let usingLegacyRequest = false;
+      try {
+        request = savedSessionId
+          ? await IDKit.proveSession(savedSessionId, baseConfig)
+            .constraints(any(CredentialRequest("proof_of_human")))
+          : await IDKit.createSession(baseConfig)
+            .constraints(any(CredentialRequest("proof_of_human")));
+      } catch (error) {
+        // World App v1 cannot receive a v4 session request over the native
+        // bridge. It can still complete an explicit Orb v3 proof until the
+        // documented transition window ends.
+        if (savedSessionId || !isWorldAppV1OnlyError(error)) throw error;
+        usingLegacyRequest = true;
+        setWorldIdStatus("Using World ID 3 compatibility…");
+        request = await createLegacyRequest();
+      }
 
       await renderConnection(request.connectorURI);
-      const completion = await request.pollUntilCompletion({ timeout: 180_000 });
+      let completion = await request.pollUntilCompletion({ timeout: 180_000 });
+      // v3 identities cannot create v4 sessions. During the documented
+      // migration window, retry them with the action-scoped compatibility
+      // proof. New and returning v4 users never consume that one-time proof.
+      if (!completion.success && !usingLegacyRequest && !savedSessionId && completion.error === "world_id_4_not_available") {
+        await reportFailure(completion.error, request);
+        setWorldIdStatus("Using World ID 3 compatibility…");
+        qrContainer.current?.replaceChildren();
+        request = await createLegacyRequest();
+        usingLegacyRequest = true;
+        await renderConnection(request.connectorURI);
+        completion = await request.pollUntilCompletion({ timeout: 180_000 });
+      }
       if (!completion.success) {
-        await reportFailure(completion.error, request.requestId);
+        await reportFailure(completion.error, request);
         throw new Error(ERROR_MESSAGES[completion.error] ?? `World ID error: ${completion.error}`);
       }
       setWorldIdStatus("Verifying…");

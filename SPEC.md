@@ -263,13 +263,15 @@ usable with keyboard alone. Specifically:
 
 ### World ID
 
-New sign-ins use IDKit's proof-of-human preset for the fixed
-`codestation-login` action with `allow_legacy_proofs` enabled. The Developer
-Portal verifies both v4 uniqueness proofs and Orb v3 proofs. The backend
-requires the configured action and credential, normalizes the verified
-nullifier to a decimal integer, and uses that action-scoped value as the account
-identity. Existing saved v4 sessions remain accepted by their verified
-RP-scoped session_id.
+New v4 sign-ins create a proof-of-human session and returning v4 sign-ins prove
+that session; the verified RP-scoped `session_id` is the durable account
+identity. A user whose World App cannot create a v4 session receives the
+fixed-action `codestation-login` proof-of-human request with
+`allow_legacy_proofs` enabled, preserving the Orb v3 migration fallback. The
+backend normalizes and stores only the verified v3 fallback nullifier. It never
+uses a v4 uniqueness nullifier as a reusable login identity. Existing World ID
+accounts can replace their old identity with a verified v4 session while their
+Codestation login remains active.
 
 World ID identifiers live in auth_identities under the `world_id` provider and
 are unique provider subjects; they are not columns on the user profile.
@@ -737,12 +739,12 @@ coverage.
 A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
-1. **Identity:** a valid v4 proof-of-human, Orb v3, or retained v4 session proof
-   creates or reuses the account for its verified identity; a valid invite is
-   consumed exactly once only after its required passkey is verified; a World
-   ID account may attach a passkey; either World ID or a registered passkey can
-   reaccess the appropriate account; a banned identity is refused; logout
-   revokes the application session.
+1. **Identity:** a valid v4 proof-of-human session or Orb v3 fallback creates
+   or reuses the account for its verified identity; a valid invite is consumed
+   exactly once only after its required passkey is verified; a World ID account
+   may attach a passkey; either World ID or a registered passkey can reaccess
+   the appropriate account; a banned identity is refused; logout revokes the
+   application session.
 2. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.

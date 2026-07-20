@@ -1,14 +1,13 @@
 /**
  * World ID authentication supports two compatible proof paths:
  *
- * - Existing IDKit v4 sessions continue to resolve to their `session_id`.
- * - New sign-ins use the `proofOfHuman()` preset for the fixed login action.
- *   IDKit can satisfy that request with either a v4 proof-of-human credential
- *   or its Orb-verified v3 fallback.
+ * - v4 sign-ins create and later prove a session, using its stable `session_id`.
+ * - A v3-only user falls back to an action-scoped proof-of-human request until
+ *   their World App can create a v4 session.
  *
- * The v3/v4 uniqueness nullifier is stable only for this app and action. It is
- * normalized before persistence so equivalent hexadecimal encodings cannot
- * create multiple accounts.
+ * The v3 fallback nullifier is normalized before persistence so equivalent
+ * hexadecimal encodings cannot create multiple accounts. v4 uniqueness proofs
+ * are verified defensively but must never become reusable account identities.
  */
 import { signRequest } from "@worldcoin/idkit-core/signing";
 import type { Bindings } from "./types.js";
@@ -47,6 +46,7 @@ export function signWorldIdRequest(
 
 export interface WorldIdIdentity {
   identityKey: string;
+  kind: "session" | "uniqueness";
   protocolVersion: "3.0" | "4.0";
 }
 
@@ -180,7 +180,7 @@ export async function verifyWorldIdProof(
     if (verifierResponse.session_id !== proof.sessionId) {
       throw new Error("world id verifier returned a different session_id");
     }
-    return { identityKey: proof.sessionId, protocolVersion: "4.0" };
+    return { identityKey: proof.sessionId, kind: "session", protocolVersion: "4.0" };
   }
 
   if ("action" in verifierResponse && verifierResponse.action !== env.WORLD_ID_ACTION) {
@@ -192,6 +192,7 @@ export async function verifyWorldIdProof(
   }
   return {
     identityKey: `worldid-nullifier:${nullifier}`,
+    kind: "uniqueness",
     protocolVersion: proof.protocolVersion,
   };
 }

@@ -63,6 +63,7 @@ app.get("/security", requireUser, async (c) => {
       passkeyCount={passkeys?.count ?? 0}
       continueHref={container ? "/dashboard" : "/onboarding"}
       welcome={c.req.query("welcome") === "1"}
+      worldIdEnvironment={c.env.WORLD_ID_ENVIRONMENT}
     />,
   );
 });

@@ -18,6 +18,10 @@ import type { AppContext, Bindings, UserRow } from "./types.js";
 export const CREDENTIALS_LOCKED_ERROR =
   "Credentials are set while you set up your workbench. To change them after provisioning, use manual terminal commands.";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export async function credentialsCanBeChanged(env: Bindings, userId: string): Promise<boolean> {
   const container = await env.DB.prepare("SELECT 1 FROM containers WHERE user_id = ? LIMIT 1")
     .bind(userId)
@@ -121,9 +125,60 @@ export async function loginAndRedirect(
   };
 }
 
+/** Load the session user; JSON 401 for /api paths, redirect to landing otherwise. */
+export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
+  const deny = () =>
+    c.req.path.startsWith("/api") || c.req.path.startsWith("/auth/passkey/register")
+      ? c.json({ error: "unauthenticated" }, 401)
+      : c.redirect("/");
+  const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);
+  if (!sid) return deny();
+  const userId = await getSessionUserId(c.env, sid);
+  if (!userId) return deny();
+  const user = await getUser(c.env, userId);
+  if (!user || user.status !== "active") return deny();
+  c.set("user", user);
+  c.set("sessionId", sid);
+  return next();
+};
+
+/** Replace a pre-v4 login identity with the verified stable v4 session ID. */
+async function migrateWorldIdIdentity(
+  env: Bindings,
+  userId: string,
+  identityKey: string,
+): Promise<"migrated" | "already_used" | "not_world_id"> {
+  const owner = await env.DB.prepare(
+    "SELECT user_id FROM auth_identities WHERE provider = 'world_id' AND provider_subject = ?",
+  ).bind(identityKey).first<{ user_id: string }>();
+  if (owner && owner.user_id !== userId) return "already_used";
+
+  const current = await env.DB.prepare(
+    "SELECT provider FROM auth_identities WHERE user_id = ?",
+  ).bind(userId).first<{ provider: string }>();
+  if (!current || current.provider !== "world_id") return "not_world_id";
+
+  try {
+    await env.DB.prepare(
+      `UPDATE auth_identities
+       SET provider_subject = ?, protocol_version = '4.0', last_authenticated_at = ?
+       WHERE user_id = ?`,
+    ).bind(identityKey, Date.now(), userId).run();
+  } catch (error) {
+    // Another active account may have completed the same migration between the
+    // owner lookup and this update. Preserve the unique session identity.
+    const winner = await env.DB.prepare(
+      "SELECT user_id FROM auth_identities WHERE provider = 'world_id' AND provider_subject = ?",
+    ).bind(identityKey).first<{ user_id: string }>();
+    if (winner && winner.user_id !== userId) return "already_used";
+    throw error;
+  }
+  return "migrated";
+}
+
 export const authRoutes = new Hono<AppContext>()
-  // Client fetches this immediately before opening IDKit. New sign-ins bind
-  // the fixed login action; saved v4 sessions retain their actionless context.
+  // Client fetches this immediately before opening IDKit. Session proofs omit
+  // the action; the v3 compatibility fallback signs the fixed login action.
   .get("/auth/session/rp-context", (c) => {
     const mode = c.req.query("mode") === "session" ? "session" : "proof";
     c.header("cache-control", "no-store");
@@ -137,7 +192,12 @@ export const authRoutes = new Hono<AppContext>()
   // generic error. The browser intentionally sends no proof, identity, or
   // session value to this endpoint.
   .post("/auth/session/failure", async (c) => {
-    const body = await readJsonBody<{ code?: unknown; request_id?: unknown }>(c);
+    const body = await readJsonBody<{
+      code?: unknown;
+      request_id?: unknown;
+      transport?: unknown;
+      mini_app?: unknown;
+    }>(c);
     const code =
       typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code)
         ? body.code
@@ -146,7 +206,39 @@ export const authRoutes = new Hono<AppContext>()
       typeof body?.request_id === "string" && /^[0-9a-f-]{36}$/i.test(body.request_id)
         ? body.request_id
         : undefined;
-    console.log(JSON.stringify({ event: "worldid_client_failed", code, requestId }));
+    const transport = body?.transport === "bridge" || body?.transport === "mini_app"
+      ? body.transport
+      : undefined;
+    const rawMiniApp = body?.mini_app;
+    const miniApp = isRecord(rawMiniApp)
+      ? {
+        ...(rawMiniApp.verify_version === 1 || rawMiniApp.verify_version === 2
+          ? { verifyVersion: rawMiniApp.verify_version }
+          : {}),
+        ...(rawMiniApp.platform === "ios" || rawMiniApp.platform === "android" || rawMiniApp.platform === "none"
+          ? { platform: rawMiniApp.platform }
+          : {}),
+        ...(rawMiniApp.send_channel === "webkit.minikit" || rawMiniApp.send_channel === "Android.postMessage" || rawMiniApp.send_channel === "none"
+          ? { sendChannel: rawMiniApp.send_channel }
+          : {}),
+        ...(typeof rawMiniApp.minikit_subscribed === "boolean"
+          ? { minikitSubscribed: rawMiniApp.minikit_subscribed }
+          : {}),
+        ...(rawMiniApp.response_channel === "window.message" || rawMiniApp.response_channel === "minikit"
+          ? { responseChannel: rawMiniApp.response_channel }
+          : {}),
+      }
+      : undefined;
+    // Do not log the SDK debug report wholesale: its request/response payload
+    // can contain a short-lived signature or a proof. These transport fields
+    // are sufficient to diagnose native-bridge failures safely.
+    console.log(JSON.stringify({
+      event: "worldid_client_failed",
+      code,
+      requestId,
+      ...(transport ? { transport } : {}),
+      ...(miniApp && Object.keys(miniApp).length > 0 ? { miniApp } : {}),
+    }));
     return c.body(null, 204);
   })
   .post("/auth/session/verify", async (c) => {
@@ -161,6 +253,13 @@ export const authRoutes = new Hono<AppContext>()
     } catch (err) {
       console.log(JSON.stringify({ event: "worldid_verify_failed", error: String(err) }));
       return c.json({ error: "World ID verification failed. Please try again." }, 502);
+    }
+
+    // v4 nullifiers are single-use action results, not durable login IDs. The
+    // browser only creates them for its v3 fallback, so never persist one for
+    // a v4 user even if an old cached client submits it.
+    if (identity.kind === "uniqueness" && identity.protocolVersion === "4.0") {
+      return c.json({ error: "World ID 4 sign-in must use a session proof. Please start again." }, 409);
     }
 
     const login = await findOrCreateUser(
@@ -178,6 +277,38 @@ export const authRoutes = new Hono<AppContext>()
     );
     c.header("set-cookie", cookie);
     return c.json({ redirect: location });
+  })
+  // Existing accounts were created with a one-time uniqueness proof. While
+  // their normal Codestation cookie is still valid, replace that identity with
+  // a verified v4 session ID so future World ID sign-ins remain reusable.
+  .post("/auth/session/migrate", requireUser, async (c) => {
+    if (c.get("user").signup_method !== "world_id") {
+      return c.json({ error: "Only World ID accounts can update World ID sign-in." }, 409);
+    }
+    const body = await readJsonBody<{ idkitResponse?: unknown }>(c);
+    if (!body || typeof body !== "object" || !("idkitResponse" in body)) {
+      return c.json({ error: "missing idkitResponse" }, 400);
+    }
+
+    let identity;
+    try {
+      identity = await verifyWorldIdProof(c.env, body.idkitResponse);
+    } catch (err) {
+      console.log(JSON.stringify({ event: "worldid_migration_verify_failed", error: String(err) }));
+      return c.json({ error: "World ID verification failed. Please try again." }, 502);
+    }
+    if (identity.kind !== "session") {
+      return c.json({ error: "World ID must return a version 4 session proof." }, 400);
+    }
+
+    const result = await migrateWorldIdIdentity(c.env, c.get("user").id, identity.identityKey);
+    if (result === "already_used") {
+      return c.json({ error: "That World ID session is already linked to another account." }, 409);
+    }
+    if (result === "not_world_id") {
+      return c.json({ error: "This account has no World ID sign-in to update." }, 409);
+    }
+    return c.json({ migrated: true });
   })
   // Local-only development login, exposed only when explicitly enabled.
   .get("/auth/dev", async (c) => {
@@ -208,23 +339,6 @@ export const authRoutes = new Hono<AppContext>()
       headers: { location: "/", "set-cookie": clearSessionCookie() },
     });
   });
-
-/** Load the session user; JSON 401 for /api paths, redirect to landing otherwise. */
-export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
-  const deny = () =>
-    c.req.path.startsWith("/api") || c.req.path.startsWith("/auth/passkey/register")
-      ? c.json({ error: "unauthenticated" }, 401)
-      : c.redirect("/");
-  const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);
-  if (!sid) return deny();
-  const userId = await getSessionUserId(c.env, sid);
-  if (!userId) return deny();
-  const user = await getUser(c.env, userId);
-  if (!user || user.status !== "active") return deny();
-  c.set("user", user);
-  c.set("sessionId", sid);
-  return next();
-};
 
 /** Credential changes are an onboarding-only action. Check again on OAuth
  * completion so a flow begun in another tab cannot update a new server. */
