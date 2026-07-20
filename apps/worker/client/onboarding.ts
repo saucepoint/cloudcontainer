@@ -83,7 +83,7 @@ function wireSignin(id: string, flow: (target: HTMLElement, done: () => void) =>
   const target = requiredElement<HTMLElement>(`${id}-flow`);
   const connected = requiredElement<HTMLElement>(`${id}-connected`);
   button.addEventListener("click", () => {
-    if (isAuthFlowActive()) return;
+    if (isAuthFlowActive(target)) return;
     flow(target, () => {
       target.replaceChildren();
       button.style.display = "none";

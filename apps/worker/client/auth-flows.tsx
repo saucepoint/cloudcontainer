@@ -31,10 +31,10 @@ type PasteConfig = {
   finishBody: (value: string) => object;
 };
 
-let active = false;
-let activeRoot: Root | null = null;
+const activeFlows = new WeakSet<HTMLElement>();
+const flowRoots = new WeakMap<HTMLElement, Root>();
 
-export const isAuthFlowActive = () => active;
+export const isAuthFlowActive = (element: HTMLElement) => activeFlows.has(element);
 
 async function api<T extends object>(path: string, body?: object): Promise<T> {
   const response = await fetch(path, {
@@ -71,7 +71,7 @@ function SpinnerMessage({ children }: { children: React.ReactNode }) {
   return <p className="muted"><span className="spinner" aria-hidden="true" />{children}</p>;
 }
 
-function DeviceFlow({ config, complete }: { config: DeviceConfig; complete: () => void }) {
+function DeviceFlow({ config, complete, release }: { config: DeviceConfig; complete: () => void; release: () => void }) {
   const [start, setStart] = React.useState<DeviceStart | null>(null);
   const [error, setError] = React.useState("");
   const [copied, setCopied] = React.useState(false);
@@ -95,12 +95,12 @@ function DeviceFlow({ config, complete }: { config: DeviceConfig; complete: () =
           }
         }
         if (!cancelled) {
-          active = false;
+          release();
           setError("The code expired — click the sign-in button to get a new one.");
         }
       } catch (caught) {
         if (!cancelled) {
-          active = false;
+          release();
           setError(messageOf(caught));
         }
       }
@@ -142,7 +142,7 @@ function DeviceFlow({ config, complete }: { config: DeviceConfig; complete: () =
   );
 }
 
-function PasteFlow({ config, complete }: { config: PasteConfig; complete: () => void }) {
+function PasteFlow({ config, complete, release }: { config: PasteConfig; complete: () => void; release: () => void }) {
   const [authorizeUrl, setAuthorizeUrl] = React.useState("");
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState("");
@@ -154,7 +154,7 @@ function PasteFlow({ config, complete }: { config: PasteConfig; complete: () => 
       .then((result) => { if (!cancelled) setAuthorizeUrl(result.authorizeUrl); })
       .catch((caught) => {
         if (!cancelled) {
-          active = false;
+          release();
           setError(messageOf(caught));
         }
       });
@@ -194,26 +194,33 @@ function PasteFlow({ config, complete }: { config: PasteConfig; complete: () => 
   );
 }
 
-function mountFlow(element: HTMLElement, done: () => void, view: (complete: () => void) => React.ReactNode) {
-  activeRoot?.unmount();
-  active = true;
+function mountFlow(
+  element: HTMLElement,
+  done: () => void,
+  view: (complete: () => void, release: () => void) => React.ReactNode,
+) {
+  flowRoots.get(element)?.unmount();
+  activeFlows.add(element);
   const root = createRoot(element);
-  activeRoot = root;
+  flowRoots.set(element, root);
+  const release = () => {
+    if (flowRoots.get(element) === root) activeFlows.delete(element);
+  };
   const complete = () => {
-    active = false;
-    activeRoot = null;
+    release();
+    if (flowRoots.get(element) === root) flowRoots.delete(element);
     root.unmount();
     done();
   };
-  root.render(view(complete));
+  root.render(view(complete, release));
 }
 
 const deviceFlow = (config: DeviceConfig): AuthFlow => (element, done) => {
-  mountFlow(element, done, (complete) => <DeviceFlow config={config} complete={complete} />);
+  mountFlow(element, done, (complete, release) => <DeviceFlow config={config} complete={complete} release={release} />);
 };
 
 const pasteFlow = (config: PasteConfig): AuthFlow => (element, done) => {
-  mountFlow(element, done, (complete) => <PasteFlow config={config} complete={complete} />);
+  mountFlow(element, done, (complete, release) => <PasteFlow config={config} complete={complete} release={release} />);
 };
 
 export const codexDeviceFlow = deviceFlow({

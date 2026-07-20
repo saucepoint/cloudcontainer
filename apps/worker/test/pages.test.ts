@@ -380,6 +380,14 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html.indexOf("Sign in with ChatGPT")).toBeGreaterThan(html.indexOf("Codex"));
     expect(html).toContain("required");
   });
+
+  it("allows Claude and ChatGPT sign-in flows to be active independently", () => {
+    expect(authFlowsClient).toContain("const activeFlows = new WeakSet<HTMLElement>();");
+    expect(authFlowsClient).toContain("const flowRoots = new WeakMap<HTMLElement, Root>();");
+    expect(authFlowsClient).not.toContain("let active = false;");
+    expect(authFlowsClient).not.toContain("let activeRoot: Root | null = null;");
+    expect(onboardingClient).toContain("isAuthFlowActive(target)");
+  });
 });
 
 describe("page accessibility and recovery affordances", () => {
