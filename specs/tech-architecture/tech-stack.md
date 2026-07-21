@@ -47,7 +47,7 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Strong foundations
 
-- Verification is green: 23 test files / 291 tests, all workspace type checks, the browser build, the release dry-run, and `npm audit` pass.
+- Verification is green: 24 test files / 297 tests, all workspace type checks, the browser build, the release dry-run, and `npm audit` pass.
 - No `any`, TypeScript suppression, TODO, FIXME, or HACK markers were found in production TypeScript.
 - Security-sensitive random values use Web Crypto, admin-secret comparison uses fixed-size hashes, and Worker observability is enabled.
 
