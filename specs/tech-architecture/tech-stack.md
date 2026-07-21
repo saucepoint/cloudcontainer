@@ -47,35 +47,32 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Strong foundations
 
-- Baseline is green: 23 test files / 284 tests and all workspace type checks pass.
+- Verification is green: 23 test files / 291 tests, all workspace type checks, the browser build, the release dry-run, and `npm audit` pass.
 - No `any`, TypeScript suppression, TODO, FIXME, or HACK markers were found in production TypeScript.
 - Security-sensitive random values use Web Crypto, admin-secret comparison uses fixed-size hashes, and Worker observability is enabled.
 
-### Correctness and defensive-programming debt
+### Cleanup outcomes
 
-- `reconciler.ts` times out every job but only moves `provisioning`/`destroying` rows to `error`; timed-out `start` and `stop` lifecycle jobs can leave an apparently steady environment even though the operation failed.
-- `placement.ts` wraps reservation, row loading, and job enqueue in one broad catch. A post-insert orchestration failure can be mistaken for an idempotent duplicate and silently return a provisioning row.
-- `Provisioner.agentsOf` catches Incus failures and returns an empty agent set. A credential refresh can then succeed without installing selected-agent credentials, converting an infrastructure failure into silent partial behavior.
-- GitHub repositories clone to `~/repos/<repository-name>`. Two selected repositories with the same basename currently target the same directory, and the second can be silently treated as already cloned.
-- JSON request bodies are buffered without an application-level size limit, contrary to current Cloudflare Workers guidance for bounded request memory.
+- All Worker requests are bounded at 256 KiB before route handlers buffer JSON.
+- Timed-out lifecycle jobs consistently move their environment to visible `error`; background job timeouts remain isolated from environment state.
+- Placement retries only reservation conflicts. A failure after placement is surfaced and records a sanitized error state instead of masquerading as an idempotent duplicate.
+- Selected-agent metadata failures now fail daemon jobs instead of silently installing an incomplete credential set.
+- Repository selections with colliding `~/repos/<name>` targets fail before any Incus mutation.
+- Shared browser HTTP, clipboard, WebAuthn-error, confirmation, dashboard-model, and SSH presentation modules replaced entry-point duplication. `client/dashboard.tsx` is now the 224-line orchestration entry.
+- The page stylesheet is isolated from the 46-line document layout module with byte-identical rendered CSS.
+- Wrangler type generation ignores local secret files, preventing workstation-specific stale binding names.
+- The production-dead `quarantinePort` helper and unnecessary internal exports/assertions were removed.
+- Failure events use warning/error severity while successful drift correction and startup remain informational.
+- `@hono/node-server` is on patched v2, Wrangler/workerd and compatible minor dependencies are current, and the compatibility date is current.
 
-### Readability and organization debt
+### Retained compatibility surface
 
-- `client/dashboard.tsx` is 522 lines and combines wire types, HTTP transport, polling, lifecycle controls, connection display, SSH enrollment, clipboard fallback, and account deletion.
-- Client HTTP/error parsing is independently reimplemented in dashboard, landing, auth-flow, security, and onboarding entry points.
-- `pages/layout.tsx` is mostly a 230-line embedded stylesheet, obscuring the actual layout interface.
-- `api.ts`, `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` each coordinate several policies; their public interfaces are small, but duplicated transition/error rules reduce locality.
-- `CredentialInstaller` combines payload validation, environment rendering, four agent credential formats, GitHub, Wrangler, presence detection, and generated merge scripts.
+- Paid-tier, `resize`, and `export-window` protocol/daemon branches have no current-release caller. They are intentionally retained as future compatibility scaffolding by product decision; removal would require a coordinated shared-contract release.
+- `ExecResult` and `JobRecord` remain exported because they describe the public return surfaces of the injectable `ExecFn` and `JobRunner` interfaces, even though callers generally rely on structural inference.
 
-### Dead and stale surface
+### Remaining considerations
 
-- `quarantinePort` is production-dead and exists only to seed a unit test; production destroy logic duplicates its SQL.
-- `ExecResult` and `JobRecord` are exported although no external production caller needs those exports.
-- Paid-tier, `resize`, and `export-window` protocol/daemon branches have no current-release caller. They are roadmap scaffolding, while the release specification explicitly excludes paid upgrades. Removing them is a shared-contract decision and must be coordinated.
-- Wrangler type generation currently reads the developer's ignored `.dev.vars`, so the tracked generated file contains stale removed binding names and can vary by workstation. `wrangler types --env-file /dev/null` generates deterministic config-only bindings.
-
-### Dependency and tooling debt
-
-- `npm audit` reports one moderate production advisory in `@hono/node-server` 1.x. Version 2 fixes it; its documented breaking changes are Node 18 removal and Vercel-adapter removal, neither used by this Node 22 daemon. The existing `serve`, `createServer`, and TLS `serverOptions` interface remains documented in v2.
+- `passkeys.ts`, `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` exceed 300 lines, but each presents a small cohesive interface and substantial hidden behavior. Split only when a concrete forcing function appears; file length alone is not sufficient.
+- `CredentialInstaller` remains close to 300 lines because it owns validation and installation for several external credential formats. New formats should prompt extracting format-specific renderers behind its existing interface.
 - No lint script is configured. TypeScript catches unused locals but not floating promises or package/export dead code. Knip could not run in this ARM environment because its parser failed allocating its transfer buffer; `ts-prune`, reference search, typecheck, tests, and focused manual inspection were used instead.
 - Shell scripts pass `bash -n`; ShellCheck is not installed in the environment.

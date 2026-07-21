@@ -186,7 +186,7 @@ export class Provisioner {
     for (const repository of repositories) {
       const repo = repository.split("/")[1];
       if (!repo) throw new Error("invalid GitHub repository name");
-      const destination = repo.toLocaleLowerCase();
+      const destination = repo.toLowerCase();
       if (destinations.has(destination)) {
         throw new Error("selected GitHub repositories must have unique names");
       }
