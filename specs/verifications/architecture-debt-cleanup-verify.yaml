@@ -15,6 +15,10 @@ phases:
     passed: true
     command: "npm run typecheck"
     evidence: "Contract, daemon, Worker, and browser TypeScript projects passed."
+  lint:
+    passed: true
+    command: "npm run lint"
+    evidence: "Oxlint passed with warnings denied and no floating promises; deploy and infrastructure shell scripts passed bash syntax validation."
   tests:
     passed: true
     command: "npm test"

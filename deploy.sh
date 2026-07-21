@@ -215,6 +215,9 @@ if [[ "$SKIP_CHECKS" == false ]]; then
   info "Running type checks"
   run npm run typecheck
 
+  info "Running lint"
+  run npm run lint
+
   info "Running tests"
   run npm test
 fi

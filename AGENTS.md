@@ -11,6 +11,7 @@ Place tests in the matching workspace's `test/` directory as `<area>.test.ts`. A
 ```sh
 npm ci                 # install locked dependencies
 npm run typecheck      # type-check every workspace
+npm run lint           # lint TypeScript and validate shell syntax
 npm test               # run all Vitest suites
 npm run dev:worker     # run the Worker with Wrangler
 npm run dev:daemon     # watch the daemon locally

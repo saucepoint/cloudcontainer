@@ -8,10 +8,14 @@
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "oxlint --deny-warnings --deny typescript/no-floating-promises apps packages && bash -n deploy.sh infra/*.sh",
     "dev:worker": "npm run dev -w apps/worker",
     "dev:daemon": "npm run dev -w apps/daemon",
     "deploy": "bash ./deploy.sh",
     "deploy:worker": "npm run deploy -w apps/worker",
     "deploy:dry-run": "bash ./deploy.sh --dry-run"
+  },
+  "devDependencies": {
+    "oxlint": "^1.74.0"
   }
 }

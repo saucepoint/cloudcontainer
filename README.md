@@ -65,6 +65,7 @@ Requirements: Node.js 22 and npm.
 
     npm ci
     npm run typecheck
+    npm run lint
     npm test
 
 Prepare local D1 and start the Worker:
@@ -96,7 +97,7 @@ The fast suite never contacts live external services or infrastructure:
   cross-runtime-safe encodings, and tamper failures.
 - GitHub, Cloudflare, Codex auth endpoints, WebAuthn verification,
   and daemon HTTP are mocked.
-- CI runs npm ci, npm run typecheck, and npm test on Node.js 22.
+- CI runs npm ci, npm run typecheck, npm run lint, and npm test on Node.js 22.
 
 There is not yet an automated real-Incus nightly suite. Provision-to-SSH,
 firewall, reboot, browser accessibility, and rollback checks are manual release

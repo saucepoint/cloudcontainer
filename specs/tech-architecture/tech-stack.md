@@ -74,5 +74,5 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 - `passkeys.ts`, `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` exceed 300 lines, but each presents a small cohesive interface and substantial hidden behavior. Split only when a concrete forcing function appears; file length alone is not sufficient.
 - `CredentialInstaller` remains close to 300 lines because it owns validation and installation for several external credential formats. New formats should prompt extracting format-specific renderers behind its existing interface.
-- No lint script is configured. TypeScript catches unused locals but not floating promises or package/export dead code. Knip could not run in this ARM environment because its parser failed allocating its transfer buffer; `ts-prune`, reference search, typecheck, tests, and focused manual inspection were used instead.
-- Shell scripts pass `bash -n`; ShellCheck is not installed in the environment.
+- Oxlint is enforced locally, in CI, and by the release gate with warnings denied and `typescript/no-floating-promises` elevated to an error. Knip could not run in this ARM environment because its parser failed allocating its transfer buffer; `ts-prune`, reference search, typecheck, tests, and focused manual inspection were used instead.
+- Shell syntax validation is part of `npm run lint`; ShellCheck is not installed in the environment.
