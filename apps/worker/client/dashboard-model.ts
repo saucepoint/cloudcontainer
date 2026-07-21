@@ -1,0 +1,68 @@
+import type { Agent, ContainerStatus, JobOp, JobStatus, Tier } from "@workbench/contract";
+import { errorMessage } from "./http.js";
+
+export interface ContainerView {
+  id: string;
+  status: ContainerStatus;
+  statusDetail: string | null;
+  agents: Agent[];
+  tier: Tier;
+  cpu: number;
+  ramMb: number;
+  diskGb: number;
+  sshCommand: string | null;
+  hostKeyFingerprints: string[];
+  job: { id: string; op: JobOp; status: JobStatus; error: string | null } | null;
+  allowedOps: JobOp[];
+}
+
+export interface SshKey {
+  id: number;
+  label: string;
+  pubkey: string;
+  created_at: number;
+}
+
+export interface DashboardSnapshot {
+  container: ContainerView | null;
+  keys: SshKey[];
+}
+
+export type ContainerAction = JobOp | "retry";
+
+export const STATUS_LABELS: Record<ContainerStatus, string> = {
+  waitlisted: "Waiting for capacity",
+  provisioning: "Building",
+  running: "Ready",
+  stopped: "Stopped",
+  suspended: "Suspended",
+  upgrade_pending: "Upgrade pending",
+  error: "Needs attention",
+  destroying: "Deleting",
+};
+
+export function displayError(error: unknown, fallback: string): string {
+  const message = errorMessage(error, "");
+  return message && message !== "internal error" ? message : fallback;
+}
+
+export function isBusy(container: ContainerView | null): boolean {
+  return Boolean(container && (
+    container.status === "provisioning" ||
+    container.status === "destroying" ||
+    container.job?.status === "queued" ||
+    container.job?.status === "running"
+  ));
+}
+
+export function canManageSshKeys(container: ContainerView | null): boolean {
+  return container?.status === "running";
+}
+
+export function pollDelay(container: ContainerView | null, refreshNeeded = false): number | null {
+  if (refreshNeeded) return 5_000;
+  if (!container) return null;
+  if (container.status === "waitlisted") return 30_000;
+  if (isBusy(container)) return 5_000;
+  return null;
+}

@@ -16,7 +16,11 @@ const landingClient = readFileSync(new URL("../client/landing.tsx", import.meta.
 const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
-const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.meta.url), "utf8");
+const dashboardClient = [
+  "dashboard.tsx",
+  "dashboard-model.ts",
+  "dashboard-ssh.tsx",
+].map((file) => readFileSync(new URL(`../client/${file}`, import.meta.url), "utf8")).join("\n");
 const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [

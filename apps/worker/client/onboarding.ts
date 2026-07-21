@@ -6,6 +6,7 @@ import {
   isAuthFlowActive,
   wranglerOauthFlow,
 } from "./auth-flows.js";
+import { errorMessage, HttpError, requestJson } from "./http.js";
 
 const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
   (provider) => !(OAUTH_ONLY_LLM_PROVIDERS as readonly string[]).includes(provider),
@@ -25,11 +26,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function responseError(value: unknown, fallback: string): string {
-  return isRecord(value) && typeof value.error === "string" ? value.error : fallback;
-}
-
-const messageOf = (error: unknown) => error instanceof Error ? error.message : "Unknown error";
 const form = requiredElement<HTMLFormElement>("wizard");
 
 form.addEventListener("submit", async (event: SubmitEvent) => {
@@ -61,16 +57,14 @@ form.addEventListener("submit", async (event: SubmitEvent) => {
   spinner.setAttribute("aria-hidden", "true");
   button.replaceChildren(spinner, "Starting…");
   try {
-    const response = await fetch("/api/provision", {
+    await requestJson("/api/provision", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-    });
-    const json: unknown = await response.json();
-    if (!response.ok) throw new Error(responseError(json, "provisioning failed"));
+    }, "provisioning failed");
     location.href = "/dashboard";
   } catch (error) {
-    errorElement.textContent = messageOf(error);
+    errorElement.textContent = errorMessage(error);
     errorElement.focus();
     button.disabled = false;
     button.textContent = "Create workbench →";
@@ -200,18 +194,12 @@ async function loadGithubRepositories(query: string): Promise<void> {
   spinner.setAttribute("aria-hidden", "true");
   status.replaceChildren(spinner, "Searching GitHub…");
   try {
-    const response = await fetch(`/api/github/repos?q=${encodeURIComponent(query)}`);
-    const json: unknown = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      if (response.status === 409) {
-        status.textContent = "Connect GitHub to search repositories.";
-        return;
-      }
-      throw new Error(responseError(json, "Could not load repositories"));
-    }
-    const rawRepositories = isRecord(json) && Array.isArray(json.repositories)
-      ? json.repositories
-      : [];
+    const json = await requestJson<{ repositories?: unknown }>(
+      `/api/github/repos?q=${encodeURIComponent(query)}`,
+      undefined,
+      "Could not load repositories",
+    );
+    const rawRepositories = Array.isArray(json.repositories) ? json.repositories : [];
     const repositories = rawRepositories.filter(isGithubRepository);
     for (const repository of repositories) {
       knownGithubRepositories.set(repository.fullName, repository);
@@ -221,7 +209,9 @@ async function loadGithubRepositories(query: string): Promise<void> {
       : "No accessible repositories match your search.";
     renderGithubRepositories(repositories);
   } catch (error) {
-    status.textContent = messageOf(error) || "Could not load GitHub repositories.";
+    status.textContent = error instanceof HttpError && error.status === 409
+      ? "Connect GitHub to search repositories."
+      : errorMessage(error, "Could not load GitHub repositories.");
   }
 }
 
