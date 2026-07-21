@@ -4,6 +4,7 @@ import { adminRoutes } from "./admin.js";
 import { authRoutes, requireUser } from "./auth.js";
 import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
+import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage, SecurityPage } from "./pages/views.js";
@@ -14,6 +15,7 @@ import type { AppContext } from "./types.js";
 
 export const app = new Hono<AppContext>();
 
+app.use("*", requestBodyLimit);
 app.use("*", async (c, next) => {
   await next();
   c.header("referrer-policy", "no-referrer");
