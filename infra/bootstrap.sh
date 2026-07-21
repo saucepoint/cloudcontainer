@@ -149,7 +149,7 @@ Host bootstrapped. Next steps:
 
 2. Register this host in D1 (run from your repo checkout):
 
-   npx wrangler d1 execute codestation --remote --command "
+   npx wrangler d1 execute workbench --remote --command "
    INSERT INTO hosts (id, ipv4, ssh_hostname, daemon_endpoint, daemon_cert_fp,
      daemon_pubkey, ram_total_mb, ram_reserve_mb, vcpu_capacity,
      disk_total_gb, status, joined_at, last_seen_at)

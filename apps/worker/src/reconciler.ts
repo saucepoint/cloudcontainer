@@ -287,14 +287,54 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
       .bind(now(), host.id)
       .run();
     const actual = new Map(stats.containers.map((s) => [s.containerId, s.incusStatus]));
+    // Rows with host capacity allocated: running/stopped must exist on the host;
+    // provisioning rows may not yet have a container (job still in progress).
     const rows = await env.DB.prepare(
-      "SELECT * FROM containers WHERE host_id = ? AND status IN ('running','stopped')",
+      "SELECT * FROM containers WHERE host_id = ? AND status IN ('running','stopped','provisioning','error')",
     )
       .bind(host.id)
       .all<ContainerRow>();
     for (const row of rows.results) {
       const incus = actual.get(row.id);
-      if (!incus) continue;
+      if (!incus) {
+        // Container in D1 but not on the host. For running/stopped rows this
+        // means the container was deleted outside the control plane (e.g.
+        // manual incus delete). Free the leaked capacity and mark as error so
+        // the user can destroy or retry. provisioning/error rows may legitimately
+        // not have an incus container yet (job in flight / failed provision).
+        if (row.status === "running" || row.status === "stopped") {
+          // Guard: skip if a lifecycle job is still active for this container
+          // (e.g. destroy is in flight, daemon hasn't removed it yet).
+          const activeJob = await env.DB.prepare(
+            "SELECT 1 FROM jobs WHERE container_id = ? AND status IN ('queued','running') LIMIT 1",
+          )
+            .bind(row.id)
+            .first();
+          if (activeJob) continue;
+
+          await env.DB.batch([
+            env.DB.prepare(
+              "UPDATE containers SET status = 'error', status_detail = 'container missing on host' WHERE id = ?",
+            ).bind(row.id),
+            env.DB.prepare(
+              `UPDATE hosts
+               SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
+                   ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
+                   disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
+               WHERE id = ?`,
+            ).bind(row.cpu, row.ram_mb, diskReservationGb(row.disk_gb), host.id),
+          ]);
+          console.log(
+            JSON.stringify({
+              event: "container_missing_on_host",
+              containerId: row.id,
+              hostId: host.id,
+              previousStatus: row.status,
+            }),
+          );
+        }
+        continue;
+      }
       const expected = row.status === "running" ? "Running" : "Stopped";
       if (incus !== expected && (incus === "Running" || incus === "Stopped")) {
         const corrected = incus === "Running" ? "running" : "stopped";

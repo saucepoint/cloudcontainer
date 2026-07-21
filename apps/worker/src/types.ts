@@ -7,25 +7,17 @@ import type { ContainerStatus, JobOp, JobStatus, Tier } from "@workbench/contrac
 export type Bindings = Omit<
   Cloudflare.Env,
   | "BASE_URL"
-  | "WORLD_ID_APP_ID"
-  | "WORLD_ID_RP_ID"
-  | "WORLD_ID_ENVIRONMENT"
   | "DEV_AUTH"
   | "GITHUB_APP_CLIENT_ID"
   | "GITHUB_APP_SLUG"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
-  WORLD_ID_APP_ID: string;
-  WORLD_ID_RP_ID: string;
-  WORLD_ID_ENVIRONMENT: "production" | "staging";
   DEV_AUTH: string;
   GITHUB_APP_CLIENT_ID: string;
   GITHUB_APP_SLUG: string;
   // secrets
-  RP_SIGNING_KEY: string;
   CREDENTIAL_MASTER_KEY: string;
-  NULLIFIER_HMAC_KEY: string;
   WORKER_RPC_PRIVATE_KEY: string;
   GITHUB_APP_CLIENT_SECRET?: string;
   /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
@@ -35,18 +27,8 @@ export type Bindings = Omit<
 export interface UserRow {
   id: string;
   webauthn_user_id: string;
-  signup_method: "world_id" | "invite" | "dev";
   status: "active" | "banned" | "deleted";
   subscription_status: string;
-  created_at: number;
-  last_authenticated_at: number | null;
-}
-
-export interface AuthIdentityRow {
-  provider: "world_id" | "dev";
-  provider_subject: string;
-  user_id: string;
-  protocol_version: string | null;
   created_at: number;
   last_authenticated_at: number | null;
 }

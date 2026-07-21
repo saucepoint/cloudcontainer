@@ -158,7 +158,7 @@ describe("invite signup", () => {
     expect(finish.status).toBe(200);
     expect(finish.headers.get("set-cookie")).toContain("cs_session=");
     const user = await env.DB.prepare("SELECT * FROM users").first<UserRow>();
-    expect(user?.signup_method).toBe("invite");
+    expect(user).not.toBeNull();
     const passkey = await env.DB.prepare(
       "SELECT credential_id, user_id FROM passkeys",
     ).first<{ credential_id: string; user_id: string }>();
@@ -248,7 +248,7 @@ describe("invite signup", () => {
 });
 
 describe("passkey attachment and login", () => {
-  it("lets an authenticated World ID user attach an optional passkey", async () => {
+  it("lets an authenticated user attach another passkey", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     const sid = await createSession(env, user.id);

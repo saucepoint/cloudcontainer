@@ -38,7 +38,7 @@ Write strict ESM TypeScript. Match the existing style: two-space indentation, do
 
 ## Testing Guidelines
 
-Use Vitest with `describe`, `it`, and `expect`; mock external services rather than contacting Cloudflare, World ID, GitHub, or Incus. Worker tests use the in-memory environment and real migrations; daemon tests inject command execution. Add a focused regression test for each behavior change. No coverage threshold is defined.
+Use Vitest with `describe`, `it`, and `expect`; mock external services rather than contacting Cloudflare, GitHub, or Incus. Worker tests use the in-memory environment and real migrations; daemon tests inject command execution. Add a focused regression test for each behavior change. No coverage threshold is defined.
 
 ## Security, Migrations, and Releases
 

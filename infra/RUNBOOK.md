@@ -227,11 +227,11 @@ Use the SQL printed by bootstrap, but set:
 Run the command from apps/worker so Wrangler finds the correct configuration:
 
     cd apps/worker
-    npx wrangler d1 execute codestation --remote --command "INSERT ..."
+    npx wrangler d1 execute workbench --remote --command "INSERT ..."
 
 Confirm:
 
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "SELECT id, ssh_hostname, daemon_endpoint, vcpu_capacity,
               vcpu_allocated, ram_total_mb, ram_allocated_mb, ram_reserve_mb,
               disk_total_gb, disk_allocated_gb, last_seen_at,
@@ -273,12 +273,12 @@ placements and FIFO waitlist admission on that host while existing containers
 continue running:
 
     cd apps/worker
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "UPDATE hosts SET status = 'draining' WHERE id = 'HOST_ID'"
 
 Confirm it:
 
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "SELECT id, status FROM hosts WHERE id = 'HOST_ID'"
 
 ### 4.3 Check for active jobs
@@ -288,7 +288,7 @@ running containers are unaffected, but queued or running operations are not.
 
 Query D1:
 
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "SELECT j.id, j.op, j.status, j.updated_at,
               c.id AS container_id, c.status AS container_status
        FROM jobs j
@@ -319,7 +319,7 @@ replaced by this release. Back up source/lockfiles and the unit for rollback:
       set -eu
       umask 077
       stamp=$(date -u +%Y%m%dT%H%M%SZ)
-      tar --exclude=codestation/node_modules \
+      tar --exclude=workbench/node_modules \
         --exclude="workbench/.dev.vars*" \
         --exclude="workbench/.env*" \
         -C /opt -czf "/root/workbench-$stamp.tgz" workbench
@@ -390,7 +390,7 @@ If the base image also changed, perform provision-to-SSH.
 Only then return the host to service:
 
     cd apps/worker
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "UPDATE hosts SET status = 'active' WHERE id = 'HOST_ID'"
 
 Confirm no new Worker/daemon errors during the next reconciler interval.
@@ -525,7 +525,7 @@ contain credential payloads or values.
 Drain a planned decommission first:
 
     cd apps/worker
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "UPDATE hosts SET status = 'draining' WHERE id = 'HOST_ID'"
 
 Because the current release has no migration or backup restore, do not destroy
@@ -534,7 +534,7 @@ data and the corresponding D1 rows are reconciled.
 
 For an unrecoverable host:
 
-    npx wrangler d1 execute codestation --remote --command \
+    npx wrangler d1 execute workbench --remote --command \
       "UPDATE hosts SET status = 'dead' WHERE id = 'HOST_ID'"
 
 Treat all local environments as lost. Preserve incident evidence, prevent new

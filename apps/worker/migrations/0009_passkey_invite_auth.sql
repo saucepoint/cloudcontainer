@@ -1,28 +1,22 @@
--- Authentication is modeled independently from the user profile. World ID is
--- one external identity provider; invited accounts deliberately have no
--- external identity and therefore require at least one passkey.
---
--- Rebuild the user-referencing tables so the obsolete mandatory World ID
--- columns can be removed without leaving misleading placeholder identities.
+-- Add passkey authentication and one-time invite registration. Rebuild the
+-- user-referencing tables to add a stable, non-identifying WebAuthn handle.
 PRAGMA defer_foreign_keys = ON;
 
 CREATE TABLE users_auth_new (
   id                    TEXT PRIMARY KEY,
   webauthn_user_id      TEXT UNIQUE NOT NULL, -- random 32-byte hex user handle
-  signup_method         TEXT NOT NULL CHECK (signup_method IN ('world_id', 'invite', 'dev')),
   status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'banned', 'deleted')),
   subscription_status   TEXT NOT NULL DEFAULT 'free',
   created_at            INTEGER NOT NULL,
   last_authenticated_at INTEGER
 );
 
--- Existing accounts were all World ID accounts. randomblob() gives each one a
--- stable, non-identifying WebAuthn user handle for future passkey attachment.
+-- Existing development accounts receive a WebAuthn user handle.
 INSERT INTO users_auth_new (
-  id, webauthn_user_id, signup_method, status, subscription_status, created_at
+  id, webauthn_user_id, status, subscription_status, created_at
 )
 SELECT
-  id, lower(hex(randomblob(32))), 'world_id', status, subscription_status, created_at
+  id, lower(hex(randomblob(32))), status, subscription_status, created_at
 FROM users;
 
 CREATE TABLE ssh_keys_auth_new (
@@ -98,20 +92,6 @@ CREATE TABLE waitlist_auth_new (
   admitted_at  INTEGER
 );
 INSERT INTO waitlist_auth_new SELECT user_id, requested_at, admitted_at FROM waitlist;
-
-CREATE TABLE auth_identities (
-  provider              TEXT NOT NULL CHECK (provider IN ('world_id', 'dev')),
-  provider_subject      TEXT NOT NULL,
-  user_id               TEXT NOT NULL UNIQUE REFERENCES users_auth_new(id) ON DELETE CASCADE,
-  protocol_version      TEXT,
-  created_at            INTEGER NOT NULL,
-  last_authenticated_at INTEGER,
-  PRIMARY KEY (provider, provider_subject)
-);
-INSERT INTO auth_identities (
-  provider, provider_subject, user_id, protocol_version, created_at
-)
-SELECT 'world_id', world_id_session_id, id, NULL, created_at FROM users;
 
 CREATE TABLE passkeys (
   credential_id TEXT PRIMARY KEY, -- base64url credential ID

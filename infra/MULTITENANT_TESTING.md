@@ -40,9 +40,9 @@ plan instead.
 1. Drain the host and confirm it has no active jobs or instances.
 
        cd apps/worker
-       npx wrangler d1 execute codestation --remote --command \
+       npx wrangler d1 execute workbench --remote --command \
          "UPDATE hosts SET status = 'draining' WHERE id = 'HOST_ID'"
-       npx wrangler d1 execute codestation --remote --command \
+       npx wrangler d1 execute workbench --remote --command \
          "SELECT j.id, j.op, j.status FROM jobs j
           JOIN containers c ON c.id = j.container_id
           WHERE c.host_id = 'HOST_ID' AND j.status IN ('queued','running')"
@@ -76,12 +76,12 @@ plan instead.
        cd /path/to/cloudcontainer
        npm run deploy -- --yes
        cd apps/worker
-       npx wrangler d1 execute codestation --remote --command \
+       npx wrangler d1 execute workbench --remote --command \
          "UPDATE hosts SET status = 'active' WHERE id = 'HOST_ID'"
 
 5. After one Cron interval, verify health and zeroed accounting.
 
-       npx wrangler d1 execute codestation --remote --command \
+       npx wrangler d1 execute workbench --remote --command \
          "SELECT id, status, vcpu_capacity, vcpu_allocated,
                  ram_total_mb - ram_reserve_mb AS ram_capacity_mb,
                  ram_allocated_mb, disk_total_gb, disk_allocated_gb,

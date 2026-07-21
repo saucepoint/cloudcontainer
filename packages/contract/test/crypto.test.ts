@@ -8,7 +8,6 @@ import {
   encryptJsonAtRest,
   decryptJsonAtRest,
   generateSymmetricKey,
-  hmacNullifier,
   utf8,
   toB64,
   fromB64,
@@ -70,15 +69,5 @@ describe("at-rest encryption", () => {
     const key = generateSymmetricKey();
     const ct = encryptJsonAtRest({ secret: "CANARY-value-123" }, key);
     expect(ct).not.toContain("CANARY-value-123");
-  });
-});
-
-describe("nullifier HMAC", () => {
-  it("is deterministic per key and differs across keys", () => {
-    const k1 = generateSymmetricKey();
-    const k2 = generateSymmetricKey();
-    expect(hmacNullifier("0xabc", k1)).toBe(hmacNullifier("0xabc", k1));
-    expect(hmacNullifier("0xabc", k1)).not.toBe(hmacNullifier("0xabc", k2));
-    expect(hmacNullifier("0xabc", k1)).not.toBe(hmacNullifier("0xdef", k1));
   });
 });

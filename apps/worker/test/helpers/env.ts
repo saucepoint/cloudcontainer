@@ -116,14 +116,9 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     DB: new FakeD1(db),
     SESSIONS: kv,
     BASE_URL: "https://workbench.test",
-    WORLD_ID_APP_ID: "app_test",
-    WORLD_ID_RP_ID: "rp_test",
-    WORLD_ID_ENVIRONMENT: "production",
     DEV_AUTH: "0",
     GITHUB_APP_CLIENT_ID: "",
-    RP_SIGNING_KEY: `${"00".repeat(31)}01`,
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),
-    NULLIFIER_HMAC_KEY: generateSymmetricKey(),
     WORKER_RPC_PRIVATE_KEY: rpcKeys.privateKey,
     ...overrides,
   } as unknown as Bindings;
@@ -135,16 +130,10 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
 export async function seedUser(env: Bindings, id = "user-1"): Promise<UserRow> {
   const now = Date.now();
   const webauthnUserId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO users (id, webauthn_user_id, signup_method, created_at)
-       VALUES (?, ?, 'world_id', ?)`,
-    ).bind(id, webauthnUserId, now),
-    env.DB.prepare(
-      `INSERT INTO auth_identities (provider, provider_subject, user_id, created_at)
-       VALUES ('world_id', ?, ?, ?)`,
-    ).bind(`test|${id}`, id, now),
-  ]);
+  await env.DB.prepare(
+    `INSERT INTO users (id, webauthn_user_id, created_at)
+     VALUES (?, ?, ?)`,
+  ).bind(id, webauthnUserId, now).run();
   const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
   if (!row) throw new Error("seedUser failed");
   return row;

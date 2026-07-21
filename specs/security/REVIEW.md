@@ -6,10 +6,10 @@
 
 ## Trust-boundary review
 
-- The connection route still requires an authenticated Codestation user and checks that credentials remain changeable.
+- The connection route still requires an authenticated Workbench user and checks that credentials remain changeable.
 - The App slug is configuration-only and validated against a slug allowlist before it reaches the GitHub redirect URL.
 - `return_to` remains allowlisted to `/onboarding` or `/dashboard`; arbitrary redirect destinations are not stored.
-- OAuth state uses Web Crypto randomness, expires, is consumed once, and is bound to the current Codestation user before token exchange.
+- OAuth state uses Web Crypto randomness, expires, is consumed once, and is bound to the current Workbench user before token exchange.
 - Existing encrypted credentials are no longer revoked or cleared before a replacement callback succeeds.
 - Access and refresh tokens remain encrypted in D1; only the short-lived access token crosses the sealed host boundary.
 - The daemon command added for `gh auth setup-git` is constant and contains no user-controlled input or token value.

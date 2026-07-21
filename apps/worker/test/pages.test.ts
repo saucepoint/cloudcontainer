@@ -6,13 +6,6 @@ import { LandingPage, OnboardingPage, SecurityPage } from "../src/pages/views.js
 import { createSession } from "../src/sessions.js";
 import { makeEnv, seedUser } from "./helpers/env.js";
 
-const workerPackage = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as {
-  scripts: { "build:client": string };
-  dependencies: Record<string, string>;
-};
-
 function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1] ?? "")
@@ -29,7 +22,6 @@ const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false })],
   ["security", () => SecurityPage({
-    signupMethod: "world_id",
     passkeyCount: 0,
     continueHref: "/onboarding",
     welcome: true,
@@ -49,46 +41,6 @@ describe("compiled page clients", () => {
   }
 });
 
-describe("World ID v4 wiring", () => {
-  it("loads the environment and fresh RP context from the server", () => {
-    const html = String(LandingPage({ devAuth: true }));
-    expect(landingClient).toContain('fetch("/auth/world-id/context"');
-    expect(landingClient).toContain("environment={worldIdContext.environment}");
-    expect(html).toContain("Dev login");
-  });
-
-  it("discards stale non-v4 session IDs before calling proveSession", () => {
-    expect(landingClient).toContain("/^session_[0-9a-f]{128}$/i");
-    expect(landingClient).toContain("localStorage.removeItem(SESSION_STORAGE_KEY)");
-  });
-
-  it("uses the official React session widget with a v4 Proof of Human constraint", () => {
-    expect(landingClient).toContain('from "@worldcoin/idkit"');
-    expect(landingClient).toContain("<IDKitSessionWidget");
-    expect(landingClient).toContain('const PROOF_OF_HUMAN = CredentialRequest("proof_of_human");');
-    expect(landingClient).not.toContain('any(CredentialRequest("proof_of_human"))');
-    expect(landingClient).toContain("{...(worldIdSessionId ? { existing_session_id: worldIdSessionId } : {})}");
-    expect(landingClient).not.toContain("allow_legacy_proofs");
-    expect(landingClient).not.toContain("orbLegacy");
-  });
-
-  it("delegates QR and native transport to IDKit React without direct core or QR dependencies", () => {
-    const html = String(LandingPage({ devAuth: false }));
-    expect(landingClient).not.toContain('from "@worldcoin/idkit-core"');
-    expect(landingClient).not.toContain('from "qrcode"');
-    expect(html).not.toContain("cdn.jsdelivr.net");
-    expect(workerPackage.dependencies["@worldcoin/idkit"]).toMatch(/^\^4\./);
-    expect(workerPackage.dependencies["@worldcoin/idkit-core"]).toBeUndefined();
-    expect(workerPackage.dependencies.qrcode).toBeUndefined();
-  });
-
-  it("ships the IDKit WebAssembly sidecar at the URL used by the bundle", () => {
-    expect(workerPackage.scripts["build:client"]).toContain(
-      "@worldcoin/idkit-core/dist/idkit_wasm_bg.wasm public/idkit_wasm_bg.wasm",
-    );
-  });
-});
-
 describe("landing page call to action", () => {
   it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
@@ -98,9 +50,8 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("offers returning passkey login, World ID, and one-time invite signup", () => {
+  it("offers returning passkey login and one-time invite signup", () => {
     expect(landingClient).toContain("Sign in with a passkey");
-    expect(landingClient).toContain("Continue with World ID");
     expect(landingClient).toContain('id="invite-code"');
     expect(landingClient).toContain("maxLength={8}");
     expect(landingClient).toContain("startAuthentication({ optionsJSON })");
@@ -115,7 +66,7 @@ describe("landing page call to action", () => {
     expect(landingClient).toContain("<Tabs.Root");
     expect(landingClient).toContain('defaultValue="passkey"');
     expect(landingClient).toContain('<Tabs.List className="auth-tab-list"');
-    expect(landingClient).toContain('<Tabs.Tab value="world-id"');
+    expect(landingClient).toContain('<Tabs.Tab value="passkey"');
     expect(landingClient).toContain('<Tabs.Panel value="invite" keepMounted');
   });
 
@@ -126,35 +77,21 @@ describe("landing page call to action", () => {
     expect(landingClient).toContain("<AnimatePresence");
     expect(landingClient).toContain("key={value}");
     expect(landingClient).toContain('value="passkey"');
-    expect(landingClient).toContain('value="world-id"');
     expect(landingClient).toContain('value="invite"');
   });
 });
 
 describe("passkey security page", () => {
-  it("makes passkeys optional for World ID users and encourages a backup for invited users", () => {
-    const worldId = String(SecurityPage({
-      signupMethod: "world_id",
-      passkeyCount: 0,
-      continueHref: "/onboarding",
-      welcome: true,
-    }));
-    expect(worldId).toContain("World ID remains available");
-    expect(worldId).not.toContain("Update World ID sign-in");
-    expect(worldId).toContain("Skip for now");
-    expect(worldId).toContain('src="/security.js"');
-    expect(securityClient).toContain('"/auth/passkey/register/options"');
-    expect(securityClient).not.toContain("IDKit");
-    expect(securityClient).not.toContain("world-id");
-
-    const invited = String(SecurityPage({
-      signupMethod: "invite",
+  it("encourages users to add a backup passkey", () => {
+    const security = String(SecurityPage({
       passkeyCount: 1,
       continueHref: "/dashboard",
       welcome: false,
     }));
-    expect(invited).toContain("This account uses passkeys to sign in");
-    expect(invited).toContain("Add another passkey");
+    expect(security).toContain('src="/security.js"');
+    expect(securityClient).toContain('"/auth/passkey/register/options"');
+    expect(security).toContain("This account uses passkeys to sign in");
+    expect(security).toContain("Add another passkey");
   });
 });
 

@@ -1,9 +1,7 @@
--- Codestation D1 schema (spec §8, minus Stripe/email tables)
+-- Workbench D1 schema (spec §8, minus Stripe/email tables)
 
 CREATE TABLE users (
   id                   TEXT PRIMARY KEY,            -- UUID, internal identity
-  world_id_nullifier   TEXT UNIQUE NOT NULL,        -- never a key/FK by design (§2)
-  world_id_oidc_sub    TEXT UNIQUE NOT NULL,        -- SIWO subject for login
   status               TEXT NOT NULL DEFAULT 'active',       -- active|banned|deleted
   subscription_status  TEXT NOT NULL DEFAULT 'free',
   created_at           INTEGER NOT NULL
@@ -100,12 +98,6 @@ CREATE TABLE jobs (
 );
 CREATE INDEX idx_jobs_container ON jobs(container_id, created_at DESC);
 CREATE INDEX idx_jobs_status ON jobs(status, updated_at);
-
-CREATE TABLE banned_nullifiers (
-  nullifier_hmac  TEXT PRIMARY KEY,  -- keyed hash, not the raw nullifier
-  banned_at       INTEGER NOT NULL,
-  reason          TEXT
-);
 
 CREATE TABLE waitlist (
   user_id      TEXT PRIMARY KEY REFERENCES users(id),

@@ -19,8 +19,7 @@ with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
 only two product decisions after authentication:
 
-1. sign in with World ID or use an administrator invite with a required
-   passkey; and
+1. sign in with a passkey or use an administrator invite to create one; and
 2. choose one or more coding agents.
 
 SSH keys, model credentials, GitHub, and Cloudflare credentials are optional
@@ -80,8 +79,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- World ID v4 Proof of Human session authentication,
-  passwordless passkey login, and single-use administrator invite signup.
+- Passwordless passkey login and single-use administrator invite signup.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
   an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
@@ -131,15 +129,10 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 The landing page explains the available authentication paths and key service facts:
 
-- World ID can prove one human per account without an email;
 - returning accounts with a passkey can sign in directly;
 - an administrator invite is single-use and requires creating a passkey;
 - the current service is free and needs no credit card; and
 - the environment is a shared-kernel cloud container.
-
-For a new sign-in, IDKit React creates a World ID v4 Proof of Human session.
-The browser retains the session ID and proves that session on later sign-ins.
-Only v4 session proofs are accepted; legacy and uniqueness proofs are rejected.
 
 An eight-character uppercase alphanumeric invite is generated only through the
 administrator script. Entering a valid unused code starts passkey registration.
@@ -148,11 +141,9 @@ WebAuthn verification atomically persists the user, initial passkey, and
 redemption before creating an application session. Invite-backed accounts have
 no reusable invite login and use a discoverable passkey to return.
 
-The landing page also supports usernameless passkey authentication. A new World
-ID user is offered an optional passkey after first sign-in and may skip it;
-World ID remains a valid return path. Account security remains available later
-to add additional passkeys. Invite-backed accounts are advised to add a second
-passkey as a recovery option.
+The landing page supports usernameless passkey authentication. Account security
+remains available later to add additional passkeys, and accounts are advised to
+add a second passkey as a recovery option.
 
 ### 4.2 Configure and launch
 
@@ -260,24 +251,6 @@ usable with keyboard alone. Specifically:
 
 ## 5. Identity and sessions
 
-### World ID
-
-New sign-ins create a v4 Proof of Human session and returning sign-ins prove
-that session; the verified RP-scoped `session_id` is the durable account
-identity. The backend rejects World ID 3, uniqueness proofs, and any credential
-other than the v4 Proof of Human session credential. IDKit React owns QR,
-polling, and native World App transport; the application stores the returned
-session ID for subsequent proofs.
-
-World ID identifiers live in auth_identities under the `world_id` provider and
-are unique provider subjects; they are not columns on the user profile.
-Internal relationships use a generated user UUID. Each user also has a random,
-non-identifying 32-byte WebAuthn user handle.
-
-For an abuse ban, the service stores an HMAC-SHA256 of the canonical identity
-key in banned_nullifiers. This keyed value may remain after account deletion
-solely to prevent immediate re-signup by a banned identity.
-
 ### Invites and passkeys
 
 - Invite codes contain exactly eight random uppercase alphanumeric characters.
@@ -300,8 +273,8 @@ solely to prevent immediate re-signup by a banned identity.
 
 ### Application sessions
 
-- A successful World ID, invite-registration, development, or passkey flow
-  creates a random 32-byte session ID.
+- A successful invite-registration, development, or passkey flow creates a
+  random 32-byte session ID.
 - Session data lives in KV with a seven-day TTL.
 - The cookie is HttpOnly, SameSite=Lax, Path=/, and Secure on HTTPS.
 - Logout deletes KV state and records the session-ID hash in D1.
@@ -563,8 +536,7 @@ operations synchronize keys and credentials.
 
 | Table | Important invariant |
 |---|---|
-| users | Internal UUID primary key; random WebAuthn user handle; signup method |
-| auth_identities | Unique external provider subject; at most one per user |
+| users | Internal UUID primary key; random WebAuthn user handle |
 | passkeys | Credential ID unique; public key and monotonic signature counter |
 | invite_codes | Keyed HMAC-SHA-256 only; raw eight-character code is never stored |
 | invite_redemptions | One permanent redemption per invite; user link clears on account deletion |
@@ -579,10 +551,6 @@ operations synchronize keys and credentials.
 | waitlist | One row per user; requested_at ordering and admitted_at audit |
 | port_quarantine | Host/port composite identity; 30-day hold |
 | session_revocations | Hashes of revoked application sessions |
-| banned_nullifiers | HMAC only, retained for abuse prevention |
-
-All account foreign references use internal IDs. World ID identifiers are never
-user primary keys or resource foreign keys.
 
 ---
 
@@ -611,17 +579,16 @@ user primary keys or resource foreign keys.
 - Signed daemon RPC with a short timestamp window.
 - Browser responses use no-referrer, no-sniff, clickjacking, and unnecessary
   camera/microphone/geolocation restrictions.
-- Account and ban identities separated from internal UUIDs.
 - Self-service account deletion after the environment is destroyed.
 
 ### Account deletion
 
 The account-delete control is disabled while a real host environment exists.
 The user first destroys the environment, then confirms account deletion.
-Deletion purges credentials, SSH keys, passkeys, external identities,
-enrollment tokens, OAuth state, waitlist state, and the user row, and revokes
-the current session. A hostless waitlisted row can be removed as part of
-deletion. A prior abuse-ban HMAC and a used-invite redemption may remain.
+Deletion purges credentials, SSH keys, passkeys, enrollment tokens, OAuth state,
+waitlist state, and the user row, and revokes the current session. A hostless
+waitlisted row can be removed as part of deletion. A used-invite redemption may
+remain.
 
 ### Current operational limitations
 
@@ -637,8 +604,7 @@ deletion. A prior abuse-ban HMAC and a used-invite redemption may remain.
   renewal can lose an active in-memory job.
 - There is no automated alerting, SLO reporting, or tested disaster recovery.
 - GitHub integration is absent when its application credentials are unset.
-- The static development-bypass token is intentionally weaker than production
-  World ID and passkey authentication.
+- The local development login is intentionally disabled in deployed environments.
 - Agent packages and fallback installers currently resolve the latest npm
   release at image-build or fallback time. Exact version pins, recorded build
   metadata, and an SBOM are supply-chain hardening gaps.
@@ -680,7 +646,7 @@ The repository runs on Node.js 22 in CI:
 
 Tests use Vitest. The Worker suite uses an in-memory node:sqlite database with
 the real migration files, a Map-backed KV double, and intercepted fetch calls.
-It does not use a live D1 database, Miniflare, World ID, GitHub, Cloudflare, or
+It does not use a live D1 database, Miniflare, GitHub, Cloudflare, or
 an Incus host.
 
 Real-host multi-tenant capacity, isolation, quota, reboot, health-quarantine,
@@ -689,11 +655,10 @@ and soak acceptance is defined in infra/MULTITENANT_TESTING.md.
 Current automated coverage includes:
 
 - shared schema, signing, replay-window, encryption, sealing, and tamper tests;
-- World ID-backed account behavior through the gated development auth seam,
-  bans, sessions, and revocation;
+- gated development login, sessions, and revocation;
 - admin-secret invite generation, HMAC-only invite storage, mandatory initial
-  passkey persistence, one-time redemption races, optional World ID passkey
-  attachment, passwordless login counters, and challenge replay rejection;
+  passkey persistence, one-time redemption races, passwordless login counters,
+  additional passkey attachment, and challenge replay rejection;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
   and reconciler logic;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -708,10 +673,9 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. a real or World ID simulator sign-in, optional passkey attachment, and
-   subsequent passkey sign-in;
-2. invite generation, invite signup with its required passkey, attempted invite
+1. invite generation, invite signup with its required passkey, attempted invite
    reuse, and the all-optional-onboarding-fields-skipped path;
+2. subsequent passkey sign-in and attachment of a backup passkey;
 3. provision to SSH using a pasted key;
 4. provision to SSH using enrollment;
 5. command availability for all four agents and base tools;
@@ -735,12 +699,9 @@ coverage.
 A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
-1. **Identity:** a valid v4 Proof of Human session creates or reuses the account
-   for its verified session identity; a valid invite is consumed
-   exactly once only after its required passkey is verified; a World ID account
-   may attach a passkey; either World ID or a registered passkey can reaccess
-   the appropriate account; a banned identity is refused; logout revokes the
-   application session.
+1. **Identity:** a valid invite is consumed exactly once only after its required
+   passkey is verified; a registered passkey can reaccess the appropriate
+   account; logout revokes the application session.
 2. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.

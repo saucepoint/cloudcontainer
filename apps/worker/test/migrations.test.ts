@@ -11,7 +11,6 @@ describe("0008 host CPU and health migration", () => {
     const db = new DatabaseSync(":memory:");
     for (const name of [
       "0001_init.sql",
-      "0002_worldid_session.sql",
       "0003_multi_agent.sql",
       "0004_root_disk_accounting.sql",
       "0005_unique_ssh_keys.sql",
@@ -21,9 +20,7 @@ describe("0008 host CPU and health migration", () => {
       db.exec(migration(name));
     }
     db.exec(`
-      INSERT INTO users
-        (id, world_id_nullifier, world_id_session_id, created_at)
-      VALUES ('user-1', 'null-1', 'session-1', 1);
+      INSERT INTO users (id, created_at) VALUES ('user-1', 1);
       INSERT INTO hosts
         (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
          ram_total_mb, ram_reserve_mb, disk_total_gb, status, joined_at)
@@ -52,12 +49,11 @@ describe("0008 host CPU and health migration", () => {
 });
 
 describe("0009 passkey and invite authentication migration", () => {
-  it("moves World ID into an identity table and rebuilds user foreign keys cleanly", () => {
+  it("adds WebAuthn handles and rebuilds user foreign keys cleanly", () => {
     const db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys = ON");
     for (const name of [
       "0001_init.sql",
-      "0002_worldid_session.sql",
       "0003_multi_agent.sql",
       "0004_root_disk_accounting.sql",
       "0005_unique_ssh_keys.sql",
@@ -68,9 +64,7 @@ describe("0009 passkey and invite authentication migration", () => {
       db.exec(migration(name));
     }
     db.exec(`
-      INSERT INTO users
-        (id, world_id_nullifier, world_id_session_id, created_at)
-      VALUES ('user-1', 'nullifier-1', 'session-1', 1);
+      INSERT INTO users (id, created_at) VALUES ('user-1', 1);
       INSERT INTO ssh_keys (user_id, label, pubkey, created_at)
       VALUES ('user-1', 'laptop', 'ssh-ed25519 AAAA test', 2);
     `);
@@ -81,18 +75,15 @@ describe("0009 passkey and invite authentication migration", () => {
     expect(columns.map((column) => column.name)).toEqual([
       "id",
       "webauthn_user_id",
-      "signup_method",
       "status",
       "subscription_status",
       "created_at",
       "last_authenticated_at",
     ]);
     const user = db.prepare(
-      "SELECT id, length(webauthn_user_id) AS handle_length, signup_method FROM users",
+      "SELECT id, length(webauthn_user_id) AS handle_length FROM users",
     ).get();
-    expect(user).toEqual({ id: "user-1", handle_length: 64, signup_method: "world_id" });
-    expect(db.prepare("SELECT provider, provider_subject, user_id FROM auth_identities").get())
-      .toEqual({ provider: "world_id", provider_subject: "session-1", user_id: "user-1" });
+    expect(user).toEqual({ id: "user-1", handle_length: 64 });
     expect(db.prepare("SELECT user_id, label FROM ssh_keys").get())
       .toEqual({ user_id: "user-1", label: "laptop" });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);

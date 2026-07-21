@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/security.ts client/onboarding.ts client/dashboard.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public && cp ../../node_modules/@worldcoin/idkit-core/dist/idkit_wasm_bg.wasm public/idkit_wasm_bg.wasm",
+    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/security.ts client/onboarding.ts client/dashboard.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
     "predev": "npm run build:client",
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",
@@ -12,8 +12,8 @@
     "types": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply codestation --local",
-    "db:migrate:remote": "wrangler d1 migrations apply codestation --remote",
+    "db:migrate:local": "wrangler d1 migrations apply workbench --local",
+    "db:migrate:remote": "wrangler d1 migrations apply workbench --remote",
     "invite:create": "tsx scripts/generate-invite.ts"
   },
   "dependencies": {
@@ -21,7 +21,6 @@
     "@workbench/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "@worldcoin/idkit": "^4.2.1",
     "hono": "^4.7.4",
     "motion": "^12.42.2",
     "react": "^19.2.7",

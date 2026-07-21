@@ -31,17 +31,6 @@
   "vars": {
     // Public base URL of the deployed dashboard (no trailing slash).
     "BASE_URL": "https://usebench.dev",
-    // World ID app from the Worldcoin Developer Portal (public identifier).
-    // Must be upgraded to World ID 4.0 (Developer Portal → "Enable World ID 4.0" banner)
-    // before RP_SIGNING_KEY/WORLD_ID_RP_ID below are valid.
-    "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
-    // World ID 4.0 RP id, minted alongside the signing key when the app is
-    // registered/upgraded for v4 (Developer Portal → configure_world_id). Public identifier.
-    "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
-    // Must match the Developer Portal app/RP and the client used to approve
-    // proofs. Real World App devices use "production"; the simulator uses
-    // "staging". Keep this independent from DEV_AUTH.
-    "WORLD_ID_ENVIRONMENT": "production",
     // Set to "1" ONLY for local development: enables /auth/dev login bypass.
     "DEV_AUTH": "0",
     // GitHub App OAuth client id and public-page slug. GitHub setup is exposed
@@ -50,11 +39,7 @@
     "GITHUB_APP_SLUG": "workbenchdemo"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
-  //   RP_SIGNING_KEY           — World ID 4.0 RP signing key (Developer Portal →
-  //                              configure_world_id; returned once, rotate via
-  //                              rotate_world_id_signing_key if lost)
   //   CREDENTIAL_MASTER_KEY    — base64 32-byte key (npx tsx scripts/genkeys.ts)
-  //   NULLIFIER_HMAC_KEY       — base64 32-byte key for the ban table
   //   WORKER_RPC_PRIVATE_KEY   — base64 Ed25519 private key for daemon RPC signing
   //   INVITE_ADMIN_SECRET      — high-entropy bearer secret used only by the
   //                              admin invite-generation script/endpoint

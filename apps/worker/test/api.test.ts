@@ -742,7 +742,6 @@ describe("account deletion (U8)", () => {
     expect(res.status).toBe(200);
     for (const table of [
       "users",
-      "auth_identities",
       "passkeys",
       "ssh_keys",
       "credentials_encrypted",

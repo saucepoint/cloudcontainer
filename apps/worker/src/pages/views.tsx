@@ -56,17 +56,14 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
 );
 
 export const SecurityPage: FC<{
-  signupMethod: "world_id" | "invite" | "dev";
   passkeyCount: number;
   continueHref: string;
   welcome: boolean;
-}> = ({ signupMethod, passkeyCount, continueHref, welcome }) => (
+}> = ({ passkeyCount, continueHref, welcome }) => (
   <Layout title="Account security" loggedIn>
     <h1>{welcome ? "Your account is ready." : "Account security."}</h1>
     <p class="lead">
-      {signupMethod === "world_id"
-        ? "World ID remains available whenever you need it. A passkey gives you a faster, phishing-resistant way to sign in."
-        : "This account uses passkeys to sign in. Add another passkey from a second device or password manager if you want a backup."}
+      This account uses passkeys to sign in. Add another passkey from a second device or password manager if you want a backup.
     </p>
     <section class="card" aria-labelledby="passkeys-heading">
       <div class="card-head">

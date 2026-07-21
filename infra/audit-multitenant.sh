@@ -155,9 +155,9 @@ else
   fail "daemon is scoped to the tenant project"
 fi
 if nft list table inet workbench >/dev/null 2>&1; then
-  pass "Codestation nftables policy is loaded"
+  pass "Workbench nftables policy is loaded"
 else
-  fail "Codestation nftables policy is loaded"
+  fail "Workbench nftables policy is loaded"
 fi
 if [[ ! -e /proc/sched_debug || "$(stat -c %a /proc/sched_debug)" == "400" ]]; then
   pass "scheduler debug data is root-only"
