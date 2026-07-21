@@ -16,11 +16,13 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
 
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
-    <h1 class="landing-title">A cloud workbench for command-line agents</h1>
+    <h1 class="landing-title">A cloud workbench <br/>for agents</h1>
     <p class="lead">
-      An always-on workbench for coding and long running jobs. Access from any terminal client on any device.
+      free for each unique person
       <br />
-      Free for each unique person
+      an always-on container for long running coding agents
+      <br />
+      access from any terminal client on any device      
     </p>
     <div class="card">
       <ul class="check spec-list">
