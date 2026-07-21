@@ -177,6 +177,18 @@ describe("provision command construction", () => {
     for (const command of commands) expect(command).not.toContain("CANARY-");
   });
 
+  it("rejects repository selections that would clone into the same directory", async () => {
+    const calls: Call[] = [];
+    const request = provisionRequest();
+    request.githubRepos = ["octocat/project", "acme/project"];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+
+    await expect(provisioner.run(request)).rejects.toThrow(
+      "selected GitHub repositories must have unique names",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it("installs every selected agent in one idempotent script", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
