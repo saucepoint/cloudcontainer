@@ -5,8 +5,10 @@
  * fields) off the wire.
  */
 import { describe, expect, it } from "vitest";
+import { generateX25519Keypair, sealJson } from "../src/crypto.js";
 import {
   ContainerSpecSchema,
+  CredentialPayloadSchema,
   INPUT_LIMITS,
   JobRequestSchema,
   JobStatusResponseSchema,
@@ -105,6 +107,54 @@ describe("LlmKeysSchema", () => {
         codex_subscription_token: "x".repeat(INPUT_LIMITS.codexAuthBytes + 1),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("aggregate request budgets", () => {
+  function maximalPayload(fill: string) {
+    return {
+      llmKeys: {
+        openai: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        anthropic: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        gemini: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        openrouter: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        opencode_go: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        claude_subscription_token: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        codex_subscription_token: fill.repeat(INPUT_LIMITS.codexAuthBytes / fill.length),
+        github_copilot: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      },
+      cloudflareToken: fill.repeat(INPUT_LIMITS.cloudflareTokenBytes / fill.length),
+      wranglerOauth: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      githubToken: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      githubLogin: fill.repeat(256 / fill.length),
+    };
+  }
+
+  it("accepts, seals, and transports the maximal ASCII credential combination", () => {
+    const payload = CredentialPayloadSchema.parse(maximalPayload("x"));
+    const sealed = sealJson(payload, generateX25519Keypair().publicKey);
+    expect(sealed.length).toBeLessThanOrEqual(INPUT_LIMITS.sealedCredentialBytes);
+
+    const request = {
+      op: "provision",
+      jobId: "j-max",
+      containerId: "c-max",
+      spec,
+      sshKeys: Array.from(
+        { length: INPUT_LIMITS.sshKeysPerAccount },
+        () => "x".repeat(INPUT_LIMITS.sshKeyBytes),
+      ),
+      dashboardUrl: "https://workbench.example",
+      githubRepos: [],
+      sealedCredentials: sealed,
+    };
+    expect(new TextEncoder().encode(JSON.stringify(request)).byteLength)
+      .toBeLessThanOrEqual(INPUT_LIMITS.jobRequestBytes);
+    expect(JobRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("rejects a character-valid payload that exceeds the UTF-8 aggregate budget", () => {
+    expect(CredentialPayloadSchema.safeParse(maximalPayload("💥")).success).toBe(false);
   });
 });
 

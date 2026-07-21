@@ -155,6 +155,36 @@ describe("stuck-job timeout", () => {
   });
 });
 
+describe("failed background synchronization", () => {
+  it("retries the latest failed key sync after the backoff", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, {
+      id: "failed-sync",
+      op: "sync-keys",
+      status: "failed",
+      created_at: t0 - 2 * 60 * 60 * 1000,
+      updated_at: t0 - 2 * 60 * 60 * 1000,
+    });
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      statsRoute([{ containerId: "container-1", incusStatus: "Running" }]),
+    );
+
+    await reconcile(env, () => t0);
+
+    expect(daemon.submitted).toMatchObject([{ op: "sync-keys", containerId: "container-1" }]);
+    const jobs = await env.DB.prepare(
+      "SELECT status FROM jobs WHERE container_id = 'container-1' ORDER BY rowid",
+    ).all<{ status: string }>();
+    expect(jobs.results.map((job) => job.status)).toEqual(["failed", "running"]);
+  });
+});
+
 describe("grace expiry (suspended + 7 days -> destroy)", () => {
   it("enqueues destroy once the grace period has fully elapsed", async () => {
     const { env } = makeEnv();

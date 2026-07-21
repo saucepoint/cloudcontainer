@@ -29,6 +29,7 @@ import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./
 export const STUCK_JOB_MS = 15 * 60 * 1000;
 export const GRACE_DAYS = 7;
 const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
+const BACKGROUND_RETRY_MS = 60 * 60 * 1000;
 
 type DriftSnapshot = ContainerRow & { lifecycle_version: number };
 
@@ -71,6 +72,7 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
 
   const tasks = [
     ["sweep_jobs", sweepJobs(env, now)],
+    ["retry_background_jobs", retryFailedBackgroundJobs(env, now)],
     ["timeout_jobs", timeoutStuckJobs(env, now)],
     ["github_refresh", refreshGithubTokens(env, now)],
     ["grace_expiry", expireSuspendedContainers(env, now)],
@@ -100,6 +102,45 @@ async function sweepJobs(env: Bindings, now: () => number): Promise<void> {
     .all<JobRow>();
   await runBounded(jobs.results, 5, async (job) => {
     await refreshJob(env, job);
+  });
+}
+
+/** Retry the latest failed desired-state sync with an hourly backoff. */
+async function retryFailedBackgroundJobs(env: Bindings, now: () => number): Promise<void> {
+  const cutoff = now() - BACKGROUND_RETRY_MS;
+  const failed = await env.DB.prepare(
+    `SELECT j.* FROM jobs j
+     JOIN containers c ON c.id = j.container_id
+     WHERE c.status = 'running' AND j.status = 'failed'
+       AND j.op IN ('sync-keys','refresh-credentials')
+       AND j.updated_at <= ?
+       AND j.rowid = (
+         SELECT MAX(newer.rowid) FROM jobs newer
+         WHERE newer.container_id = j.container_id AND newer.op = j.op
+       )
+     LIMIT 20`,
+  )
+    .bind(cutoff)
+    .all<JobRow>();
+  await runBounded(failed.results, 4, async (job) => {
+    const claimed = await env.DB.prepare(
+      `UPDATE jobs SET updated_at = ?
+       WHERE id = ? AND status = 'failed' AND updated_at <= ?
+         AND rowid = (
+           SELECT MAX(newer.rowid) FROM jobs newer
+           WHERE newer.container_id = jobs.container_id AND newer.op = jobs.op
+         )`,
+    )
+      .bind(now(), job.id, cutoff)
+      .run();
+    if (!claimed.meta.changes) return;
+    const container = await env.DB.prepare("SELECT * FROM containers WHERE id = ? AND status = 'running'")
+      .bind(job.container_id)
+      .first<ContainerRow>();
+    if (!container?.host_id) return;
+    const host = await getHost(env, container.host_id);
+    if (!host) return;
+    await enqueueJob(env, job.op, container, host);
   });
 }
 

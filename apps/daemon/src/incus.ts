@@ -50,6 +50,12 @@ interface IncusContainer {
 
 const TENANT_PROCESS_LIMIT = 1024;
 
+function isExplicitNotFound(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message === "not found" ||
+    /Error: (?:Instance|Storage volume).*not found/i.test(error.message);
+}
+
 export class Incus {
   constructor(
     private exec: ExecFn = realExec,
@@ -94,8 +100,9 @@ export class Incus {
     try {
       await this.run(["info", name]);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isExplicitNotFound(error)) return false;
+      throw error;
     }
   }
 
@@ -103,8 +110,9 @@ export class Incus {
     try {
       await this.run(["storage", "volume", "show", pool, volume]);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isExplicitNotFound(error)) return false;
+      throw error;
     }
   }
 

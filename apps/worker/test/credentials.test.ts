@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { encryptJsonAtRest } from "@workbench/contract";
+import { encryptJsonAtRest, INPUT_LIMITS } from "@workbench/contract";
 import {
   buildCredentialPayload,
   decryptLlmKeys,
@@ -28,6 +28,28 @@ describe("upsertCredentials", () => {
     expect(row?.llm_keys).toBeTruthy();
     expect(row?.llm_keys).not.toContain("CANARY-ant-1"); // ciphertext only in D1
     expect(decryptLlmKeys(env, row)).toEqual({ anthropic: "CANARY-ant-1" });
+  });
+
+  it("rejects an aggregate UTF-8 payload overflow before storing anything", async () => {
+    const env = await envWithUser();
+    const token = "💥".repeat(INPUT_LIMITS.tokenBytes / 2);
+    const codex = "💥".repeat(INPUT_LIMITS.codexAuthBytes / 2);
+
+    await expect(upsertCredentials(env, "user-1", {
+      llmKeys: {
+        openai: token,
+        anthropic: token,
+        gemini: token,
+        openrouter: token,
+        opencode_go: token,
+        claude_subscription_token: token,
+        codex_subscription_token: codex,
+        github_copilot: token,
+      },
+      cloudflareToken: "💥".repeat(INPUT_LIMITS.cloudflareTokenBytes / 2),
+      wranglerOauth: token,
+    })).rejects.toThrow("credential payload exceeds the aggregate byte limit");
+    expect(await getCredentialsRow(env, "user-1")).toBeNull();
   });
 
   it("merges new keys and deletes keys set to the empty string", async () => {

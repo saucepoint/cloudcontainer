@@ -6,14 +6,23 @@
  * `refresh-credentials` jobs.
  */
 import { Hono } from "hono";
-import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@workbench/contract";
+import {
+  CredentialPayloadSchema,
+  encryptJsonAtRest,
+  GithubRepoNameSchema,
+  toHex,
+} from "@workbench/contract";
 import {
   CREDENTIALS_LOCKED_ERROR,
   credentialsCanBeChanged,
   requireCredentialSetup,
   requireUser,
 } from "./auth.js";
-import { decryptString, getCredentialsRow } from "./credentials.js";
+import {
+  buildCredentialPayload,
+  decryptString,
+  getCredentialsRow,
+} from "./credentials.js";
 import { enqueueJobForUser } from "./jobs.js";
 import type { AppContext, Bindings } from "./types.js";
 
@@ -202,6 +211,12 @@ export async function storeGithubTokens(
   const key = env.CREDENTIAL_MASTER_KEY;
   const expiresAt = Date.now() + (tokens.expires_in ?? 8 * 3600) * 1000;
   const login = await fetchGithubLogin(tokens.access_token);
+  const existing = buildCredentialPayload(env, await getCredentialsRow(env, userId));
+  CredentialPayloadSchema.parse({
+    ...existing,
+    githubToken: tokens.access_token,
+    ...(login ? { githubLogin: login } : {}),
+  });
   await env.DB.prepare(
     `INSERT INTO credentials_encrypted (user_id, github_token, github_refresh_token, github_expires_at, github_login, rotated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6)

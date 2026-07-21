@@ -644,6 +644,33 @@ describe("resize / destroy", () => {
       provisioner.run({ op: "destroy", jobId: "j", containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
     ).resolves.toBeNull();
   });
+
+  it("fails destroy instead of treating an unavailable Incus service as absent", async () => {
+    const unavailable: ExecFn = async () => {
+      throw new Error("incus service unavailable");
+    };
+    const provisioner = new Provisioner(new Incus(unavailable), makeConfig());
+
+    await expect(provisioner.run({
+      op: "destroy",
+      jobId: "destroy-unavailable",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    })).rejects.toThrow("incus service unavailable");
+  });
+
+  it("fails destroy when the volume probe fails operationally", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      if (args[0] === "info") throw new Error("not found");
+      throw new Error("storage service unavailable");
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "destroy",
+      jobId: "destroy-storage-unavailable",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    })).rejects.toThrow("storage service unavailable");
+  });
 });
 
 describe("job runner", () => {

@@ -88,7 +88,9 @@ export const INPUT_LIMITS = {
   tokenBytes: 16 * 1024,
   codexAuthBytes: 64 * 1024,
   cloudflareTokenBytes: 4096,
-  sealedCredentialBytes: 256 * 1024,
+  credentialPayloadBytes: 256 * 1024,
+  sealedCredentialBytes: 384 * 1024,
+  jobRequestBytes: 1024 * 1024,
   githubReposPerProvision: 20,
 } as const;
 
@@ -126,6 +128,10 @@ export const WranglerOauthSchema = z
   .strict();
 export type WranglerOauth = z.infer<typeof WranglerOauthSchema>;
 
+function jsonUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
@@ -134,7 +140,11 @@ export const CredentialPayloadSchema = z
     githubToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubLogin: z.string().max(256).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (payload) => jsonUtf8Bytes(payload) <= INPUT_LIMITS.credentialPayloadBytes,
+    "credential payload exceeds the aggregate byte limit",
+  );
 export type CredentialPayload = z.infer<typeof CredentialPayloadSchema>;
 
 // ---------------------------------------------------------------------------
@@ -244,7 +254,10 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
     })
     .strict(),
   z.object({ op: z.literal("export-window"), ...base }).strict(),
-]);
+]).refine(
+  (request) => jsonUtf8Bytes(request) <= INPUT_LIMITS.jobRequestBytes,
+  "job request exceeds the aggregate byte limit",
+);
 export type JobRequest = z.infer<typeof JobRequestSchema>;
 
 // ---------------------------------------------------------------------------

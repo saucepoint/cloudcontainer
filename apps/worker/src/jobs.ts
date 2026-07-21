@@ -6,6 +6,7 @@
 import {
   AgentsSchema,
   GithubReposSchema,
+  JobRequestSchema,
   sealJson,
   type Agent,
   type JobRequest,
@@ -207,7 +208,9 @@ export async function enqueueJob(
   try {
     // Inside the try: a request-build failure (e.g. bad host key material)
     // must fail the job like a dispatch failure, not leave it stuck queued.
-    const request = await buildJobRequest(env, op, jobId, container, host);
+    const request = JobRequestSchema.parse(
+      await buildJobRequest(env, op, jobId, container, host),
+    );
     await daemonSubmitJob(env, host, request);
     await env.DB.prepare(
       "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",

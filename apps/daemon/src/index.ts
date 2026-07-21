@@ -3,8 +3,10 @@ import { createServer } from "node:https";
 import { availableParallelism, freemem, loadavg, totalmem, uptime } from "node:os";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   HealthResponseSchema,
+  INPUT_LIMITS,
   JobRequestSchema,
   MemoryNonceStore,
   verifyRequest,
@@ -27,6 +29,11 @@ export function buildApp(opts: {
   const { config, incus, runner } = opts;
   const nonces = new MemoryNonceStore(opts.now);
   const app = new Hono<{ Variables: { rawBody: string } }>();
+
+  app.use("/jobs", bodyLimit({
+    maxSize: INPUT_LIMITS.jobRequestBytes,
+    onError: (context) => context.json({ error: "request body is too large" }, 413),
+  }));
 
   // Every route requires a valid Worker signature (timestamp + nonce + body hash).
   app.use("*", async (c, next) => {
