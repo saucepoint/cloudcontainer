@@ -108,6 +108,7 @@ export class Provisioner {
     name: string,
   ): Promise<ProvisionResult> {
     const { spec, sshKeys, dashboardUrl } = request;
+    this.validateGithubRepositoryTargets(request.githubRepos);
     const credentials = this.credentialInstaller.unseal(request.sealedCredentials);
     const volume = homeVolumeName(request.containerId);
 
@@ -178,6 +179,19 @@ export class Provisioner {
 
   private provisionedCpu(presentedCpu: number): number {
     return Math.max(PROVISIONED_VCPU_FLOOR, presentedCpu);
+  }
+
+  private validateGithubRepositoryTargets(repositories: readonly string[]): void {
+    const destinations = new Set<string>();
+    for (const repository of repositories) {
+      const repo = repository.split("/")[1];
+      if (!repo) throw new Error("invalid GitHub repository name");
+      const destination = repo.toLocaleLowerCase();
+      if (destinations.has(destination)) {
+        throw new Error("selected GitHub repositories must have unique names");
+      }
+      destinations.add(destination);
+    }
   }
 
   /** Clone requested repositories once into ~/repos/repository-name. */
