@@ -19,7 +19,7 @@ import {
 } from "./sessions.js";
 import type { AppContext, Bindings, PasskeyRow, UserRow } from "./types.js";
 
-const RP_NAME = "Workbench";
+const RP_NAME = "usebench.dev";
 const CEREMONY_TTL_SEC = 5 * 60;
 const CEREMONY_COOKIE_PATH = "/auth";
 const AUTH_COOKIE = "cs_passkey_auth";
@@ -182,7 +182,7 @@ async function registrationOptions(
     rpID: rp.rpID,
     userID: fromHex(user.webauthn_user_id),
     userName: `account-${user.id}`,
-    userDisplayName: "Workbench account",
+    userDisplayName: "usebench.dev account",
     attestationType: "none",
     timeout: CEREMONY_TTL_SEC * 1_000,
     excludeCredentials: passkeys.results.map((passkey) => ({

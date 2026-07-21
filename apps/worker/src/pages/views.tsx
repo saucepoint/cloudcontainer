@@ -73,7 +73,7 @@ export const SecurityPage: FC<{
         </span>
       </div>
       <p class="muted">
-        Your fingerprint, face, or device PIN stays on your device. Workbench stores only the public credential needed to verify sign-in.
+        Your fingerprint, face, or device PIN stays on your device. usebench.dev stores only the public credential needed to verify sign-in.
       </p>
       <button id="add-passkey-btn" class="btn" type="button">
         {passkeyCount > 0 ? "Add another passkey" : "Add a passkey"} →
@@ -232,7 +232,7 @@ export const OnboardingPage: FC<{
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
           <p class="muted">
-            Connect GitHub and choose personal or organization repositories. Workbench uses the
+            Connect GitHub and choose personal or organization repositories. usebench.dev uses the
             resulting short-lived access to search, clone into <code>~/repos</code>, and sign in <code>gh</code>.
           </p>
           <div class="row">

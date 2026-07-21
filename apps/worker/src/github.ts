@@ -70,7 +70,7 @@ async function fetchGithubLogin(token: string): Promise<string | null> {
   const res = await fetch("https://api.github.com/user", {
     headers: {
       authorization: `Bearer ${token}`,
-      "user-agent": "workbench",
+      "user-agent": "usebench.dev",
       accept: "application/vnd.github+json",
     },
     signal: AbortSignal.timeout(10_000),
@@ -109,7 +109,7 @@ export async function githubAccessToken(env: Bindings, userId: string): Promise<
 function githubApiHeaders(token: string): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
-    "user-agent": "workbench",
+    "user-agent": "usebench.dev",
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
   };

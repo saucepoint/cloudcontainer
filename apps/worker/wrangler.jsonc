@@ -28,6 +28,12 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  "routes": [
+    {
+      "pattern": "usebench.dev",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     // Public base URL of the deployed dashboard (no trailing slash).
     "BASE_URL": "https://usebench.dev",
@@ -36,7 +42,7 @@
     // GitHub App OAuth client id and public-page slug. GitHub setup is exposed
     // only when both values and GITHUB_APP_CLIENT_SECRET are configured.
     "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c",
-    "GITHUB_APP_SLUG": "workbenchdemo"
+    "GITHUB_APP_SLUG": "usebench-dev"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   CREDENTIAL_MASTER_KEY    — base64 32-byte key (npx tsx scripts/genkeys.ts)

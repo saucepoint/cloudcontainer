@@ -225,7 +225,7 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="theme-color" content="#fbfaf7" />
-      <title>{title ? `${title} — Workbench` : "Workbench"}</title>
+      <title>{title ? `${title} — usebench.dev` : "usebench.dev"}</title>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
     </head>
     <body>
@@ -236,7 +236,7 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
         <div class="wrap">
           <header class="site">
             <a class="logo" href={loggedIn ? "/dashboard" : "/"}>
-              work<span>bench</span>
+              usebench<span>.dev</span>
             </a>
             {loggedIn ? (
               <nav class="row" aria-label="Account" style="margin:0">

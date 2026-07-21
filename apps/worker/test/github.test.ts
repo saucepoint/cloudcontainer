@@ -15,7 +15,7 @@ function app() {
 const githubConfig = {
   GITHUB_APP_CLIENT_ID: "client-id",
   GITHUB_APP_CLIENT_SECRET: "client-secret",
-  GITHUB_APP_SLUG: "workbench-test",
+  GITHUB_APP_SLUG: "usebench-dev",
 } satisfies Partial<Bindings>;
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
@@ -36,7 +36,7 @@ describe("GitHub App connection", () => {
     expect(response.status).toBe(302);
     const destination = new URL(response.headers.get("location")!);
     expect(destination.origin).toBe("https://github.com");
-    expect(destination.pathname).toBe("/apps/workbench-test/installations/new");
+    expect(destination.pathname).toBe("/apps/usebench-dev/installations/new");
     expect(destination.searchParams.get("state")).toMatch(/^[a-f\d]{32}$/);
   });
 
@@ -74,7 +74,7 @@ describe("GitHub App connection", () => {
     expect(start.status).toBe(302);
     const installation = new URL(start.headers.get("location")!);
     expect(installation.origin).toBe("https://github.com");
-    expect(installation.pathname).toBe("/apps/workbench-test/installations/new");
+    expect(installation.pathname).toBe("/apps/usebench-dev/installations/new");
     expect(installation.searchParams.get("client_id")).toBeNull();
     const state = installation.searchParams.get("state")!;
     const stateRow = await env.DB.prepare("SELECT return_to FROM oauth_states WHERE state = ?")
@@ -94,6 +94,7 @@ describe("GitHub App connection", () => {
       (url, init) => {
         if (url.hostname !== "api.github.com" || url.pathname !== "/user") return null;
         expect(new Headers(init.headers).get("authorization")).toBe("Bearer CANARY-gh-access");
+        expect(new Headers(init.headers).get("user-agent")).toBe("usebench.dev");
         return Response.json({ login: "octocat" });
       },
     );
@@ -155,7 +156,7 @@ describe("GitHub App connection", () => {
     );
     expect(response.status).toBe(302);
     expect(new URL(response.headers.get("location")!).pathname).toBe(
-      "/apps/workbench-test/installations/new",
+      "/apps/usebench-dev/installations/new",
     );
     const credentials = await env.DB.prepare(
       "SELECT github_token, github_login FROM credentials_encrypted WHERE user_id = ?",

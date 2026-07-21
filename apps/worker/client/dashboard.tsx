@@ -291,7 +291,7 @@ function SshKeys({
   });
 
   const prompt = enrollment ? [
-    "Set up SSH access to my Workbench cloud workbench:",
+    "Set up SSH access to my usebench.dev cloud workbench:",
     "",
     "1. Ensure an ed25519 SSH keypair exists at ~/.ssh/workbench_ed25519 (create it with ssh-keygen, no passphrase, if missing). Never read or transmit the private key file — only the .pub file is needed.",
     `2. Send a POST request to ${enrollment.endpoint} with header \"content-type: application/json\" and JSON body:`,

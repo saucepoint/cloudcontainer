@@ -44,6 +44,8 @@ describe("compiled page clients", () => {
 describe("landing page call to action", () => {
   it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
+    expect(html).toContain("<title>usebench.dev</title>");
+    expect(html).toContain("usebench.dev");
     expect(html).toContain("A cloud workbench");
     expect(html).toContain("an always-on container for long running coding agents");
     expect(html).toContain("free for each unique person");

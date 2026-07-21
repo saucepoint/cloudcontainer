@@ -346,7 +346,7 @@ describe("github token refresh loop", () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-1",
       GITHUB_APP_CLIENT_SECRET: "shh",
-      GITHUB_APP_SLUG: "workbench-test",
+      GITHUB_APP_SLUG: "usebench-dev",
     });
     await seedUser(env);
     await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });

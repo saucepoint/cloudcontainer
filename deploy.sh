@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release the Workbench control plane from a clean checkout.
+# Release the usebench.dev control plane from a clean checkout.
 #
 # Usage:
 #   ./deploy.sh [--yes] [--dry-run] [--skip-install] [--skip-checks]

@@ -97,7 +97,7 @@ describe("buildJobRequest", () => {
       jobId: "j",
       containerId: "container-1",
       sshKeys: ["ssh-ed25519 AAAA latest"],
-      dashboardUrl: "https://workbench.test",
+      dashboardUrl: "https://usebench.dev",
     });
     if (request.op !== "start" || !request.sealedCredentials) throw new Error("missing snapshot");
     expect(

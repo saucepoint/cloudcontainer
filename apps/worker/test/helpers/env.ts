@@ -115,7 +115,7 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
   const env = {
     DB: new FakeD1(db),
     SESSIONS: kv,
-    BASE_URL: "https://workbench.test",
+    BASE_URL: "https://usebench.dev",
     DEV_AUTH: "0",
     GITHUB_APP_CLIENT_ID: "",
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),

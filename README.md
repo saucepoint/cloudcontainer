@@ -1,6 +1,6 @@
-# Workbench
+# usebench.dev
 
-Workbench provisions a persistent Debian coding environment with Pi, Claude
+usebench.dev provisions a persistent Debian coding environment with Pi, Claude
 Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
@@ -168,10 +168,11 @@ atomically when the account and first passkey are persisted.
 
 For optional GitHub repository access, register a public GitHub App and set all
 of `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `GITHUB_APP_SLUG`.
+The production App is named `usebench.dev` and uses the slug `usebench-dev`.
 The slug is the final path segment of `https://github.com/apps/APP-SLUG`.
 Configure the first callback URL as:
 
-    https://YOUR_BASE_URL/auth/github/callback
+    https://usebench.dev/auth/github/callback
 
 Enable **Request user authorization (OAuth) during installation** and expiring
 user-to-server tokens. Grant **Contents: read-only** repository permission
