@@ -242,23 +242,19 @@ export class Provisioner {
     );
   }
 
-  /** All agents whose binary is installed in the container. */
+  /** Selected agents, with a binary scan fallback for pre-metadata containers. */
   private async agentsOf(name: string): Promise<Agent[]> {
-    try {
-      const { stdout } = await this.incus.shell(
-        name,
-        `if test -s /etc/workbench-agents; then
-           cat /etc/workbench-agents
-         else
-           for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done
-         fi
-         true`,
-      );
-      const found = new Set(stdout.split("\n").map((line) => line.trim()));
-      return AGENTS.filter((agent) => found.has(agent));
-    } catch {
-      return [];
-    }
+    const { stdout } = await this.incus.shell(
+      name,
+      `if test -s /etc/workbench-agents; then
+         cat /etc/workbench-agents
+       else
+         for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done
+       fi
+       true`,
+    );
+    const found = new Set(stdout.split("\n").map((line) => line.trim()));
+    return AGENTS.filter((agent) => found.has(agent));
   }
 
   private async authorizedKeyCount(name: string): Promise<number> {
