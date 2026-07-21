@@ -16,7 +16,7 @@ No route authentication requirements were removed or reordered. The new browser 
 
 ### SQL injection / IDOR
 
-No dynamic SQL fragments were added. New and changed D1 statements are developer-authored constants with bound values. Provisioning and key/account operations continue to derive ownership from the authenticated session rather than caller-supplied user IDs.
+No caller-controlled SQL fragments were added. New and changed D1 statements are developer-authored constants with bound values. Provisioning and key/account operations continue to derive ownership from the authenticated session rather than caller-supplied user IDs. Lifecycle admission verifies the observed container state and active-job set atomically. Terminal transitions, metadata writes, destroy cleanup, drift correction, and capacity release use latest-job/state-gated D1 batches; stale or concurrent actions cannot overwrite state or release accounting twice. Waitlisted account deletion is conditional and returns HTTP 409 if host admission wins the race.
 
 ### Command injection and paths
 

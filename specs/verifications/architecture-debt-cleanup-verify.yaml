@@ -1,6 +1,6 @@
 story_id: architecture-debt-cleanup
 risk: P1
-verified_at: "2026-07-21T21:07:34Z"
+verified_at: "2026-07-21T21:24:33Z"
 verifier: verify-work
 branch: feat/architecture-debt-cleanup
 phases:
@@ -23,7 +23,7 @@ phases:
     passed: true
     command: "npm test"
     files: 24
-    tests: 297
+    tests: 314
   dependency_audit:
     passed: true
     command: "npm audit"
@@ -39,8 +39,8 @@ phases:
   terminal_verdict:
     command: "npm run deploy -- --dry-run --skip-install"
     exit_code: 0
-    captured_at: "2026-07-21T21:07:34Z"
-    note: "Single contiguous run; all type checks and lint passed, followed by 24 test files and 297 tests."
+    captured_at: "2026-07-21T21:24:33Z"
+    note: "Single contiguous run; all type checks and lint passed, followed by 24 test files and 314 tests."
   manual:
     - step: "Compare stylesheet payload before and after extraction"
       expected: "No rendered CSS change"
