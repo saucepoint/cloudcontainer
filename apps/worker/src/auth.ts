@@ -1,5 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono";
-import { hmacNullifier } from "@codestation/contract";
+import { hmacNullifier } from "@workbench/contract";
 import { readJsonBody } from "./http.js";
 import {
   clearSessionCookie,

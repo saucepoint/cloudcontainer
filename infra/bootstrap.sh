@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Codestation host bootstrap (SPEC §10 host lifecycle). Run as root on a fresh
+# Workbench host bootstrap (SPEC §10 host lifecycle). Run as root on a fresh
 # Debian 12/13 machine (Hetzner dedicated or any dev box/VM). Idempotent-ish:
 # safe to re-run after fixing a failure.
 #
@@ -11,7 +11,7 @@
 #   2. Creates a quota-capable storage pool and a restricted tenant project.
 #   3. Applies the nftables baseline: outbound port 25 blocked, per-source
 #      connection-rate limit for IPv4 and IPv6.
-#   4. Installs the daemon under /opt/codestation + systemd unit.
+#   4. Installs the daemon under /opt/workbench + systemd unit.
 #   5. Generates the daemon X25519 keypair and TLS cert; prints the SQL to
 #      register the host row in D1.
 set -euo pipefail
@@ -19,9 +19,9 @@ set -euo pipefail
 HOST_ID="${HOST_ID:-host-$(hostname -s)}"
 DAEMON_PORT="${DAEMON_PORT:-8443}"
 POOL_NAME="${POOL_NAME:-default}"
-PROJECT_NAME="${PROJECT_NAME:-codestation}"
+PROJECT_NAME="${PROJECT_NAME:-workbench}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
-REPO_DIR="${REPO_DIR:-/opt/codestation}"
+REPO_DIR="${REPO_DIR:-/opt/workbench}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"   # >0: create a file-backed zpool of this size (dev boxes)
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}" # dev-only escape hatch; dir cannot enforce quotas
 DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
@@ -54,7 +54,7 @@ if ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
     fi
     incus storage create "$POOL_NAME" zfs size="${ZFS_LOOP_GB}GiB"
   elif command -v zpool >/dev/null && zpool list -H -o name 2>/dev/null | grep -q .; then
-    incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/codestation"
+    incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/workbench"
   elif [[ "$ALLOW_DIR_STORAGE" == "1" ]]; then
     echo "!! creating a development-only dir pool; tenant disk quotas are not enforceable"
     incus storage create "$POOL_NAME" dir
@@ -75,15 +75,15 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/configure-multitenant.sh"
 
 echo "== [3/6] nftables baseline =="
 mkdir -p /etc/nftables.d
-cat >/etc/nftables.d/codestation.nft <<'NFT'
-table inet codestation {
+cat >/etc/nftables.d/workbench.nft <<'NFT'
+table inet workbench {
   chain forward {
     type filter hook forward priority 0; policy accept;
     # No outbound SMTP from tenant containers, ever (spec §10 networking).
     tcp dport 25 drop
     # Blunt scanning/brute-force: cap new outbound connections per source.
-    meta nfproto ipv4 ct state new meter cs-v4-connrate { ip saddr limit rate over 60/second } drop
-    meta nfproto ipv6 ct state new meter cs-v6-connrate { ip6 saddr limit rate over 60/second } drop
+    meta nfproto ipv4 ct state new meter wb-v4-connrate { ip saddr limit rate over 60/second } drop
+    meta nfproto ipv6 ct state new meter wb-v6-connrate { ip6 saddr limit rate over 60/second } drop
   }
 }
 NFT
@@ -93,7 +93,7 @@ systemctl enable --now nftables
 systemctl reload nftables || systemctl restart nftables
 
 echo "== [4/6] daemon install =="
-mkdir -p "$REPO_DIR" /etc/codestation
+mkdir -p "$REPO_DIR" /etc/workbench
 if [[ ! -f "$REPO_DIR/package.json" ]]; then
   echo "!! copy the repo to $REPO_DIR first (rsync -a --exclude node_modules ./ host:$REPO_DIR/) then re-run"
   exit 1
@@ -101,7 +101,7 @@ fi
 (cd "$REPO_DIR" && npm install --omit=dev --workspaces --include-workspace-root >/dev/null)
 
 echo "== [5/6] keys + config =="
-if [[ ! -f /etc/codestation/daemon.json ]]; then
+if [[ ! -f /etc/workbench/daemon.json ]]; then
   WORKER_PUB="${WORKER_RPC_PUBLIC_KEY:-}"
   [[ -n "$WORKER_PUB" ]] || read -rp "WORKER_RPC_PUBLIC_KEY (from scripts/genkeys.ts): " WORKER_PUB
   KEYS_JSON=$(cd "$REPO_DIR" && ./node_modules/.bin/tsx apps/daemon/scripts/genhostkey.ts)
@@ -111,34 +111,34 @@ if [[ ! -f /etc/codestation/daemon.json ]]; then
   # Self-signed TLS for the daemon endpoint; the Worker additionally signs every
   # request, and production should front this with mTLS (Workers mTLS binding).
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-    -keyout /etc/codestation/daemon.key -out /etc/codestation/daemon.crt \
+    -keyout /etc/workbench/daemon.key -out /etc/workbench/daemon.crt \
     -days 1825 -subj "/CN=${HOST_ID}" >/dev/null 2>&1
 
-  cat >/etc/codestation/daemon.json <<EOF
+  cat >/etc/workbench/daemon.json <<EOF
 {
   "hostId": "${HOST_ID}",
   "listenPort": ${DAEMON_PORT},
   "workerRpcPublicKey": "${WORKER_PUB}",
   "x25519PrivateKey": "${X25519_PRIV}",
-  "baseImage": "codestation-base",
+  "baseImage": "workbench-base",
   "storagePool": "${POOL_NAME}",
   "project": "${PROJECT_NAME}",
-  "tlsCertPath": "/etc/codestation/daemon.crt",
-  "tlsKeyPath": "/etc/codestation/daemon.key"
+  "tlsCertPath": "/etc/workbench/daemon.crt",
+  "tlsKeyPath": "/etc/workbench/daemon.key"
 }
 EOF
-  chmod 600 /etc/codestation/daemon.json /etc/codestation/daemon.key
-  echo "$X25519_PUB" > /etc/codestation/daemon.x25519.pub
+  chmod 600 /etc/workbench/daemon.json /etc/workbench/daemon.key
+  echo "$X25519_PUB" > /etc/workbench/daemon.x25519.pub
 fi
 
-cp "$REPO_DIR/apps/daemon/systemd/codestation-daemon.service" /etc/systemd/system/
+cp "$REPO_DIR/apps/daemon/systemd/workbench-daemon.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now codestation-daemon
+systemctl enable --now workbench-daemon
 
 echo "== [6/6] register host =="
 IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-CERT_FP=$(openssl x509 -in /etc/codestation/daemon.crt -noout -fingerprint -sha256 | cut -d= -f2)
-X25519_PUB=$(cat /etc/codestation/daemon.x25519.pub)
+CERT_FP=$(openssl x509 -in /etc/workbench/daemon.crt -noout -fingerprint -sha256 | cut -d= -f2)
+X25519_PUB=$(cat /etc/workbench/daemon.x25519.pub)
 cat <<EOF
 
 ============================================================

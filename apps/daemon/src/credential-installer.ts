@@ -6,7 +6,7 @@ import {
   type Agent,
   type CredentialPayload,
   type LlmProvider,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import { shellQuote, type Incus } from "./incus.js";
 
 /** Environment variables managed for each LLM credential provider. */
@@ -84,7 +84,7 @@ export class CredentialInstaller {
     const codexAuth = llm.codex_subscription_token && sharesCodexAuth
       ? parseCodexAuth(llm.codex_subscription_token)
       : undefined;
-    const lines: string[] = ["# managed by codestation — rewritten on credential changes"];
+    const lines: string[] = ["# managed by workbench — rewritten on credential changes"];
     const add = (envVar: string, value: string | undefined) => {
       if (value) lines.push(`export ${envVar}=${shellQuote(value)}`);
     };
@@ -103,7 +103,7 @@ export class CredentialInstaller {
       await this.incus.shell(name, "chown dev:dev /home/dev/.codex");
     }
 
-    await this.incus.writeFile(name, "/home/dev/.config/codestation/env", lines.join("\n") + "\n", {
+    await this.incus.writeFile(name, "/home/dev/.config/workbench/env", lines.join("\n") + "\n", {
       owner: "dev:dev",
       mode: "0600",
     });
@@ -113,20 +113,20 @@ export class CredentialInstaller {
         "chown -R dev:dev /home/dev/.config",
         `for rc in /home/dev/.profile /home/dev/.zshenv; do
            touch "$rc" && chown dev:dev "$rc"
-           grep -q codestation/env "$rc" || printf '\\n[ -f ~/.config/codestation/env ] && . ~/.config/codestation/env\\n' >> "$rc"
+           grep -q workbench/env "$rc" || printf '\\n[ -f ~/.config/workbench/env ] && . ~/.config/workbench/env\\n' >> "$rc"
          done`,
       ].join(" && "),
     );
 
     if (llm.claude_subscription_token) {
-      const scriptPath = "/home/dev/.config/codestation/claude-state-merge.cjs";
+      const scriptPath = "/home/dev/.config/workbench/claude-state-merge.cjs";
       const script = [
         `const fs = require("fs");`,
         `const file = ${JSON.stringify(CLAUDE_STATE_PATH)};`,
         `let current = {};`,
         `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
         `current.hasCompletedOnboarding = true;`,
-        `const temp = file + ".codestation-" + process.pid;`,
+        `const temp = file + ".workbench-" + process.pid;`,
         `fs.writeFileSync(temp, JSON.stringify(current, null, 2) + "\\n", { mode: 0o600 });`,
         `fs.renameSync(temp, file);`,
         `fs.chmodSync(file, 0o600);`,
@@ -197,7 +197,7 @@ export class CredentialInstaller {
     if (wrangler) {
       const tomlString = (value: string) => JSON.stringify(value);
       const toml = [
-        "# managed by codestation — wrangler rotates these tokens itself",
+        "# managed by workbench — wrangler rotates these tokens itself",
         `oauth_token = ${tomlString(wrangler.oauth_token)}`,
         `refresh_token = ${tomlString(wrangler.refresh_token)}`,
         `expiration_time = ${tomlString(wrangler.expiration_time)}`,
@@ -214,7 +214,7 @@ export class CredentialInstaller {
       const ghHosts = [
         "github.com:",
         `    oauth_token: ${creds.githubToken}`,
-        `    user: ${creds.githubLogin ?? "codestation"}`,
+        `    user: ${creds.githubLogin ?? "workbench"}`,
         "    git_protocol: https",
       ].join("\n");
       await this.incus.writeFile(name, "/home/dev/.config/gh/hosts.yml", ghHosts + "\n", {
@@ -240,7 +240,7 @@ export class CredentialInstaller {
     try {
       const { stdout } = await this.incus.shell(
         name,
-        "grep -o '^export [A-Z_]*' /home/dev/.config/codestation/env 2>/dev/null | awk '{print $2}'; " +
+        "grep -o '^export [A-Z_]*' /home/dev/.config/workbench/env 2>/dev/null | awk '{print $2}'; " +
           "test -f /home/dev/.config/gh/hosts.yml && echo GH_CONNECTED; " +
           `test -f ${CODEX_AUTH_PATH} && echo CODEX_AUTH_JSON; ` +
           `grep -q '"github-copilot"' ${OPENCODE_AUTH_PATH} 2>/dev/null && echo COPILOT_CONNECTED; ` +
@@ -270,7 +270,7 @@ export class CredentialInstaller {
     entries: Record<string, unknown>,
   ): Promise<void> {
     if (Object.keys(entries).length === 0) return;
-    const scriptPath = `/home/dev/.config/codestation/${scriptName}`;
+    const scriptPath = `/home/dev/.config/workbench/${scriptName}`;
     const script = [
       `const fs = require("fs");`,
       `const file = ${JSON.stringify(authPath)};`,

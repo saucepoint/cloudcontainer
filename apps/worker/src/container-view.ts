@@ -1,4 +1,4 @@
-import { ProvisionResultSchema, type JobOp } from "@codestation/contract";
+import { ProvisionResultSchema, type JobOp } from "@workbench/contract";
 import { decryptLlmKeys, getCredentialsRow } from "./credentials.js";
 import { githubConfigured } from "./github.js";
 import {

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the `codestation-base` Incus image (SPEC §10 container): Debian 13 with
+# Build the `workbench-base` Incus image (SPEC §10 container): Debian 13 with
 # the full toolchain, sshd hardened to pubkey-only, non-root `dev` user with
 # passwordless sudo, and system-wide Node 22 so agent installs survive home-
 # volume swaps. Re-run monthly to rebake agent/toolchain versions.
 set -euo pipefail
 
 NAME=cs-image-build
-ALIAS="${ALIAS:-codestation-base}"
+ALIAS="${ALIAS:-workbench-base}"
 BASE="${BASE:-images:debian/13}"
 PROJECT="${PROJECT:-default}"
 
@@ -53,7 +53,7 @@ chmod 440 /etc/sudoers.d/dev
 passwd -l dev
 
 # sshd: pubkey-only (spec §12), no root login
-cat > /etc/ssh/sshd_config.d/codestation.conf <<'SSHD'
+cat > /etc/ssh/sshd_config.d/workbench.conf <<'SSHD'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no

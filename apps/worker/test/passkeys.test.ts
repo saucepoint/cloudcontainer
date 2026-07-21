@@ -24,7 +24,7 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
 
 const mockedRegistration = vi.mocked(verifyRegistrationResponse);
 const mockedAuthentication = vi.mocked(verifyAuthenticationResponse);
-const BASE_URL = "https://codestation.test";
+const BASE_URL = "https://workbench.test";
 
 function app() {
   return new Hono<AppContext>()
@@ -67,7 +67,7 @@ function successfulRegistration(credentialId: string): VerifiedRegistrationRespo
       credentialDeviceType: "multiDevice",
       credentialBackedUp: true,
       origin: BASE_URL,
-      rpID: "codestation.test",
+      rpID: "workbench.test",
     },
   };
 }
@@ -82,7 +82,7 @@ function successfulAuthentication(newCounter = 1): VerifiedAuthenticationRespons
       credentialDeviceType: "multiDevice",
       credentialBackedUp: true,
       origin: BASE_URL,
-      rpID: "codestation.test",
+      rpID: "workbench.test",
     },
   };
 }

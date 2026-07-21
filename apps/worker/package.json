@@ -1,5 +1,5 @@
 {
-  "name": "@codestation/worker",
+  "name": "@workbench/worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@codestation/contract": "*",
+    "@workbench/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
     "@worldcoin/idkit": "^4.2.1",

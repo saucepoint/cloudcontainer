@@ -55,18 +55,18 @@ plan instead.
 3. Copy the repository to the host, apply the tenant policy, and point the
    daemon at the new project.
 
-       rsync -a --exclude node_modules --exclude .git ./ root@HOST:/opt/codestation/
+       rsync -a --exclude node_modules --exclude .git ./ root@HOST:/opt/workbench/
        ssh root@HOST '
-         cd /opt/codestation
+         cd /opt/workbench
          bash infra/configure-multitenant.sh
          umask 077
-         jq ".project = \"codestation\"" /etc/codestation/daemon.json \
-           > /etc/codestation/daemon.json.new
-         chown root:root /etc/codestation/daemon.json.new
-         chmod 0600 /etc/codestation/daemon.json.new
-         mv /etc/codestation/daemon.json.new /etc/codestation/daemon.json
+         jq ".project = \"workbench\"" /etc/workbench/daemon.json \
+           > /etc/workbench/daemon.json.new
+         chown root:root /etc/workbench/daemon.json.new
+         chmod 0600 /etc/workbench/daemon.json.new
+         mv /etc/workbench/daemon.json.new /etc/workbench/daemon.json
          npm ci --omit=dev --workspaces --include-workspace-root
-         systemctl restart codestation-daemon
+         systemctl restart workbench-daemon
          bash infra/audit-multitenant.sh
        '
 
@@ -118,12 +118,12 @@ Cron pass.
 
 Run the host audit before and after the test:
 
-    sudo PROJECT_NAME=codestation bash infra/audit-multitenant.sh
+    sudo PROJECT_NAME=workbench bash infra/audit-multitenant.sh
 
 With at least two running tenants, obtain the second tenant's private IPv4 and
 verify the first cannot reach it directly:
 
-    PROJECT=codestation
+    PROJECT=workbench
     A=FIRST_INCUS_NAME
     B=SECOND_INCUS_NAME
     B_IP=$(incus --project "$PROJECT" query "/1.0/instances/$B/state" |
@@ -159,7 +159,7 @@ allowance.
 3. Confirm the running tenant returns and the stopped tenant stays stopped.
 4. Confirm D1 converges to the same states without changing the stopped tenant
    to running.
-5. Stop `codestation-daemon` for one Cron interval. A new signup must waitlist
+5. Stop `workbench-daemon` for one Cron interval. A new signup must waitlist
    after the first failed heartbeat.
 6. After three failed intervals, confirm the host is `unhealthy`.
 7. Start the daemon. After a valid stats response, confirm the host returns to

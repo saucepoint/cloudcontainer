@@ -1,4 +1,4 @@
-# Codestation host operations runbook
+# Workbench host operations runbook
 
 This runbook covers first-time host bootstrap, safe updates to an existing
 daemon, base-image releases, rollback, reboot verification, and host removal.
@@ -95,13 +95,13 @@ From the repository root:
       --exclude .wrangler \
       --exclude '.dev.vars*' \
       --exclude '.env*' \
-      ./ root@HOST:/opt/codestation/
+      ./ root@HOST:/opt/workbench/
 
 Then:
 
     ssh root@HOST \
       'HOST_ID=HOST_ID WORKER_RPC_PUBLIC_KEY=BASE64_PUBLIC_KEY \
-       bash /opt/codestation/infra/bootstrap.sh'
+       bash /opt/workbench/infra/bootstrap.sh'
 
 For the development loop pool, add ZFS_LOOP_GB=40 to that environment.
 
@@ -114,7 +114,7 @@ Bootstrap:
 - installs Incus, Node.js 22, nftables, and supporting packages;
 - creates or attaches a quota-capable Incus storage pool and refuses a silent
   dir-pool fallback;
-- creates a restricted `codestation` tenant project with aggregate capacity,
+- creates a restricted `workbench` tenant project with aggregate capacity,
   anti-spoofing, east-west isolation, and bandwidth limits;
 - installs the outbound-port-25 and new-connection-rate rules;
 - installs the repository dependencies and daemon systemd unit;
@@ -122,14 +122,14 @@ Bootstrap:
 - creates an initial daemon configuration; and
 - prints a D1 host-registration command.
 
-The generated private key remains in /etc/codestation/daemon.json, mode 0600.
+The generated private key remains in /etc/workbench/daemon.json, mode 0600.
 Back it up only through the host-secret backup process. Never copy it into D1
 or the repository.
 
 Before activating the host, run the read-only policy audit:
 
     ssh root@HOST \
-      'cd /opt/codestation && bash infra/audit-multitenant.sh'
+      'cd /opt/workbench && bash infra/audit-multitenant.sh'
 
 The bootstrap registers a conservative 3:1 vCPU ceiling, 60% of physical RAM,
 and 70% of pool capacity. The actual 1 vCPU/2 GiB tenant count is the minimum
@@ -138,7 +138,7 @@ of CPU, RAM, and 16 GiB root-plus-home disk slots.
 ### 3.3 Build and verify the base image
 
     ssh root@HOST \
-      'bash /opt/codestation/infra/build-image.sh'
+      'bash /opt/workbench/infra/build-image.sh'
 
 The image must contain all base tools and all four agents. Current builds
 resolve the latest npm versions at build time; record the observed versions in
@@ -148,7 +148,7 @@ the release notes. Verify with an ephemeral container:
       set -eu
       incus delete -f cs-image-smoke 2>/dev/null || true
       trap "incus delete -f cs-image-smoke >/dev/null 2>&1 || true" EXIT
-      incus launch codestation-base cs-image-smoke
+      incus launch workbench-base cs-image-smoke
       incus exec cs-image-smoke -- sh -lc "
         id dev
         for tool in ssh git gh python3 uv node rg fd bat jq sqlite3 cmake \
@@ -180,7 +180,7 @@ Obtain a certificate:
 
     certbot certonly --standalone -d DAEMON_HOSTNAME
 
-Set these fields in /etc/codestation/daemon.json:
+Set these fields in /etc/workbench/daemon.json:
 
     "tlsCertPath": "/etc/letsencrypt/live/DAEMON_HOSTNAME/fullchain.pem",
     "tlsKeyPath": "/etc/letsencrypt/live/DAEMON_HOSTNAME/privkey.pem"
@@ -189,10 +189,10 @@ Install a renewal hook:
 
     install -d /etc/letsencrypt/renewal-hooks/deploy
     printf '%s\n' '#!/bin/sh' \
-      'systemctl restart codestation-daemon' \
-      > /etc/letsencrypt/renewal-hooks/deploy/codestation-daemon.sh
-    chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/codestation-daemon.sh
-    systemctl restart codestation-daemon
+      'systemctl restart workbench-daemon' \
+      > /etc/letsencrypt/renewal-hooks/deploy/workbench-daemon.sh
+    chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/workbench-daemon.sh
+    systemctl restart workbench-daemon
 
 Verify the timer and certificate:
 
@@ -301,8 +301,8 @@ The result must be empty. Also inspect the host:
 
     ssh root@HOST '
       set -eu
-      systemctl is-active codestation-daemon
-      incus --project codestation list
+      systemctl is-active workbench-daemon
+      incus --project workbench list
       incus storage info default
       df -h / /opt
     '
@@ -312,7 +312,7 @@ cancel, or mark it complete merely to continue a release.
 
 ### 4.4 Back up the current release
 
-Configuration and host X25519 keys live under /etc/codestation and are not
+Configuration and host X25519 keys live under /etc/workbench and are not
 replaced by this release. Back up source/lockfiles and the unit for rollback:
 
     ssh root@HOST '
@@ -320,11 +320,11 @@ replaced by this release. Back up source/lockfiles and the unit for rollback:
       umask 077
       stamp=$(date -u +%Y%m%dT%H%M%SZ)
       tar --exclude=codestation/node_modules \
-        --exclude="codestation/.dev.vars*" \
-        --exclude="codestation/.env*" \
-        -C /opt -czf "/root/codestation-$stamp.tgz" codestation
-      cp /etc/systemd/system/codestation-daemon.service \
-        "/root/codestation-daemon-$stamp.service"
+        --exclude="workbench/.dev.vars*" \
+        --exclude="workbench/.env*" \
+        -C /opt -czf "/root/workbench-$stamp.tgz" workbench
+      cp /etc/systemd/system/workbench-daemon.service \
+        "/root/workbench-daemon-$stamp.service"
       echo "release backup stamp: $stamp"
     '
 
@@ -341,24 +341,24 @@ node_modules and host-local material are not removed:
       --exclude .wrangler \
       --exclude '.dev.vars*' \
       --exclude '.env*' \
-      ./ root@HOST:/opt/codestation/
+      ./ root@HOST:/opt/workbench/
 
 Install deterministic production dependencies, update the unit, and restart:
 
     ssh root@HOST '
       set -eu
-      cd /opt/codestation
+      cd /opt/workbench
       npm ci --omit=dev --workspaces --include-workspace-root
       install -m 0644 \
-        apps/daemon/systemd/codestation-daemon.service \
-        /etc/systemd/system/codestation-daemon.service
+        apps/daemon/systemd/workbench-daemon.service \
+        /etc/systemd/system/workbench-daemon.service
       systemctl daemon-reload
-      systemctl restart codestation-daemon
-      systemctl is-active --quiet codestation-daemon
-      journalctl -u codestation-daemon -n 30 --no-pager
+      systemctl restart workbench-daemon
+      systemctl is-active --quiet workbench-daemon
+      journalctl -u workbench-daemon -n 30 --no-pager
     '
 
-Do not rotate /etc/codestation/daemon.json or the X25519 key during an ordinary
+Do not rotate /etc/workbench/daemon.json or the X25519 key during an ordinary
 release. Rotation requires updating the host public key in D1 in coordination
 with the daemon.
 
@@ -368,12 +368,12 @@ On the host:
 
     ssh root@HOST '
       set -eu
-      systemctl is-enabled codestation-daemon
-      systemctl is-active codestation-daemon
-      systemctl show codestation-daemon \
+      systemctl is-enabled workbench-daemon
+      systemctl is-active workbench-daemon
+      systemctl show workbench-daemon \
         -p MainPID -p ExecMainStartTimestamp --no-pager
-      journalctl -u codestation-daemon --since "-5 minutes" --no-pager
-      incus --project codestation list
+      journalctl -u workbench-daemon --since "-5 minutes" --no-pager
+      incus --project workbench list
     '
 
 From outside the host, an unsigned health request must reach the daemon and be
@@ -403,18 +403,18 @@ before release:
     ssh root@HOST '
       set -eu
       stamp=BACKUP_STAMP
-      systemctl stop codestation-daemon
-      mv /opt/codestation \
-        "/opt/codestation.failed-$(date -u +%Y%m%dT%H%M%SZ)"
-      tar -C /opt -xzf "/root/codestation-$stamp.tgz"
-      cd /opt/codestation
+      systemctl stop workbench-daemon
+      mv /opt/workbench \
+        "/opt/workbench.failed-$(date -u +%Y%m%dT%H%M%SZ)"
+      tar -C /opt -xzf "/root/workbench-$stamp.tgz"
+      cd /opt/workbench
       npm ci --omit=dev --workspaces --include-workspace-root
-      cp "/root/codestation-daemon-$stamp.service" \
-        /etc/systemd/system/codestation-daemon.service
+      cp "/root/workbench-daemon-$stamp.service" \
+        /etc/systemd/system/workbench-daemon.service
       systemctl daemon-reload
-      systemctl start codestation-daemon
-      systemctl is-active --quiet codestation-daemon
-      journalctl -u codestation-daemon -n 30 --no-pager
+      systemctl start workbench-daemon
+      systemctl is-active --quiet workbench-daemon
+      journalctl -u workbench-daemon -n 30 --no-pager
     '
 
 Repeat the verification in section 4.6. Return the host to active only after
@@ -428,7 +428,7 @@ Worker should surface that job as failed/error and offer the appropriate retry.
 
 ### Rebuild triggers
 
-Rebuild codestation-base when any of these change:
+Rebuild workbench-base when any of these change:
 
 - infra/build-image.sh;
 - Debian base release or security state;
@@ -448,12 +448,12 @@ Drain the host first so provisioning cannot start during the resource-intensive
 build. Record the current image fingerprint:
 
     ssh root@HOST \
-      'incus image info codestation-base | sed -n "1,12p"'
+      'incus image info workbench-base | sed -n "1,12p"'
 
 Then:
 
     ssh root@HOST \
-      'bash /opt/codestation/infra/build-image.sh'
+      'bash /opt/workbench/infra/build-image.sh'
 
 Run the ephemeral image verification from section 3.3. Existing containers are
 not changed by repointing the alias. New provision/rebuild jobs use the new
@@ -464,8 +464,8 @@ restore the alias:
 
     ssh root@HOST '
       set -eu
-      incus image alias delete codestation-base
-      incus image alias create codestation-base PRIOR_FULL_FINGERPRINT
+      incus image alias delete workbench-base
+      incus image alias create workbench-base PRIOR_FULL_FINGERPRINT
     '
 
 Return the host to active after validation.
@@ -493,10 +493,10 @@ enabled under systemd. After a reboot:
 
     ssh root@HOST '
       set -eu
-      systemctl is-active codestation-daemon
+      systemctl is-active workbench-daemon
       systemctl is-active nftables
-      incus --project codestation list
-      nft list table inet codestation
+      incus --project workbench list
+      nft list table inet workbench
       zpool status
       zfs get encryption,keyformat,keylocation
     '
@@ -509,9 +509,9 @@ connection, then allow one Cron interval for D1/Incus state reconciliation.
 
 Useful commands:
 
-    systemctl status codestation-daemon --no-pager
-    journalctl -u codestation-daemon -n 100 --no-pager
-    journalctl -u codestation-daemon --since today --no-pager
+    systemctl status workbench-daemon --no-pager
+    journalctl -u workbench-daemon -n 100 --no-pager
+    journalctl -u workbench-daemon --since today --no-pager
     certbot certificates
     systemctl list-timers certbot.timer
 
@@ -543,7 +543,7 @@ no-backup outcome.
 
 ## 11. Security invariants
 
-- /etc/codestation/daemon.json and its TLS private key are mode 0600.
+- /etc/workbench/daemon.json and its TLS private key are mode 0600.
 - The X25519 private key never leaves the host; only its public half is in D1.
 - The Worker RPC private key never leaves Cloudflare Secrets.
 - Every daemon request requires a valid Ed25519 signature, timestamp, and
@@ -553,7 +553,7 @@ no-backup outcome.
 - Outbound forwarded TCP port 25 is dropped.
 - New outbound IPv4 and IPv6 connections are capped per container source
   address.
-- The daemon operates in the restricted `codestation` project; tenant NICs
+- The daemon operates in the restricted `workbench` project; tenant NICs
   enforce anti-spoofing, east-west isolation, and bandwidth limits.
 - Each tenant has CPU, hard memory, process, root-disk, and home-disk ceilings.
 - Password and root SSH login are disabled in the image.

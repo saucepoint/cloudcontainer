@@ -1,9 +1,9 @@
-import { toHex, utf8 } from "@codestation/contract";
+import { toHex, utf8 } from "@workbench/contract";
 
 const INVITE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const INVITE_LENGTH = 8;
 const UNBIASED_BYTE_LIMIT = Math.floor(256 / INVITE_ALPHABET.length) * INVITE_ALPHABET.length;
-const INVITE_HMAC_DOMAIN = "codestation-invite-v1\0";
+const INVITE_HMAC_DOMAIN = "workbench-invite-v1\0";
 
 export function normalizeInviteCode(value: string): string | null {
   const normalized = value.trim().toUpperCase();

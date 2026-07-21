@@ -22,7 +22,7 @@ describe("loadConfig", () => {
     expect(config).toMatchObject({
       ...required,
       listenPort: 8443,
-      baseImage: "codestation-base",
+      baseImage: "workbench-base",
       storagePool: "default",
       project: "default",
     });

@@ -117,7 +117,7 @@ export class Incus {
       "-c", "security.privileged=false",
       "-c", "security.idmap.isolated=true",
       "-c", "security.nesting=false",
-      "-c", `user.codestation.id=${containerId}`,
+      "-c", `user.workbench.id=${containerId}`,
     ]);
   }
 

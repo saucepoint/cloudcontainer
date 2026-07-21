@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { encryptJsonAtRest } from "@codestation/contract";
+import { encryptJsonAtRest } from "@workbench/contract";
 import { githubConfigured, githubRoutes } from "../src/github.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
@@ -15,7 +15,7 @@ function app() {
 const githubConfig = {
   GITHUB_APP_CLIENT_ID: "client-id",
   GITHUB_APP_CLIENT_SECRET: "client-secret",
-  GITHUB_APP_SLUG: "codestation-test",
+  GITHUB_APP_SLUG: "workbench-test",
 } satisfies Partial<Bindings>;
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
@@ -36,7 +36,7 @@ describe("GitHub App connection", () => {
     expect(response.status).toBe(302);
     const destination = new URL(response.headers.get("location")!);
     expect(destination.origin).toBe("https://github.com");
-    expect(destination.pathname).toBe("/apps/codestation-test/installations/new");
+    expect(destination.pathname).toBe("/apps/workbench-test/installations/new");
     expect(destination.searchParams.get("state")).toMatch(/^[a-f\d]{32}$/);
   });
 
@@ -74,7 +74,7 @@ describe("GitHub App connection", () => {
     expect(start.status).toBe(302);
     const installation = new URL(start.headers.get("location")!);
     expect(installation.origin).toBe("https://github.com");
-    expect(installation.pathname).toBe("/apps/codestation-test/installations/new");
+    expect(installation.pathname).toBe("/apps/workbench-test/installations/new");
     expect(installation.searchParams.get("client_id")).toBeNull();
     const state = installation.searchParams.get("state")!;
     const stateRow = await env.DB.prepare("SELECT return_to FROM oauth_states WHERE state = ?")
@@ -155,7 +155,7 @@ describe("GitHub App connection", () => {
     );
     expect(response.status).toBe(302);
     expect(new URL(response.headers.get("location")!).pathname).toBe(
-      "/apps/codestation-test/installations/new",
+      "/apps/workbench-test/installations/new",
     );
     const credentials = await env.DB.prepare(
       "SELECT github_token, github_login FROM credentials_encrypted WHERE user_id = ?",

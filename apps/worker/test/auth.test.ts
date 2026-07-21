@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { hmacNullifier } from "@codestation/contract";
+import { hmacNullifier } from "@workbench/contract";
 import { authRoutes } from "../src/auth.js";
 import type { AppContext, UserRow } from "../src/types.js";
 import { makeEnv, seedContainer, seedHost, seedUser } from "./helpers/env.js";

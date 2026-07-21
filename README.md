@@ -1,6 +1,6 @@
-# Codestation
+# Workbench
 
-Codestation provisions a persistent Debian coding environment with Pi, Claude
+Workbench provisions a persistent Debian coding environment with Pi, Claude
 Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
@@ -40,7 +40,7 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
-4. The daemon clones codestation-base inside a restricted Incus project,
+4. The daemon clones workbench-base inside a restricted Incus project,
    applies hard CPU/memory/process limits, caps the disposable root disk,
    attaches the separately capped persistent /home/dev volume, configures SSH
    and credentials, and verifies the selected agents.
@@ -53,7 +53,7 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    reconciler.
 6. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
-   public key with a single-use one-hour token, and configures ssh codestation.
+   public key with a single-use one-hour token, and configures ssh workbench.
 
 The dashboard loads container, credential-presence, and SSH-key data with one
 aggregate request. While work is active, it polls only container state: every
@@ -136,7 +136,7 @@ private half remains a Worker secret.
 This is only for a new Cloudflare environment:
 
     cd apps/worker
-    npx wrangler d1 create codestation
+    npx wrangler d1 create workbench
     npx wrangler kv namespace create SESSIONS
 
 Copy the returned IDs into wrangler.jsonc, then:
@@ -240,9 +240,9 @@ restart it while jobs are queued or running.
 
 Verify:
 
-    curl -fsS -o /dev/null https://codestation.saucepoint.workers.dev/
+    curl -fsS -o /dev/null https://usebench.dev/
     cd apps/worker
-    npx wrangler d1 migrations list codestation --remote
+    npx wrangler d1 migrations list workbench --remote
     npx wrangler deployments list
 
 When a Worker-only release fails, find the prior version in the deployment
@@ -260,10 +260,10 @@ See [infra/RUNBOOK.md](./infra/RUNBOOK.md). For a multi-tenant staging rollout,
 also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md). In
 summary:
 
-1. copy the repository to /opt/codestation;
+1. copy the repository to /opt/workbench;
 2. run infra/bootstrap.sh with the host ID and Worker RPC public key;
 3. issue a publicly trusted daemon certificate;
-4. build codestation-base;
+4. build workbench-base;
 5. register the host in D1; and
 6. complete a real provision-to-SSH check.
 

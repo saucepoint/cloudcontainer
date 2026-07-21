@@ -1,5 +1,5 @@
 {
-  "name": "@codestation/daemon",
+  "name": "@workbench/daemon",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@codestation/contract": "*",
+    "@workbench/contract": "*",
     "@hono/node-server": "^1.13.8",
     "hono": "^4.7.4",
     "tsx": "^4.19.3"

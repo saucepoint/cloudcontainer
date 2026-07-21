@@ -10,7 +10,7 @@ import {
   type JobRequest,
   type JobStatusResponse,
   type StatsResponse,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import type { Bindings, HostRow } from "./types.js";
 
 const RPC_TIMEOUT_MS = 15_000;

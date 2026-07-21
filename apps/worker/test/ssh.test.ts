@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INPUT_LIMITS } from "@codestation/contract";
+import { INPUT_LIMITS } from "@workbench/contract";
 import { insertSshKey, validPubkey } from "../src/ssh.js";
 import { makeEnv, seedUser } from "./helpers/env.js";
 

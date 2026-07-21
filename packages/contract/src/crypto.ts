@@ -17,7 +17,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import { hmac } from "@noble/hashes/hmac";
 import { randomBytes } from "@noble/hashes/utils";
 
-const SEALED_INFO = "codestation-sealed-v1";
+const SEALED_INFO = "workbench-sealed-v1";
 const NONCE_LEN = 24;
 
 // -- encoding helpers --------------------------------------------------------

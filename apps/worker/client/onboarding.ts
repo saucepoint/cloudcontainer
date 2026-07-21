@@ -1,4 +1,4 @@
-import { INPUT_LIMITS, LLM_PROVIDERS, OAUTH_ONLY_LLM_PROVIDERS } from "@codestation/contract";
+import { INPUT_LIMITS, LLM_PROVIDERS, OAUTH_ONLY_LLM_PROVIDERS } from "@workbench/contract";
 import {
   claudeOauthFlow,
   codexDeviceFlow,
@@ -99,7 +99,7 @@ wireSignin("wrangler", wranglerOauthFlow);
 
 const githubConnect = element<HTMLAnchorElement>("github-connect");
 if (githubConnect) {
-  const agentSelectionKey = "codestation-github-agents";
+  const agentSelectionKey = "workbench-github-agents";
   try {
     const saved: unknown = JSON.parse(sessionStorage.getItem(agentSelectionKey) || "[]");
     const selected = new Set(

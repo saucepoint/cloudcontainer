@@ -78,7 +78,7 @@ describe("World ID v4 session integration", () => {
     await expect(verifyWorldIdSession(makeEnv().env, {
       ...sessionProof,
       session_id: undefined,
-      action: "codestation-login",
+      action: "workbench-login",
     })).rejects.toThrow("not a session proof");
     await expect(verifyWorldIdSession(makeEnv({ WORLD_ID_ENVIRONMENT: "staging" }).env, sessionProof))
       .rejects.toThrow("wrong environment");

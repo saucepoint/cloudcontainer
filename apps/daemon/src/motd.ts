@@ -1,4 +1,4 @@
-import { AGENT_LABELS, type Agent, type CredentialPayload } from "@codestation/contract";
+import { AGENT_LABELS, type Agent, type CredentialPayload } from "@workbench/contract";
 import { AGENT_BINARIES } from "./agents.js";
 
 /**
@@ -23,7 +23,7 @@ export function renderMotd(opts: {
   const mark = (ok: boolean) => (ok ? "[x]" : "[ ]");
   const lines = [
     "",
-    "  codestation — your cloud container",
+    "  workbench — your cloud container",
     "  ----------------------------------",
     `  agents: ${agentList}`,
     "",

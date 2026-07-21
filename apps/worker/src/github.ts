@@ -6,7 +6,7 @@
  * `refresh-credentials` jobs.
  */
 import { Hono } from "hono";
-import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@codestation/contract";
+import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@workbench/contract";
 import {
   CREDENTIALS_LOCKED_ERROR,
   credentialsCanBeChanged,
@@ -70,7 +70,7 @@ async function fetchGithubLogin(token: string): Promise<string | null> {
   const res = await fetch("https://api.github.com/user", {
     headers: {
       authorization: `Bearer ${token}`,
-      "user-agent": "codestation",
+      "user-agent": "workbench",
       accept: "application/vnd.github+json",
     },
     signal: AbortSignal.timeout(10_000),
@@ -109,7 +109,7 @@ export async function githubAccessToken(env: Bindings, userId: string): Promise<
 function githubApiHeaders(token: string): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
-    "user-agent": "codestation",
+    "user-agent": "workbench",
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
   };

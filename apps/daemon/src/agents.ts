@@ -1,4 +1,4 @@
-import type { Agent } from "@codestation/contract";
+import type { Agent } from "@workbench/contract";
 
 /**
  * Per-agent install shims (§9): each returns an idempotent root shell script

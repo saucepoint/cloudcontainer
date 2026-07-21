@@ -3,7 +3,7 @@ import {
   generateX25519Keypair,
   sealOpenJson,
   type CredentialPayload,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import { upsertCredentials } from "../src/credentials.js";
 import { HOST_HEARTBEAT_MAX_AGE_MS, pickHost } from "../src/capacity.js";
 import {
@@ -97,7 +97,7 @@ describe("buildJobRequest", () => {
       jobId: "j",
       containerId: "container-1",
       sshKeys: ["ssh-ed25519 AAAA latest"],
-      dashboardUrl: "https://codestation.test",
+      dashboardUrl: "https://workbench.test",
     });
     if (request.op !== "start" || !request.sealedCredentials) throw new Error("missing snapshot");
     expect(

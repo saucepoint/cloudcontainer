@@ -1,5 +1,5 @@
 {
-  "name": "codestation",
+  "name": "workbench",
   "private": true,
   "workspaces": [
     "packages/*",

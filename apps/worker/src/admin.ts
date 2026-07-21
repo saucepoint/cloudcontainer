@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { AppContext, Bindings } from "./types.js";
-import { utf8 } from "@codestation/contract";
+import { utf8 } from "@workbench/contract";
 import { hashInviteCode, randomInviteCode } from "./invites.js";
 
 async function secretMatches(provided: string, expected: string): Promise<boolean> {

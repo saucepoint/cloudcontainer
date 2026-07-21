@@ -92,9 +92,9 @@ describe("World ID v4 wiring", () => {
 describe("landing page call to action", () => {
   it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
-    expect(html).toContain("A cloud workbench for command-line agents");
-    expect(html).toContain("An always-on workbench for coding and long running jobs. Access from any terminal client on any device.");
-    expect(html).toContain("Free for each unique person");
+    expect(html).toContain("A cloud workbench");
+    expect(html).toContain("an always-on container for long running coding agents");
+    expect(html).toContain("free for each unique person");
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
@@ -240,7 +240,7 @@ describe("onboarding wizard order", () => {
 
   it("uses workbench terminology for the immutable setup warning", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("Configure your workbench with agents, models, and credentials.");
+    expect(html).toContain("Set up a workbench.");
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
   });
 });

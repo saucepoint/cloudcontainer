@@ -1,4 +1,4 @@
-import type { ContainerStatus, JobOp } from "@codestation/contract";
+import type { ContainerStatus, JobOp } from "@workbench/contract";
 
 /**
  * Ops whose failure drops the container into `error` (the container's fate is

@@ -100,7 +100,7 @@ export async function verifyWorldIdSession(
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        "user-agent": "codestation-world-id/2.0",
+        "user-agent": "workbench-world-id/2.0",
       },
       body: JSON.stringify(proof.payload),
     });

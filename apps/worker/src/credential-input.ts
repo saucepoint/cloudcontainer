@@ -4,7 +4,7 @@ import {
   LLM_PROVIDERS,
   OAUTH_ONLY_LLM_PROVIDERS,
   type LlmProvider,
-} from "@codestation/contract";
+} from "@workbench/contract";
 
 const OAUTH_ONLY_PROVIDER_SET: ReadonlySet<LlmProvider> = new Set(OAUTH_ONLY_LLM_PROVIDERS);
 

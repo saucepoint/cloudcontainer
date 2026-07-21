@@ -1,4 +1,4 @@
-import { TIERS, type Agent } from "@codestation/contract";
+import { TIERS, type Agent } from "@workbench/contract";
 import { allocatePort } from "./ports.js";
 import {
   diskReservationGb,

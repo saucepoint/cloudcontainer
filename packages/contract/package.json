@@ -1,5 +1,5 @@
 {
-  "name": "@codestation/contract",
+  "name": "@workbench/contract",
   "version": "0.1.0",
   "private": true,
   "type": "module",

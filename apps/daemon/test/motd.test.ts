@@ -5,7 +5,7 @@ const base = {
   agents: ["claude" as const],
   credentials: {},
   sshKeyCount: 0,
-  dashboardUrl: "https://codestation.example",
+  dashboardUrl: "https://workbench.example",
 };
 
 describe("renderMotd (first-login checklist, §5.4)", () => {
@@ -15,7 +15,7 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
     expect(motd).toContain("[ ] github — configure manually in this terminal");
     expect(motd).toContain("[ ] cloudflare — configure manually in this terminal");
     expect(motd).toContain("[ ] ssh keys (0)");
-    expect(motd).toContain("https://codestation.example");
+    expect(motd).toContain("https://workbench.example");
     expect(motd).toContain("dashboard credentials are setup-only");
   });
 

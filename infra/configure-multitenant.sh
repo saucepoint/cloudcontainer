@@ -6,7 +6,7 @@
 set -euo pipefail
 
 POOL_NAME="${POOL_NAME:-default}"
-PROJECT_NAME="${PROJECT_NAME:-codestation}"
+PROJECT_NAME="${PROJECT_NAME:-workbench}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
@@ -48,7 +48,7 @@ if ! modprobe br_netfilter; then
   exit 1
 fi
 install -d -m 0755 /etc/modules-load.d
-printf '%s\n' br_netfilter > /etc/modules-load.d/codestation.conf
+printf '%s\n' br_netfilter > /etc/modules-load.d/workbench.conf
 
 # Keep the default project usable for image builds, but tenant instances are
 # created only in the restricted project below.
@@ -167,7 +167,7 @@ incus --project "$PROJECT_NAME" profile device set default eth0 limits.max="$TEN
 # Prevent unprivileged tenants from enumerating host scheduler/cgroup names or
 # slab internals. tmpfiles reapplies these virtual-filesystem modes on boot.
 install -d -m 0755 /etc/tmpfiles.d
-cat >/etc/tmpfiles.d/codestation.conf <<'EOF'
+cat >/etc/tmpfiles.d/workbench.conf <<'EOF'
 z /proc/sched_debug 0400 root root -
 z /sys/kernel/slab 0700 root root -
 EOF
