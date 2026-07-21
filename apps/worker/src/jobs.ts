@@ -11,16 +11,15 @@ import {
   type JobRequest,
   type ProvisionResult,
 } from "@workbench/contract";
-import { diskReservationGb } from "./capacity.js";
 import { daemonJobStatus, daemonSubmitJob } from "./daemon.js";
 import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";
 import { LIFECYCLE_OPS, pendingStatusFor, successStatusFor } from "./state.js";
 import type { Bindings, ContainerRow, HostRow, JobRow } from "./types.js";
 
-export class ActiveLifecycleJobError extends Error {
+export class LifecycleJobConflictError extends Error {
   constructor() {
-    super("lifecycle operation already in progress");
-    this.name = "ActiveLifecycleJobError";
+    super("container state changed or lifecycle operation already in progress");
+    this.name = "LifecycleJobConflictError";
   }
 }
 
@@ -43,7 +42,21 @@ export async function getJob(env: Bindings, jobId: string): Promise<JobRow | nul
 
 export async function latestJob(env: Bindings, containerId: string): Promise<JobRow | null> {
   return env.DB.prepare(
-    "SELECT * FROM jobs WHERE container_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    "SELECT * FROM jobs WHERE container_id = ? ORDER BY rowid DESC LIMIT 1",
+  )
+    .bind(containerId)
+    .first<JobRow>();
+}
+
+export async function latestLifecycleJob(
+  env: Bindings,
+  containerId: string,
+): Promise<JobRow | null> {
+  return env.DB.prepare(
+    `SELECT * FROM jobs
+     WHERE container_id = ?
+       AND op IN ('provision','rebuild','start','stop','destroy','resize')
+     ORDER BY rowid DESC LIMIT 1`,
   )
     .bind(containerId)
     .first<JobRow>();
@@ -157,26 +170,37 @@ export async function enqueueJob(
 ): Promise<JobRow> {
   const jobId = crypto.randomUUID();
   const now = Date.now();
-  const insertion = LIFECYCLE_OPS.has(op)
-    ? env.DB.prepare(
-      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
-       SELECT ?, ?, ?, 'queued', ?, ?
-       WHERE NOT EXISTS (
-         SELECT 1 FROM jobs
-         WHERE container_id = ? AND status IN ('queued','running')
-           AND op IN ('provision','rebuild','start','stop','destroy','resize')
-       )`,
-    ).bind(jobId, container.id, op, now, now, container.id)
-    : env.DB.prepare(
-      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
-    ).bind(jobId, container.id, op, now, now);
-  const inserted = await insertion.run();
-  if (!inserted.meta.changes) throw new ActiveLifecycleJobError();
-
   const pending = pendingStatusFor(op);
-  if (pending) {
-    await env.DB.prepare("UPDATE containers SET status = ?, status_detail = NULL WHERE id = ?")
-      .bind(pending, container.id)
+  let inserted: { meta: { changes?: number } };
+  if (LIFECYCLE_OPS.has(op)) {
+    const insertion = env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       SELECT ?, c.id, ?, 'queued', ?, ? FROM containers c
+       WHERE c.id = ? AND c.status = ? AND c.host_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs
+           WHERE container_id = c.id AND status IN ('queued','running')
+             AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         )`,
+    ).bind(jobId, op, now, now, container.id, container.status, host.id);
+    if (pending) {
+      const results = (await env.DB.batch([
+        insertion,
+        env.DB.prepare(
+          `UPDATE containers SET status = ?, status_detail = NULL
+           WHERE id = ? AND status = ? AND host_id = ? AND changes() = 1`,
+        ).bind(pending, container.id, container.status, host.id),
+      ])) as Array<{ meta: { changes?: number } }>;
+      inserted = results[0] ?? { meta: {} };
+    } else {
+      inserted = await insertion.run();
+    }
+    if (!inserted.meta.changes) throw new LifecycleJobConflictError();
+  } else {
+    inserted = await env.DB.prepare(
+      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+    )
+      .bind(jobId, container.id, op, now, now)
       .run();
   }
 
@@ -235,45 +259,69 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
          SELECT id FROM jobs
          WHERE container_id = ?
            AND op IN ('provision','rebuild','start','stop','destroy','resize')
-         ORDER BY created_at DESC, rowid DESC LIMIT 1
+         ORDER BY rowid DESC LIMIT 1
        )`,
     ).bind(error, job.container_id, job.id, job.container_id),
   ]);
 }
 
-/** Destroy succeeded: free port + host accounting, drop the container row. */
-async function finalizeDestroy(env: Bindings, container: ContainerRow): Promise<void> {
-  const statements = [];
-  if (container.host_id && container.ssh_port) {
-    statements.push(
-      env.DB.prepare(
-        "INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
-      ).bind(container.host_id, container.ssh_port, Date.now()),
-    );
-  }
-  if (container.host_id) {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE hosts
-         SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
-             ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
-             disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
-         WHERE id = ?`,
-      ).bind(
-        container.cpu,
-        container.ram_mb,
-        diskReservationGb(container.disk_gb),
-        container.host_id,
-      ),
-    );
-  }
-  statements.push(
-    env.DB.prepare("DELETE FROM waitlist WHERE user_id = ?").bind(container.user_id),
-  );
-  statements.push(env.DB.prepare("DELETE FROM containers WHERE id = ?").bind(container.id));
-  // D1 batch executes atomically: port quarantine, accounting, and row removal
-  // cannot be partially applied.
-  await env.DB.batch(statements);
+/** Atomically claim destroy success, release accounting, and remove the row. */
+async function finalizeDestroy(
+  env: Bindings,
+  job: JobRow,
+  container: ContainerRow,
+  completedAt: number,
+): Promise<boolean> {
+  const latestActiveDestroy = `EXISTS (
+    SELECT 1 FROM jobs j
+    WHERE j.id = ? AND j.container_id = ? AND j.op = 'destroy'
+      AND j.status IN ('queued','running')
+      AND j.rowid = (
+        SELECT MAX(rowid) FROM jobs
+        WHERE container_id = ?
+          AND op IN ('provision','rebuild','start','stop','destroy','resize')
+      )
+  )`;
+  const gate = [job.id, container.id, container.id] as const;
+  const results = (await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at)
+       SELECT host_id, ssh_port, ? FROM containers
+       WHERE id = ? AND host_id IS NOT NULL AND ssh_port IS NOT NULL
+         AND ${latestActiveDestroy}`,
+    ).bind(completedAt, container.id, ...gate),
+    env.DB.prepare(
+      `UPDATE hosts
+       SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
+           ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
+           disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
+       WHERE id = ? AND EXISTS (SELECT 1 FROM containers WHERE id = ?)
+         AND ${latestActiveDestroy}`,
+    ).bind(
+      container.cpu,
+      container.ram_mb,
+      container.disk_gb * 2,
+      container.host_id,
+      container.id,
+      ...gate,
+    ),
+    env.DB.prepare(
+      `DELETE FROM waitlist WHERE user_id = ? AND ${latestActiveDestroy}`,
+    ).bind(container.user_id, ...gate),
+    env.DB.prepare(
+      `DELETE FROM containers WHERE id = ? AND ${latestActiveDestroy}`,
+    ).bind(container.id, ...gate),
+    env.DB.prepare(
+      `UPDATE jobs SET status = 'succeeded', updated_at = ?
+       WHERE id = ? AND status IN ('queued','running') AND ? = (
+         SELECT id FROM jobs
+         WHERE container_id = ?
+           AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         ORDER BY rowid DESC LIMIT 1
+       )`,
+    ).bind(completedAt, job.id, job.id, container.id),
+  ])) as Array<{ meta: { changes?: number } }>;
+  return Boolean(results.at(-1)?.meta.changes);
 }
 
 /**
@@ -305,45 +353,61 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
 
   if (status.status === "succeeded") {
     // Dashboard polling and the cron reconciler may observe the same terminal
-    // result concurrently. For state-changing jobs, claiming the result and
-    // changing container state share one transaction so another lifecycle
-    // request cannot enter between those writes.
+    // result concurrently. Claiming a state-changing result and all of its D1
+    // side effects share one transaction.
     const completedAt = Date.now();
-    const next = successStatusFor(job.op);
-    let claimed: { meta: { changes?: number } };
-    if (next) {
-      const results = (await env.DB.batch([
-        env.DB.prepare(
-          "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
-        ).bind(completedAt, job.id),
-        env.DB.prepare(
-          `UPDATE containers SET status = ?, status_detail = NULL
-           WHERE id = ? AND changes() = 1 AND ? = (
-             SELECT id FROM jobs
-             WHERE container_id = ?
-               AND op IN ('provision','rebuild','start','stop','destroy','resize')
-             ORDER BY created_at DESC, rowid DESC LIMIT 1
-           )`,
-        ).bind(next, container.id, job.id, container.id),
-      ])) as Array<{ meta: { changes?: number } }>;
-      claimed = results[0] ?? { meta: {} };
-    } else {
-      claimed = await env.DB.prepare(
-        "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
-      )
-        .bind(completedAt, job.id)
-        .run();
-    }
-    if (!claimed.meta.changes) return (await getJob(env, job.id)) ?? job;
     if (job.op === "destroy") {
-      await finalizeDestroy(env, container);
+      const finalized = await finalizeDestroy(env, job, container, completedAt);
+      if (!finalized) return (await getJob(env, job.id)) ?? job;
     } else {
-      const result = status.result as ProvisionResult | null;
-      if (result?.hostKeyFingerprints?.length) {
-        await env.DB.prepare("UPDATE containers SET host_key_fingerprints = ? WHERE id = ?")
-          .bind(JSON.stringify(result.hostKeyFingerprints), container.id)
+      const next = successStatusFor(job.op);
+      let claimed: { meta: { changes?: number } };
+      if (next) {
+        const statements = [
+          env.DB.prepare(
+            "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+          ).bind(completedAt, job.id),
+          env.DB.prepare(
+            `UPDATE containers SET status = ?, status_detail = NULL
+             WHERE id = ? AND changes() = 1 AND ? = (
+               SELECT id FROM jobs
+               WHERE container_id = ?
+                 AND op IN ('provision','rebuild','start','stop','destroy','resize')
+               ORDER BY rowid DESC LIMIT 1
+             )`,
+          ).bind(next, container.id, job.id, container.id),
+        ];
+        const result = status.result as ProvisionResult | null;
+        if (result?.hostKeyFingerprints?.length) {
+          statements.push(
+            env.DB.prepare(
+              `UPDATE containers SET host_key_fingerprints = ?
+               WHERE id = ? AND changes() = 1 AND ? = (
+                 SELECT id FROM jobs
+                 WHERE container_id = ?
+                   AND op IN ('provision','rebuild','start','stop','destroy','resize')
+                 ORDER BY rowid DESC LIMIT 1
+               )`,
+            ).bind(
+              JSON.stringify(result.hostKeyFingerprints),
+              container.id,
+              job.id,
+              container.id,
+            ),
+          );
+        }
+        const results = (await env.DB.batch(statements)) as Array<{
+          meta: { changes?: number };
+        }>;
+        claimed = results[0] ?? { meta: {} };
+      } else {
+        claimed = await env.DB.prepare(
+          "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+        )
+          .bind(completedAt, job.id)
           .run();
       }
+      if (!claimed.meta.changes) return (await getJob(env, job.id)) ?? job;
     }
   } else if (status.status === "failed") {
     await failJob(env, job, status.error ?? "job failed on host");

@@ -20,12 +20,13 @@ import {
   verifyGithubRepositories,
 } from "./github.js";
 import {
-  ActiveLifecycleJobError,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
   getHost,
   latestJob,
+  latestLifecycleJob,
+  LifecycleJobConflictError,
 } from "./jobs.js";
 import { startProvision } from "./placement.js";
 import { readJsonBody } from "./http.js";
@@ -159,13 +160,13 @@ export const apiRoutes = new Hono<AppContext>()
       if (!container.host_id) return c.json({ error: "no host assigned" }, 409);
       const host = await getHost(c.env, container.host_id);
       if (!host) return c.json({ error: "host unavailable" }, 503);
-      const failed = await latestJob(c.env, container.id);
-      const retryOp: JobOp = failed && failed.status === "failed" ? failed.op : "provision";
+      const failed = await latestLifecycleJob(c.env, container.id);
+      const retryOp: JobOp = failed?.status === "failed" ? failed.op : "provision";
       try {
         const job = await enqueueJob(c.env, retryOp, container, host);
         return c.json({ job: { id: job.id, status: job.status } }, 202);
       } catch (error) {
-        if (error instanceof ActiveLifecycleJobError) {
+        if (error instanceof LifecycleJobConflictError) {
           return c.json({ error: error.message }, 409);
         }
         throw error;
@@ -184,7 +185,7 @@ export const apiRoutes = new Hono<AppContext>()
       const job = await enqueueJob(c.env, op as JobOp, container, host);
       return c.json({ job: { id: job.id, status: job.status } }, 202);
     } catch (error) {
-      if (error instanceof ActiveLifecycleJobError) {
+      if (error instanceof LifecycleJobConflictError) {
         return c.json({ error: error.message }, 409);
       }
       throw error;
@@ -324,8 +325,17 @@ export const apiRoutes = new Hono<AppContext>()
       return c.json({ error: "destroy your workbench before deleting your account" }, 409);
     }
     if (container) {
-      // Waitlisted row with no host — nothing exists on a host, safe to drop.
-      await c.env.DB.prepare("DELETE FROM containers WHERE id = ?").bind(container.id).run();
+      // Admission and this conditional delete are serialized D1 writes. If
+      // admission assigned a host after our read, preserve the row and require
+      // the user to destroy it normally.
+      const deleted = await c.env.DB.prepare(
+        "DELETE FROM containers WHERE id = ? AND host_id IS NULL AND status = 'waitlisted'",
+      )
+        .bind(container.id)
+        .run();
+      if (!deleted.meta.changes) {
+        return c.json({ error: "destroy your workbench before deleting your account" }, 409);
+      }
     }
     // Purge credentials and SSH keys; the user row goes last and cascades to
     // passkeys, external identities, and outstanding auth challenges. Banned

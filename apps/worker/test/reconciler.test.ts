@@ -237,6 +237,63 @@ describe("waitlist admission", () => {
     ]);
   });
 
+  it("admits on another eligible host when the preferred host has no SSH ports", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, {
+      id: "ports-full",
+      ram_total_mb: 65536,
+      ram_reserve_mb: 8192,
+      daemon_endpoint: "https://ports-full.test:8443",
+      daemon_pubkey: generateX25519Keypair().publicKey,
+    });
+    await seedHost(env, {
+      id: "ports-free",
+      ram_total_mb: 32768,
+      ram_reserve_mb: 8192,
+      daemon_endpoint: "https://ports-free.test:8443",
+      daemon_pubkey: generateX25519Keypair().publicKey,
+    });
+    await seedContainer(env, {
+      user_id: user.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1000)",
+    ).run();
+    await env.DB.prepare(
+      `WITH RECURSIVE ports(port) AS (
+         VALUES(30000) UNION ALL SELECT port + 1 FROM ports WHERE port < 39999
+       )
+       INSERT INTO port_quarantine (host_id, port, released_at)
+       SELECT 'ports-full', port, ? FROM ports`,
+    )
+      .bind(Date.now())
+      .run();
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      (url) => url.pathname === "/stats"
+        ? Response.json({
+            hostId: url.hostname.replace(".test", ""),
+            containers: [],
+            ramTotalMb: 65536,
+            uptimeSec: 100,
+          })
+        : null,
+    );
+
+    await reconcile(env, Date.now);
+
+    const container = await env.DB.prepare(
+      "SELECT host_id, status FROM containers WHERE id = 'container-1'",
+    ).first<{ host_id: string; status: string }>();
+    expect(container).toEqual({ host_id: "ports-free", status: "provisioning" });
+    expect(daemon.submitted).toHaveLength(1);
+  });
+
   it("marks an admitted container as error when its provision job cannot be queued", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -343,6 +400,21 @@ describe("drift correction (D1 <-> incus)", () => {
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
     expect(host).toEqual({ vcpu_allocated: 0, ram_allocated_mb: 0, disk_allocated_gb: 0 });
+  });
+
+  it("releases missing-container capacity only once across overlapping reconciliations", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+
+    await Promise.all([reconcile(env, Date.now), reconcile(env, Date.now)]);
+
+    const host = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
   it("frees capacity when a stopped container is missing from the host", async () => {

@@ -22,7 +22,7 @@ import {
   getHost,
   refreshJob,
 } from "./jobs.js";
-import { allocatePort } from "./ports.js";
+import { allocatePort, NoFreePortsError } from "./ports.js";
 import { LIFECYCLE_OPS } from "./state.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
@@ -124,7 +124,7 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
              SELECT id FROM jobs
              WHERE container_id = ?
                AND op IN ('provision','rebuild','start','stop','destroy','resize')
-             ORDER BY created_at DESC, rowid DESC LIMIT 1
+             ORDER BY rowid DESC LIMIT 1
            )`,
         ).bind(job.container_id, job.id, job.container_id),
       ])) as Array<{ meta: { changes?: number } }>;
@@ -148,25 +148,37 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
   ).all<ContainerRow>();
 
   for (const container of waiting.results) {
-    const host = await pickHost(
-      env,
-      container.cpu,
-      container.ram_mb,
-      diskReservationGb(container.disk_gb),
-      now,
-    );
-    if (!host) break;
-    const admitted = await placeWaitlistedContainer(env, container, host, now());
-    if (!admitted) continue;
-    try {
-      await enqueueJob(env, "provision", admitted, host);
-    } catch (error) {
-      await env.DB.prepare(
-        "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
-      )
-        .bind(admitted.id)
-        .run();
-      throw error;
+    const hostsWithoutPorts: string[] = [];
+    while (true) {
+      const host = await pickHost(
+        env,
+        container.cpu,
+        container.ram_mb,
+        diskReservationGb(container.disk_gb),
+        now,
+        hostsWithoutPorts,
+      );
+      if (!host) return;
+      let admitted: ContainerRow | null;
+      try {
+        admitted = await placeWaitlistedContainer(env, container, host, now());
+      } catch (error) {
+        if (!(error instanceof NoFreePortsError)) throw error;
+        hostsWithoutPorts.push(host.id);
+        continue;
+      }
+      if (!admitted) break;
+      try {
+        await enqueueJob(env, "provision", admitted, host);
+      } catch (error) {
+        await env.DB.prepare(
+          "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
+        )
+          .bind(admitted.id)
+          .run();
+        throw error;
+      }
+      break;
     }
   }
 }
@@ -324,35 +336,35 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
         // the user can destroy or retry. provisioning/error rows may legitimately
         // not have an incus container yet (job in flight / failed provision).
         if (row.status === "running" || row.status === "stopped") {
-          // Guard: skip if a lifecycle job is still active for this container
-          // (e.g. destroy is in flight, daemon hasn't removed it yet).
-          const activeJob = await env.DB.prepare(
-            "SELECT 1 FROM jobs WHERE container_id = ? AND status IN ('queued','running') LIMIT 1",
-          )
-            .bind(row.id)
-            .first();
-          if (activeJob) continue;
-
-          await env.DB.batch([
+          const results = (await env.DB.batch([
             env.DB.prepare(
-              "UPDATE containers SET status = 'error', status_detail = 'container missing on host' WHERE id = ?",
-            ).bind(row.id),
+              `UPDATE containers
+               SET status = 'error', status_detail = 'container missing on host'
+               WHERE id = ? AND host_id = ? AND status = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM jobs
+                   WHERE container_id = ? AND status IN ('queued','running')
+                     AND op IN ('provision','rebuild','start','stop','destroy','resize')
+                 )`,
+            ).bind(row.id, host.id, row.status, row.id),
             env.DB.prepare(
               `UPDATE hosts
                SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
                    ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
                    disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
-               WHERE id = ?`,
+               WHERE id = ? AND changes() = 1`,
             ).bind(row.cpu, row.ram_mb, diskReservationGb(row.disk_gb), host.id),
-          ]);
-          console.error(
-            JSON.stringify({
-              event: "container_missing_on_host",
-              containerId: row.id,
-              hostId: host.id,
-              previousStatus: row.status,
-            }),
-          );
+          ])) as Array<{ meta: { changes?: number } }>;
+          if (results[0]?.meta.changes) {
+            console.error(
+              JSON.stringify({
+                event: "container_missing_on_host",
+                containerId: row.id,
+                hostId: host.id,
+                previousStatus: row.status,
+              }),
+            );
+          }
         }
         continue;
       }
@@ -360,12 +372,22 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
       const expected = row.status === "running" ? "Running" : "Stopped";
       if (incus !== expected && (incus === "Running" || incus === "Stopped")) {
         const corrected = incus === "Running" ? "running" : "stopped";
-        await env.DB.prepare("UPDATE containers SET status = ? WHERE id = ?")
-          .bind(corrected, row.id)
+        const applied = await env.DB.prepare(
+          `UPDATE containers SET status = ?
+           WHERE id = ? AND host_id = ? AND status = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM jobs
+               WHERE container_id = ? AND status IN ('queued','running')
+                 AND op IN ('provision','rebuild','start','stop','destroy','resize')
+             )`,
+        )
+          .bind(corrected, row.id, host.id, row.status, row.id)
           .run();
-        console.log(
-          JSON.stringify({ event: "drift_corrected", containerId: row.id, from: row.status, to: corrected }),
-        );
+        if (applied.meta.changes) {
+          console.log(
+            JSON.stringify({ event: "drift_corrected", containerId: row.id, from: row.status, to: corrected }),
+          );
+        }
       }
     }
   });

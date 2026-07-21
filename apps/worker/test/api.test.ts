@@ -472,8 +472,28 @@ describe("POST /api/container/:op", () => {
     const res = await app().request("/api/container/stop", { method: "POST", headers }, env);
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: "lifecycle operation already in progress" });
+    expect(await res.json()).toEqual({ error: "container state changed or lifecycle operation already in progress" });
     expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
+  });
+
+  it("retry ignores newer background jobs and re-runs the failed lifecycle op", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "error" });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, error, created_at, updated_at)
+       VALUES ('failed-stop', 'container-1', 'stop', 'failed', 'boom', 1, 1),
+              ('newer-sync', 'container-1', 'sync-keys', 'succeeded', NULL, 2, 2)`,
+    ).run();
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const res = await app().request("/api/container/retry", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(202);
+    expect(daemon.submitted).toMatchObject([{ op: "stop" }]);
   });
 
   it("retry re-runs the failed op from the error state", async () => {
@@ -803,6 +823,59 @@ describe("account deletion (U8)", () => {
       error: "destroy your workbench before deleting your account",
     });
     expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).not.toBeNull();
+  });
+
+  it("returns a conflict when waitlist admission wins the deletion race", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
+    const database = env.DB;
+    let raced = false;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property !== "prepare") return Reflect.get(target, property, receiver) as unknown;
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.startsWith("SELECT * FROM containers WHERE user_id = ?")) return statement;
+          return new Proxy(statement, {
+            get(statementTarget, statementProperty, statementReceiver) {
+              if (statementProperty !== "bind") {
+                return Reflect.get(statementTarget, statementProperty, statementReceiver) as unknown;
+              }
+              return (...values: unknown[]) => {
+                const bound = statementTarget.bind(...values);
+                return new Proxy(bound, {
+                  get(boundTarget, boundProperty, boundReceiver) {
+                    if (boundProperty !== "first") {
+                      return Reflect.get(boundTarget, boundProperty, boundReceiver) as unknown;
+                    }
+                    return async () => {
+                      const row = await boundTarget.first();
+                      if (!raced) {
+                        raced = true;
+                        await target.prepare(
+                          "UPDATE containers SET host_id = 'host-1', status = 'provisioning' WHERE id = 'container-1'",
+                        ).run();
+                      }
+                      return row;
+                    };
+                  },
+                });
+              };
+            },
+          });
+        };
+      },
+    });
+
+    const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(409);
+    expect(await env.DB.prepare("SELECT * FROM containers WHERE user_id = ?")
+      .bind(user.id)
+      .first()).toMatchObject({ host_id: "host-1", status: "provisioning" });
   });
 
   it("purges credentials, keys, and the user row; revokes the session", async () => {

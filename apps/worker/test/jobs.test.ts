@@ -139,10 +139,25 @@ describe("enqueueJob", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({
-      reason: expect.objectContaining({ message: "lifecycle operation already in progress" }),
+      reason: expect.objectContaining({ message: "container state changed or lifecycle operation already in progress" }),
     });
     expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
     expect(daemon.submitted).toHaveLength(1);
+  });
+
+  it("rejects a lifecycle job built from a stale container snapshot", async () => {
+    const { env, host, container } = await setup();
+    await env.DB.prepare("UPDATE containers SET status = 'stopped' WHERE id = ?")
+      .bind(container.id)
+      .run();
+    stubFetch(() => {
+      throw new Error("stale work must not be dispatched");
+    });
+
+    await expect(enqueueJob(env, "stop", container, host)).rejects.toThrow(
+      "container state changed",
+    );
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
   });
 
   it("fails the job and drops the container to error when the daemon is unreachable (lifecycle op)", async () => {
@@ -259,6 +274,38 @@ describe("refreshJob", () => {
     ]);
   });
 
+  it("does not apply stale provision metadata after a newer lifecycle result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, {
+      status: "running",
+      host_key_fingerprints: JSON.stringify(["new-fingerprint"]),
+    });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('old-provision', 'container-1', 'provision', 'running', 1, 1),
+              ('new-provision', 'container-1', 'provision', 'succeeded', 2, 2)`,
+    ).run();
+    const job = await getJob(env, "old-provision");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/old-provision"
+        ? Response.json({
+            jobId: "old-provision",
+            status: "succeeded",
+            error: null,
+            result: { hostKeyFingerprints: ["stale-fingerprint"] },
+          })
+        : null,
+    );
+
+    await refreshJob(env, job);
+
+    const container = await getContainerForUser(env, "user-1");
+    expect(JSON.parse(container?.host_key_fingerprints ?? "[]")).toEqual(["new-fingerprint"]);
+  });
+
   it("fails fast when the daemon lost the job (restart), instead of spinning", async () => {
     const { env } = makeEnv();
     await seedUser(env);
@@ -308,6 +355,43 @@ describe("refreshJob", () => {
     }>();
     expect(q.results.map((r) => r.port)).toEqual([30500]);
     expect((await env.DB.prepare("SELECT * FROM waitlist").all()).results).toHaveLength(0);
+  });
+
+  it("keeps destroy retryable when an atomic finalization step fails", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    await seedContainer(env, { status: "destroying" });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('destroy-failure', 'container-1', 'destroy', 'running', 1, 1)`,
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_container_delete BEFORE DELETE ON containers
+       BEGIN SELECT RAISE(FAIL, 'delete failed'); END`,
+    ).run();
+    const job = await getJob(env, "destroy-failure");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/destroy-failure"
+        ? Response.json({
+            jobId: "destroy-failure",
+            status: "succeeded",
+            error: null,
+            result: null,
+          })
+        : null,
+    );
+
+    await expect(refreshJob(env, job)).rejects.toThrow("delete failed");
+
+    expect(await getJob(env, job.id)).toMatchObject({ status: "running" });
+    expect(await getContainerForUser(env, "user-1")).toMatchObject({ status: "destroying" });
+    const host = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect((await env.DB.prepare("SELECT * FROM port_quarantine").all()).results).toHaveLength(0);
   });
 
   it("applies destroy completion side effects once when dashboard and cron poll concurrently", async () => {
@@ -500,6 +584,39 @@ describe("startProvision", () => {
     );
     expect(await env.DB.prepare("SELECT * FROM containers").all()).toMatchObject({ results: [] });
     expect(await env.DB.prepare("SELECT * FROM waitlist").all()).toMatchObject({ results: [] });
+  });
+
+  it("uses another eligible host when the preferred host has no SSH ports", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, {
+      id: "ports-full",
+      ram_total_mb: 65536,
+      ram_reserve_mb: 8192,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    await seedHost(env, {
+      id: "ports-free",
+      ram_total_mb: 32768,
+      ram_reserve_mb: 8192,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    await env.DB.prepare(
+      `WITH RECURSIVE ports(port) AS (
+         VALUES(30000) UNION ALL SELECT port + 1 FROM ports WHERE port < 39999
+       )
+       INSERT INTO port_quarantine (host_id, port, released_at)
+       SELECT 'ports-full', port, ? FROM ports`,
+    )
+      .bind(Date.now())
+      .run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const container = await startProvision(env, user, { agents: ["claude"] });
+
+    expect(container.host_id).toBe("ports-free");
+    expect(daemon.submitted).toHaveLength(1);
   });
 
   it("surfaces a post-placement job enqueue failure instead of treating it as a duplicate", async () => {

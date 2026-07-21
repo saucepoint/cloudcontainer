@@ -1,5 +1,5 @@
 import { TIERS, type Agent } from "@workbench/contract";
-import { allocatePort } from "./ports.js";
+import { allocatePort, NoFreePortsError } from "./ports.js";
 import {
   diskReservationGb,
   HOST_HEARTBEAT_MAX_AGE_MS,
@@ -34,10 +34,27 @@ export async function startProvision(
   // then `changes()` gates host accounting on that INSERT winning. This avoids
   // oversubscription when two signups race for the last slot. Only a host-port
   // conflict is ignored and retried; unrelated database failures stay visible.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const host = await pickHost(env, tier.cpu, tier.ramMb, reservedDiskGb);
+  const hostsWithoutPorts: string[] = [];
+  let reservationAttempts = 0;
+  while (reservationAttempts < 4) {
+    const host = await pickHost(
+      env,
+      tier.cpu,
+      tier.ramMb,
+      reservedDiskGb,
+      Date.now,
+      hostsWithoutPorts,
+    );
     if (!host) break;
-    const port = await allocatePort(env, host.id);
+    let port: number;
+    try {
+      port = await allocatePort(env, host.id);
+    } catch (error) {
+      if (!(error instanceof NoFreePortsError)) throw error;
+      hostsWithoutPorts.push(host.id);
+      continue;
+    }
+    reservationAttempts += 1;
     const heartbeatCutoff = Date.now() - HOST_HEARTBEAT_MAX_AGE_MS;
     let results: Array<{ meta?: { changes?: number } }>;
     try {
