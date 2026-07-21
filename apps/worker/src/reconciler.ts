@@ -30,6 +30,8 @@ export const STUCK_JOB_MS = 15 * 60 * 1000;
 export const GRACE_DAYS = 7;
 const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
 
+type DriftSnapshot = ContainerRow & { lifecycle_version: number };
+
 /** Run I/O work in parallel without opening an unbounded number of host calls. */
 async function runBounded<T>(
   items: readonly T[],
@@ -294,6 +296,22 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
     "SELECT * FROM hosts WHERE status IN ('active','unhealthy')",
   ).all<HostRow>();
   await runBounded(hosts.results, 3, async (host) => {
+    // Snapshot rows and their monotonic lifecycle version before host I/O.
+    // State completed while stats are in flight must not be reconciled against
+    // that older host snapshot.
+    const rows = await env.DB.prepare(
+      `SELECT c.*,
+         COALESCE((
+           SELECT MAX(j.rowid) FROM jobs j
+           WHERE j.container_id = c.id
+             AND j.op IN ('provision','rebuild','start','stop','destroy','resize')
+         ), 0) AS lifecycle_version
+       FROM containers c
+       WHERE c.host_id = ?
+         AND c.status IN ('running','stopped','provisioning','error')`,
+    )
+      .bind(host.id)
+      .all<DriftSnapshot>();
     let stats;
     try {
       stats = await daemonStats(env, host);
@@ -322,40 +340,34 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
     const actual = new Map(stats.containers.map((s) => [s.containerId, s.incusStatus]));
     // Rows with host capacity allocated: running/stopped must exist on the host;
     // provisioning rows may not yet have a container (job still in progress).
-    const rows = await env.DB.prepare(
-      "SELECT * FROM containers WHERE host_id = ? AND status IN ('running','stopped','provisioning','error')",
-    )
-      .bind(host.id)
-      .all<ContainerRow>();
     for (const row of rows.results) {
       const incus = actual.get(row.id);
       if (!incus) {
         // Container in D1 but not on the host. For running/stopped rows this
         // means the container was deleted outside the control plane (e.g.
-        // manual incus delete). Free the leaked capacity and mark as error so
-        // the user can destroy or retry. provisioning/error rows may legitimately
-        // not have an incus container yet (job in flight / failed provision).
+        // manual incus delete). Mark it as error but preserve its reservation:
+        // retry reuses that allocation and destroy releases it exactly once.
+        // provisioning/error rows may legitimately not have an incus container
+        // yet (job in flight / failed provision).
         if (row.status === "running" || row.status === "stopped") {
-          const results = (await env.DB.batch([
-            env.DB.prepare(
-              `UPDATE containers
-               SET status = 'error', status_detail = 'container missing on host'
-               WHERE id = ? AND host_id = ? AND status = ?
-                 AND NOT EXISTS (
-                   SELECT 1 FROM jobs
-                   WHERE container_id = ? AND status IN ('queued','running')
-                     AND op IN ('provision','rebuild','start','stop','destroy','resize')
-                 )`,
-            ).bind(row.id, host.id, row.status, row.id),
-            env.DB.prepare(
-              `UPDATE hosts
-               SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
-                   ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
-                   disk_allocated_gb = MAX(0, disk_allocated_gb - ?)
-               WHERE id = ? AND changes() = 1`,
-            ).bind(row.cpu, row.ram_mb, diskReservationGb(row.disk_gb), host.id),
-          ])) as Array<{ meta: { changes?: number } }>;
-          if (results[0]?.meta.changes) {
+          const applied = await env.DB.prepare(
+            `UPDATE containers
+             SET status = 'error', status_detail = 'container missing on host'
+             WHERE id = ? AND host_id = ? AND status = ?
+               AND ? = COALESCE((
+                 SELECT MAX(rowid) FROM jobs
+                 WHERE container_id = containers.id
+                   AND op IN ('provision','rebuild','start','stop','destroy','resize')
+               ), 0)
+               AND NOT EXISTS (
+                 SELECT 1 FROM jobs
+                 WHERE container_id = containers.id AND status IN ('queued','running')
+                   AND op IN ('provision','rebuild','start','stop','destroy','resize')
+               )`,
+          )
+            .bind(row.id, host.id, row.status, row.lifecycle_version)
+            .run();
+          if (applied.meta.changes) {
             console.error(
               JSON.stringify({
                 event: "container_missing_on_host",
@@ -375,13 +387,18 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
         const applied = await env.DB.prepare(
           `UPDATE containers SET status = ?
            WHERE id = ? AND host_id = ? AND status = ?
+             AND ? = COALESCE((
+               SELECT MAX(rowid) FROM jobs
+               WHERE container_id = containers.id
+                 AND op IN ('provision','rebuild','start','stop','destroy','resize')
+             ), 0)
              AND NOT EXISTS (
                SELECT 1 FROM jobs
-               WHERE container_id = ? AND status IN ('queued','running')
+               WHERE container_id = containers.id AND status IN ('queued','running')
                  AND op IN ('provision','rebuild','start','stop','destroy','resize')
              )`,
         )
-          .bind(corrected, row.id, host.id, row.status, row.id)
+          .bind(corrected, row.id, host.id, row.status, row.lifecycle_version)
           .run();
         if (applied.meta.changes) {
           console.log(

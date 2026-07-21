@@ -163,7 +163,13 @@ export const GithubRepoNameSchema = z
   );
 export const GithubReposSchema = z
   .array(GithubRepoNameSchema)
-  .max(INPUT_LIMITS.githubReposPerProvision);
+  .max(INPUT_LIMITS.githubReposPerProvision)
+  .refine((repositories) => {
+    const cloneTargets = repositories.map((repository) =>
+      repository.slice(repository.indexOf("/") + 1).toLowerCase()
+    );
+    return new Set(cloneTargets).size === cloneTargets.length;
+  }, "repository clone targets must be unique");
 
 export const ContainerSpecSchema = z
   .object({

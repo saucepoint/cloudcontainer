@@ -11,6 +11,7 @@ import {
   JobRequestSchema,
   JobStatusResponseSchema,
   GithubRepoNameSchema,
+  GithubReposSchema,
   LlmKeysSchema,
 } from "../src/types.js";
 
@@ -113,6 +114,11 @@ describe("GithubRepoNameSchema", () => {
     for (const name of ["../secret", "owner/..", "owner/repo/extra", "/repo", "owner/"]) {
       expect(GithubRepoNameSchema.safeParse(name).success).toBe(false);
     }
+  });
+
+  it("rejects repositories that would clone to the same case-insensitive path", () => {
+    expect(GithubReposSchema.safeParse(["first/tools", "second/TOOLS"]).success).toBe(false);
+    expect(GithubReposSchema.safeParse(["first/api", "second/web"]).success).toBe(true);
   });
 });
 

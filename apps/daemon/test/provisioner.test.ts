@@ -36,7 +36,14 @@ function fakeExec(calls: Call[], respond?: (args: string[]) => string): ExecFn {
     if (args[0] === "info" || (args[0] === "storage" && args[2] === "show")) {
       throw new Error("not found");
     }
-    return { stdout: respond ? respond(args) : "", stderr: "" };
+    const stdout = respond ? respond(args) : "";
+    if (args[0] === "list" && !stdout) {
+      return {
+        stdout: JSON.stringify([{ name: args[1], status: "Running" }]),
+        stderr: "",
+      };
+    }
+    return { stdout, stderr: "" };
   };
 }
 
@@ -525,7 +532,12 @@ describe("resize / destroy", () => {
       { llmKeys: { anthropic: "CANARY-after-stop" } },
       hostKeys.publicKey,
     );
-    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => args[0] === "list"
+        ? JSON.stringify([{ name: "cs-aaaaaaaabbbb", status: "Stopped" }])
+        : "")),
+      makeConfig(),
+    );
 
     await provisioner.run({
       op: "start",
@@ -536,10 +548,63 @@ describe("resize / destroy", () => {
       sealedCredentials: sealed,
     });
 
-    expect(calls[0]?.args.join(" ")).toBe("start cs-aaaaaaaabbbb");
+    expect(calls.map((call) => call.args.join(" "))).toContain("start cs-aaaaaaaabbbb");
     expect(calls.some((call) => call.stdin?.includes("ssh-ed25519 AAAA new-laptop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("CANARY-after-stop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("https://workbench.example"))).toBe(true);
+  });
+
+  it("retries start setup without starting an already-running container again", async () => {
+    const calls: Call[] = [];
+    let status = "Stopped";
+    let metadataReads = 0;
+    const exec: ExecFn = async (_cmd, args, stdin) => {
+      calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
+      if (args[0] === "list") {
+        return {
+          stdout: JSON.stringify([{ name: "cs-aaaaaaaabbbb", status }]),
+          stderr: "",
+        };
+      }
+      if (args[0] === "start") {
+        status = "Running";
+        return { stdout: "", stderr: "" };
+      }
+      if (args.join(" ").includes("/etc/workbench-agents")) {
+        metadataReads += 1;
+        if (metadataReads === 1) throw new Error("metadata temporarily unavailable");
+        return { stdout: "claude\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+    const request: JobRequest = {
+      op: "start",
+      jobId: "retry-start",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      sshKeys: [],
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    };
+
+    await expect(provisioner.run(request)).rejects.toThrow("metadata temporarily unavailable");
+    await expect(provisioner.run(request)).resolves.toBeNull();
+
+    expect(calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
+  });
+
+  it("does not stop an already-stopped container again", async () => {
+    const calls: Call[] = [];
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => args[0] === "list"
+        ? JSON.stringify([{ name: "cs-c1", status: "Stopped" }])
+        : "")),
+      makeConfig(),
+    );
+
+    await provisioner.run({ op: "stop", jobId: "retry-stop", containerId: "c-1" });
+
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
 
   it("resize raises cgroup limits and grows the home volume", async () => {

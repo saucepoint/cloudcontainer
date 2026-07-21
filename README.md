@@ -64,6 +64,7 @@ Polling is non-overlapping, pauses in a hidden tab, and resumes on visibility.
 Requirements: Node.js 22 and npm.
 
     npm ci
+    npm run build:client -w apps/worker
     npm run typecheck
     npm run lint
     npm test
@@ -97,7 +98,7 @@ The fast suite never contacts live external services or infrastructure:
   cross-runtime-safe encodings, and tamper failures.
 - GitHub, Cloudflare, Codex auth endpoints, WebAuthn verification,
   and daemon HTTP are mocked.
-- CI runs npm ci, npm run typecheck, npm run lint, and npm test on Node.js 22.
+- CI installs dependencies, builds browser clients, type-checks, lints, and runs all tests on Node.js 22.
 
 There is not yet an automated real-Incus nightly suite. Provision-to-SSH,
 firewall, reboot, browser accessibility, and rollback checks are manual release

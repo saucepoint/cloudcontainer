@@ -212,6 +212,9 @@ if [[ "$SKIP_INSTALL" == false ]]; then
 fi
 
 if [[ "$SKIP_CHECKS" == false ]]; then
+  info "Building browser clients"
+  run npm run build:client -w apps/worker
+
   info "Running type checks"
   run npm run typecheck
 

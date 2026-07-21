@@ -62,14 +62,32 @@ export class Incus {
     return this.exec(this.bin, scoped, stdin);
   }
 
-  async list(): Promise<IncusContainer[]> {
-    const { stdout } = await this.run(["list", "--format", "json"]);
+  private async listMatching(name?: string): Promise<IncusContainer[]> {
+    const { stdout } = await this.run([
+      "list",
+      ...(name ? [name] : []),
+      "--format",
+      "json",
+    ]);
     const parsed = JSON.parse(stdout) as Array<{
       name: string;
       status: string;
       config?: Record<string, string>;
     }>;
-    return parsed.map((c) => ({ name: c.name, status: c.status, config: c.config ?? {} }));
+    return parsed.map((container) => ({
+      name: container.name,
+      status: container.status,
+      config: container.config ?? {},
+    }));
+  }
+
+  list(): Promise<IncusContainer[]> {
+    return this.listMatching();
+  }
+
+  async status(name: string): Promise<string | null> {
+    const containers = await this.listMatching(name);
+    return containers.find((container) => container.name === name)?.status ?? null;
   }
 
   async exists(name: string): Promise<boolean> {

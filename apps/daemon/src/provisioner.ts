@@ -35,7 +35,7 @@ export class Provisioner {
       case "rebuild":
         return this.provision(request, name);
       case "start": {
-        await this.incus.start(name);
+        await this.ensureRunning(name);
         // Optional fields preserve compatibility with older Workers during a
         // daemon-first rollout. Current Workers always send a full snapshot.
         if (request.sshKeys && request.dashboardUrl) {
@@ -57,10 +57,10 @@ export class Provisioner {
         return null;
       }
       case "export-window":
-        await this.incus.start(name);
+        await this.ensureRunning(name);
         return null;
       case "stop":
-        await this.incus.stop(name);
+        await this.ensureStopped(name);
         return null;
       case "resize":
         await this.incus.setLimits(name, this.provisionedCpu(request.spec.cpu), request.spec.ramMb);
@@ -210,6 +210,16 @@ export class Provisioner {
       ].join("\n");
       await this.incus.shell(name, `su - dev -c ${shellQuote(clone)}`);
     }
+  }
+
+  private async ensureRunning(name: string): Promise<void> {
+    if (await this.incus.status(name) === "Running") return;
+    await this.incus.start(name);
+  }
+
+  private async ensureStopped(name: string): Promise<void> {
+    if (await this.incus.status(name) === "Stopped") return;
+    await this.incus.stop(name);
   }
 
   /** Pubkey-only SSH; no keys means no authorized_keys file. */

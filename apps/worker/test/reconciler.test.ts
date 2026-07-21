@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decryptJsonAtRest, encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
+import { enqueueJob, getContainerForUser, getHost, refreshJob } from "../src/jobs.js";
 import { GRACE_DAYS, reconcile, STUCK_JOB_MS } from "../src/reconciler.js";
 import type { CredentialsRow, JobRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
@@ -357,6 +358,47 @@ describe("waitlist admission", () => {
 });
 
 describe("drift correction (D1 <-> incus)", () => {
+  it("does not apply host stats captured before a newer lifecycle result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    let statsRequested!: () => void;
+    let releaseStats!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      statsRequested = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseStats = resolve;
+    });
+    stubFetch((url) => {
+      if (url.pathname !== "/stats") return null;
+      statsRequested();
+      return release.then(() => Response.json({
+        hostId: "host-1",
+        containers: [],
+        ramTotalMb: 65536,
+        uptimeSec: 100,
+      }));
+    });
+
+    const reconciliation = reconcile(env, Date.now);
+    await requested;
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('newer-rebuild', 'container-1', 'rebuild', 'succeeded', ?, ?)`,
+    )
+      .bind(Date.now(), Date.now())
+      .run();
+    releaseStats();
+    await reconciliation;
+
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE id = 'container-1'",
+    ).first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
+  });
+
   it("adopts the host's actual state when D1 disagrees", async () => {
     const { env } = makeEnv();
     await seedUser(env);
@@ -381,7 +423,7 @@ describe("drift correction (D1 <-> incus)", () => {
     expect(row?.status).toBe("running");
   });
 
-  it("frees capacity and marks as error when a running container is missing from the host", async () => {
+  it("marks a missing running container as error while preserving its reservation", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
@@ -399,10 +441,10 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 0, ram_allocated_mb: 0, disk_allocated_gb: 0 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
-  it("releases missing-container capacity only once across overlapping reconciliations", async () => {
+  it("preserves missing-container capacity across overlapping reconciliations", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
@@ -414,10 +456,10 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
   });
 
-  it("frees capacity when a stopped container is missing from the host", async () => {
+  it("preserves capacity when a stopped container is missing from the host", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
@@ -434,7 +476,51 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 0, ram_allocated_mb: 0, disk_allocated_gb: 0 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+  });
+
+  it("reuses the preserved reservation when retrying a missing container", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+    await reconcile(env, Date.now);
+    const container = await getContainerForUser(env, "user-1");
+    const host = await getHost(env, "host-1");
+    if (!container || !host) throw new Error("test setup missing container or host");
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await enqueueJob(env, "provision", container, host);
+
+    const accounting = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(accounting).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+  });
+
+  it("releases a missing container's reservation once when destroy succeeds", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+    await reconcile(env, Date.now);
+    const container = await getContainerForUser(env, "user-1");
+    const host = await getHost(env, "host-1");
+    if (!container || !host) throw new Error("test setup missing container or host");
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const job = await enqueueJob(env, "destroy", container, host);
+    await refreshJob(env, job);
+
+    expect(await getContainerForUser(env, "user-1")).toBeNull();
+    const accounting = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(accounting).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
   it("skips a missing container when a lifecycle job is still active for it", async () => {

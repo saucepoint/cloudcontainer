@@ -145,6 +145,40 @@ describe("enqueueJob", () => {
     expect(daemon.submitted).toHaveLength(1);
   });
 
+  it("does not fail or resurrect a queued job while daemon submission is in flight", async () => {
+    const { env, host, container } = await setup();
+    let submissionStarted!: () => void;
+    let releaseSubmission!: () => void;
+    const started = new Promise<void>((resolve) => {
+      submissionStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseSubmission = resolve;
+    });
+    stubFetch((url, init) => {
+      if (url.pathname === "/jobs" && init.method === "POST") {
+        const request = JSON.parse(String(init.body)) as { jobId: string };
+        submissionStarted();
+        return release.then(() =>
+          Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 })
+        );
+      }
+      if (url.pathname.startsWith("/jobs/")) return new Response("gone", { status: 404 });
+      return null;
+    });
+
+    const enqueue = enqueueJob(env, "stop", container, host);
+    await started;
+    const queued = await env.DB.prepare("SELECT * FROM jobs").first<JobRow>();
+    if (!queued) throw new Error("queued job missing");
+    expect(queued.status).toBe("queued");
+
+    await expect(refreshJob(env, queued)).resolves.toMatchObject({ status: "queued" });
+    releaseSubmission();
+    await expect(enqueue).resolves.toMatchObject({ status: "running" });
+    expect((await getContainerForUser(env, "user-1"))?.status).toBe("running");
+  });
+
   it("rejects a lifecycle job built from a stale container snapshot", async () => {
     const { env, host, container } = await setup();
     await env.DB.prepare("UPDATE containers SET status = 'stopped' WHERE id = ?")

@@ -209,7 +209,9 @@ export async function enqueueJob(
     // must fail the job like a dispatch failure, not leave it stuck queued.
     const request = await buildJobRequest(env, op, jobId, container, host);
     await daemonSubmitJob(env, host, request);
-    await env.DB.prepare("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?")
+    await env.DB.prepare(
+      "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
+    )
       .bind(Date.now(), jobId)
       .run();
   } catch (err) {
@@ -345,10 +347,13 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
   }
 
   if (status === null) {
-    // The daemon restarted and lost the job: fail fast to error + retry
-    // instead of waiting out the stuck-job timeout.
-    await failJob(env, job, "job lost (host daemon restarted)");
-    return (await getJob(env, job.id)) ?? job;
+    // A queued row is visible while its daemon submission is in flight. A 404
+    // is only evidence of daemon loss after the submitter has advanced it to
+    // running; otherwise the submitter owns this transition.
+    const current = (await getJob(env, job.id)) ?? job;
+    if (current.status === "queued") return current;
+    await failJob(env, current, "job lost (host daemon restarted)");
+    return (await getJob(env, job.id)) ?? current;
   }
 
   if (status.status === "succeeded") {

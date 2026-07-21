@@ -143,6 +143,20 @@ describe("POST /api/provision", () => {
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
 
+  it("rejects colliding repository clone targets before placement", async () => {
+    const { env, headers, daemon } = await setup();
+
+    const res = await app().request(
+      "/api/provision",
+      json({ agents: ["claude"], githubRepos: ["first/tools", "second/TOOLS"] }, headers),
+      env,
+    );
+
+    expect(res.status).toBe(400);
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+    expect(daemon.submitted).toHaveLength(0);
+  });
+
   it("provisions: stores the key, encrypts credentials, dispatches the job", async () => {
     const { env, headers, daemon } = await setup();
     const res = await app().request(
@@ -909,6 +923,31 @@ describe("account deletion (U8)", () => {
     // Session unusable afterwards.
     const after = await app().request("/api/container", { headers }, env);
     expect(after.status).toBe(401);
+  });
+
+  it("rolls back the waitlisted-container claim when account purge fails", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1)",
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_user_delete BEFORE DELETE ON users
+       BEGIN SELECT RAISE(FAIL, 'user delete failed'); END`,
+    ).run();
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(500);
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).not.toBeNull();
+    expect(await env.DB.prepare(
+      "SELECT status FROM containers WHERE user_id = 'user-1'",
+    ).first()).toMatchObject({ status: "waitlisted" });
+    expect(await env.DB.prepare(
+      "SELECT user_id FROM waitlist WHERE user_id = 'user-1'",
+    ).first()).not.toBeNull();
   });
 
   it("drops a hostless waitlisted container as part of deletion", async () => {

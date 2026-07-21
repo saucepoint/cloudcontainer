@@ -324,30 +324,43 @@ export const apiRoutes = new Hono<AppContext>()
     if (container?.host_id) {
       return c.json({ error: "destroy your workbench before deleting your account" }, 409);
     }
-    if (container) {
-      // Admission and this conditional delete are serialized D1 writes. If
-      // admission assigned a host after our read, preserve the row and require
-      // the user to destroy it normally.
-      const deleted = await c.env.DB.prepare(
-        "DELETE FROM containers WHERE id = ? AND host_id IS NULL AND status = 'waitlisted'",
-      )
-        .bind(container.id)
-        .run();
-      if (!deleted.meta.changes) {
-        return c.json({ error: "destroy your workbench before deleting your account" }, 409);
-      }
+    // The conditional container claim and every purge share one transaction.
+    // If admission or provisioning wins first, the container remains and each
+    // guarded cleanup is a no-op; a later failure rolls the whole purge back.
+    const results = (await c.env.DB.batch([
+      c.env.DB.prepare(
+        "DELETE FROM containers WHERE user_id = ? AND host_id IS NULL AND status = 'waitlisted'",
+      ).bind(user.id),
+      c.env.DB.prepare(
+        `DELETE FROM credentials_encrypted WHERE user_id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+      c.env.DB.prepare(
+        `DELETE FROM ssh_keys WHERE user_id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+      c.env.DB.prepare(
+        `DELETE FROM enrollment_tokens WHERE user_id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+      c.env.DB.prepare(
+        `DELETE FROM oauth_states WHERE user_id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+      c.env.DB.prepare(
+        `DELETE FROM waitlist WHERE user_id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+      c.env.DB.prepare(
+        `DELETE FROM users WHERE id = ?
+         AND NOT EXISTS (SELECT 1 FROM containers WHERE user_id = ?)`,
+      ).bind(user.id, user.id),
+    ])) as Array<{ meta: { changes?: number } }>;
+    if (!results.at(-1)?.meta.changes) {
+      return c.json({ error: "destroy your workbench before deleting your account" }, 409);
     }
-    // Purge credentials and SSH keys; the user row goes last and cascades to
-    // passkeys, external identities, and outstanding auth challenges. Banned
-    // identity HMACs and used invite redemptions persist by design.
-    await c.env.DB.batch([
-      c.env.DB.prepare("DELETE FROM credentials_encrypted WHERE user_id = ?").bind(user.id),
-      c.env.DB.prepare("DELETE FROM ssh_keys WHERE user_id = ?").bind(user.id),
-      c.env.DB.prepare("DELETE FROM enrollment_tokens WHERE user_id = ?").bind(user.id),
-      c.env.DB.prepare("DELETE FROM oauth_states WHERE user_id = ?").bind(user.id),
-      c.env.DB.prepare("DELETE FROM waitlist WHERE user_id = ?").bind(user.id),
-      c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id),
-    ]);
+    // The user deletion cascades passkeys, external identities, and outstanding
+    // auth challenges. Banned identity HMACs and invite redemptions persist.
     await revokeSession(c.env, c.get("sessionId"));
     return c.json({ ok: true });
   });

@@ -68,6 +68,20 @@ describe("Incus.list", () => {
     ]);
   });
 
+  it("queries one container's current status", async () => {
+    const calls: string[][] = [];
+    const exec: ExecFn = async (_cmd, args) => {
+      calls.push(args);
+      return {
+        stdout: JSON.stringify([{ name: "cs-a", status: "Stopped" }]),
+        stderr: "",
+      };
+    };
+
+    await expect(new Incus(exec).status("cs-a")).resolves.toBe("Stopped");
+    expect(calls[0]).toEqual(["list", "cs-a", "--format", "json"]);
+  });
+
   it("scopes every operation to the configured tenant project", async () => {
     const { calls, exec } = capture();
     await new Incus(exec, "incus", "workbench").exists("cs-x");
