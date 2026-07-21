@@ -8,7 +8,7 @@
 
 ### Worker request input
 
-All requests now cross Hono's streaming-aware body-limit middleware before route parsing. The 256 KiB cap is larger than the current maximum combined credential input while preventing route handlers from buffering an unbounded body. Existing route-level schema/type validation remains in place.
+All Worker requests now cross Hono's streaming-aware body-limit middleware before route parsing. The 256 KiB cap is larger than the current maximum combined credential input while preventing route handlers from buffering an unbounded body. Daemon job requests are independently bounded at the shared 1 MiB aggregate wire budget before signature verification or body reads. Credential plaintext, sealed payloads, and complete job requests have aligned aggregate UTF-8 schema budgets, validated before storage and outbound dispatch.
 
 ### Authentication and authorization
 

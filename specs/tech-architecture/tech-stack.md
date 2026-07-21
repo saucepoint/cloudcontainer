@@ -47,16 +47,16 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Strong foundations
 
-- Verification is green: 24 test files / 324 tests, all workspace type checks, lint, the browser build, the release dry-run, and `npm audit` pass.
+- Verification is green: 24 test files / 332 tests, all workspace type checks, lint, the browser build, the release dry-run, and `npm audit` pass.
 - No `any`, TypeScript suppression, TODO, FIXME, or HACK markers were found in production TypeScript.
 - Security-sensitive random values use Web Crypto, admin-secret comparison uses fixed-size hashes, and Worker observability is enabled.
 
 ### Cleanup outcomes
 
-- All Worker requests are bounded at 256 KiB before route handlers buffer JSON.
-- Timed-out lifecycle jobs consistently move their environment to visible `error`; background job timeouts remain isolated from environment state. Queued dispatch cannot be failed or resurrected by concurrent polling. Lifecycle insertion validates its container snapshot atomically; terminal state, metadata, destroy cleanup, and accounting changes are latest-job-gated batches that reject concurrent/stale operations.
+- All Worker requests are bounded at 256 KiB before route handlers buffer JSON. Daemon job requests are streaming-bounded at the shared 1 MiB aggregate wire limit before signature verification or body buffering.
+- Timed-out lifecycle jobs consistently move their environment to visible `error`; background job timeouts remain isolated from environment state and failed desired-state syncs retry with an hourly backoff. Queued dispatch cannot be failed or resurrected by concurrent polling. Lifecycle insertion validates its container snapshot atomically; terminal state, metadata, destroy cleanup, and accounting changes are latest-job-gated batches that reject concurrent/stale operations.
 - Placement retries only host-port and capacity contention. Port-exhausted hosts are skipped in favor of another eligible host. A failure after direct placement or waitlist admission is surfaced and records a sanitized error state instead of masquerading as an idempotent duplicate.
-- Selected-agent metadata and command-level read failures now fail daemon jobs instead of silently installing an incomplete credential set. Start/stop retries first inspect Incus desired state, so setup can resume after partial completion without repeating a completed transition.
+- Selected-agent metadata, operational existence-probe failures, and command-level read failures now fail daemon jobs instead of silently reporting incomplete success. Start/stop retries first inspect Incus desired state, so setup can resume after partial completion without repeating a completed transition.
 - Repository selections with colliding `~/repos/<name>` targets fail before any Incus mutation.
 - Shared browser HTTP, clipboard, WebAuthn-error, confirmation, dashboard-model, and SSH presentation modules replaced entry-point duplication. `client/dashboard.tsx` is now the 224-line orchestration entry.
 - The page stylesheet is isolated from the 46-line document layout module with byte-identical rendered CSS.
