@@ -2,13 +2,13 @@
 
 - **Merge base:** `19f3feef04f40155c0707d2cd5b21a1150ea055f`
 - **Scope:** `main...feat/architecture-debt-cleanup`
-- **Result:** PASS — no findings at confidence 8/10 or higher
+- **Result:** FAIL — independent review cap exhausted with unresolved high-confidence findings
 
 ## Data-flow review
 
 ### Worker request input
 
-All Worker requests now cross Hono's streaming-aware body-limit middleware before route parsing. The 256 KiB cap is larger than the current maximum combined credential input while preventing route handlers from buffering an unbounded body. Daemon job requests are independently bounded at the shared 1 MiB aggregate wire budget before signature verification or body reads. Credential plaintext, sealed payloads, and complete job requests have aligned aggregate UTF-8 schema budgets, validated before storage and outbound dispatch.
+All Worker requests now cross Hono's streaming-aware body-limit middleware before route parsing. The 256 KiB cap is larger than the current maximum combined credential input while preventing route handlers from buffering an unbounded body. Daemon `/jobs` requests are independently bounded at the shared 1 MiB aggregate wire budget before signature verification or body reads. Other oversized POST paths remain an unresolved pre-authentication buffering gap. Credential plaintext, sealed payloads, and complete job requests have aligned aggregate UTF-8 schema budgets, but SSH key strings still need matching UTF-8 byte enforcement.
 
 ### Authentication and authorization
 
@@ -32,7 +32,7 @@ The diff contains no private keys or recognizable cloud/token prefixes. Credenti
 
 ### Supply chain
 
-`@hono/node-server` was upgraded from vulnerable 1.x to 2.0.11. The documented v2 breaking changes (Node 18 removal and Vercel-adapter removal) do not affect this Node 22 daemon. `npm audit` reports zero info, low, moderate, high, or critical vulnerabilities.
+`@hono/node-server` was upgraded from vulnerable 1.x to 2.0.11. The documented v2 breaking changes (Node 18 removal and Vercel-adapter removal) do not affect this Node 22 daemon. The advisory database now reports three inherited high-severity `sharp@0.34.5`/libvips findings through Wrangler/Miniflare; npm currently suggests only a forced Wrangler downgrade.
 
 ## Scanner evidence
 
@@ -40,8 +40,12 @@ The diff contains no private keys or recognizable cloud/token prefixes. Credenti
 - Added unsafe sink scan (`innerHTML`, `document.write`, `eval`, dynamic execution): no matches.
 - Added SQL interpolation scan: no matches.
 - Added outbound fetches: one shared browser same-origin transport, with paths supplied by application code.
-- `npm audit --json`: `total: 0`.
+- Initial `npm audit --json`: `total: 0`; final `npm audit --audit-level=low`: three high-severity findings.
 
 ## Findings
 
-None.
+1. Desired-state key/credential sync jobs need revision ordering so delayed old snapshots cannot overwrite newer state.
+2. SSH key limits need UTF-8 byte enforcement consistent with the aggregate job budget.
+3. Daemon pre-authentication body limiting must cover every POST path, not only `/jobs`.
+4. The newly published inherited `sharp`/libvips advisories require an upstream-compatible dependency resolution or explicit release decision.
+5. Generic `Error("not found")` should be replaced by typed Incus not-found classification.

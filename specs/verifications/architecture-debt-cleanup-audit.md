@@ -1,6 +1,6 @@
 # Code Audit: architecture-debt-cleanup
 
-**Verdict: PASS**
+**Verdict: FAIL — independent review cap exhausted (5/5)**
 
 ## Checklist
 
@@ -13,7 +13,7 @@
 - [x] **Security** — bounded input, bound SQL, authenticated ownership, schema validation, shell quoting, sealed credential paths, and static-only style injection were reviewed. No high-confidence findings. See `specs/security/REVIEW.md`.
 - [x] **Module boundaries** — browser transport, polling policy, clipboard, WebAuthn errors, confirmation flow, SSH presentation, and page styles now have focused ownership. Dashboard orchestration and document layout are substantially smaller.
 - [x] **Dead code and exports** — `quarantinePort` and unnecessary public exports were removed; retained paid-tier, `resize`, `export-window`, `ExecResult`, and `JobRecord` surfaces have explicit compatibility/interface reasons.
-- [x] **Dependencies and release safety** — vulnerable `@hono/node-server` 1.x was upgraded, Wrangler type generation is deterministic, `npm audit` reports zero vulnerabilities, and the deployment dry-run passes.
+- [ ] **Dependencies and release safety** — vulnerable `@hono/node-server` 1.x was upgraded, Wrangler type generation is deterministic, and the deployment dry-run passes. The current advisory database now reports three inherited high-severity `sharp@0.34.5`/libvips findings.
 
 ## Debt consciously retained
 

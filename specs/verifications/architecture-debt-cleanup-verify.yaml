@@ -1,6 +1,6 @@
 story_id: architecture-debt-cleanup
 risk: P1
-verified_at: "2026-07-21T21:24:33Z"
+verified_at: "2026-07-21T22:35:45Z"
 verifier: verify-work
 branch: feat/architecture-debt-cleanup
 phases:
@@ -25,21 +25,23 @@ phases:
     files: 24
     tests: 332
   dependency_audit:
-    passed: true
-    command: "npm audit"
-    vulnerabilities: 0
+    passed: false
+    command: "npm audit --audit-level=low"
+    vulnerabilities: 3
+    evidence: "Three high-severity inherited sharp@0.34.5/libvips advisories appeared after the final clean dry-run; npm currently offers only a forced Wrangler downgrade path."
   release_dry_run:
     passed: true
     command: "npm run deploy -- --dry-run --skip-install"
     evidence: "Release prerequisites, deterministic Wrangler type generation, full typecheck, and full tests passed; no remote action executed."
   security:
-    passed: true
+    passed: false
     report: "specs/security/REVIEW.md"
-    high_confidence_findings: 0
+    high_confidence_findings: 4
+    evidence: "Review round 5/5 did not pass; see architecture-debt-cleanup-review-round-5.md."
   terminal_verdict:
     command: "npm run deploy -- --dry-run --skip-install"
     exit_code: 0
-    captured_at: "2026-07-21T21:24:33Z"
+    captured_at: "2026-07-21T22:26:23Z"
     note: "Single contiguous run; the browser build, all type checks, and lint passed, followed by 24 test files and 332 tests."
   manual:
     - step: "Compare stylesheet payload before and after extraction"
@@ -59,7 +61,7 @@ phases:
       actual: "Generated interface omitted stale local-only binding names"
       passed: true
   gaps:
-    closed: true
+    closed: false
     notes:
       - "Real Incus host operations and live daemon TLS binding remain operational/manual release checks, unchanged by this cleanup."
       - "No visual browser session was required because the stylesheet payload is identical and page/client smoke tests pass."
