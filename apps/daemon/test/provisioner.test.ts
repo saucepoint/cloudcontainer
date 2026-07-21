@@ -475,6 +475,26 @@ describe("provision command construction", () => {
     })).rejects.toThrow("agent metadata unavailable");
   });
 
+  it("does not mask a command-level metadata read failure", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      const script = args.at(-1) ?? "";
+      if (script.includes("/etc/workbench-agents")) {
+        if (/\btrue\s*$/.test(script)) return { stdout: "", stderr: "metadata read failed" };
+        throw new Error("metadata read failed");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "refresh-credentials",
+      jobId: "j-agent-metadata-command",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    })).rejects.toThrow("metadata read failed");
+  });
+
   it("rejects malformed Wrangler auth without exposing its contents in the error", async () => {
     const sealed = sealJson(
       { wranglerOauth: '{"oauth_token":"CANARY-secret"}' },

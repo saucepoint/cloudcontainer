@@ -17,6 +17,13 @@ import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";
 import { LIFECYCLE_OPS, pendingStatusFor, successStatusFor } from "./state.js";
 import type { Bindings, ContainerRow, HostRow, JobRow } from "./types.js";
 
+export class ActiveLifecycleJobError extends Error {
+  constructor() {
+    super("lifecycle operation already in progress");
+    this.name = "ActiveLifecycleJobError";
+  }
+}
+
 export async function getHost(env: Bindings, hostId: string): Promise<HostRow | null> {
   return env.DB.prepare("SELECT * FROM hosts WHERE id = ?").bind(hostId).first<HostRow>();
 }
@@ -150,11 +157,21 @@ export async function enqueueJob(
 ): Promise<JobRow> {
   const jobId = crypto.randomUUID();
   const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
-  )
-    .bind(jobId, container.id, op, now, now)
-    .run();
+  const insertion = LIFECYCLE_OPS.has(op)
+    ? env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       SELECT ?, ?, ?, 'queued', ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM jobs
+         WHERE container_id = ? AND status IN ('queued','running')
+           AND op IN ('provision','rebuild','start','stop','destroy','resize')
+       )`,
+    ).bind(jobId, container.id, op, now, now, container.id)
+    : env.DB.prepare(
+      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+    ).bind(jobId, container.id, op, now, now);
+  const inserted = await insertion.run();
+  if (!inserted.meta.changes) throw new ActiveLifecycleJobError();
 
   const pending = pendingStatusFor(op);
   if (pending) {
@@ -201,17 +218,27 @@ export async function enqueueJobForUser(
 }
 
 async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | "op">, error: string) {
-  const claimed = await env.DB.prepare(
+  const failedAt = Date.now();
+  const claim = env.DB.prepare(
     `UPDATE jobs SET status = 'failed', error = ?, updated_at = ?
      WHERE id = ? AND status IN ('queued','running')`,
-  )
-    .bind(error, Date.now(), job.id)
-    .run();
-  if (claimed.meta.changes && LIFECYCLE_OPS.has(job.op)) {
-    await env.DB.prepare("UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?")
-      .bind(error, job.container_id)
-      .run();
+  ).bind(error, failedAt, job.id);
+  if (!LIFECYCLE_OPS.has(job.op)) {
+    await claim.run();
+    return;
   }
+  await env.DB.batch([
+    claim,
+    env.DB.prepare(
+      `UPDATE containers SET status = 'error', status_detail = ?
+       WHERE id = ? AND changes() = 1 AND ? = (
+         SELECT id FROM jobs
+         WHERE container_id = ?
+           AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         ORDER BY created_at DESC, rowid DESC LIMIT 1
+       )`,
+    ).bind(error, job.container_id, job.id, job.container_id),
+  ]);
 }
 
 /** Destroy succeeded: free port + host accounting, drop the container row. */
@@ -278,25 +305,39 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
 
   if (status.status === "succeeded") {
     // Dashboard polling and the cron reconciler may observe the same terminal
-    // result concurrently. Only the caller that wins this CAS may apply side
-    // effects such as releasing host capacity after destroy.
-    const claimed = await env.DB.prepare(
-      "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
-    )
-      .bind(Date.now(), job.id)
-      .run();
+    // result concurrently. For state-changing jobs, claiming the result and
+    // changing container state share one transaction so another lifecycle
+    // request cannot enter between those writes.
+    const completedAt = Date.now();
+    const next = successStatusFor(job.op);
+    let claimed: { meta: { changes?: number } };
+    if (next) {
+      const results = (await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+        ).bind(completedAt, job.id),
+        env.DB.prepare(
+          `UPDATE containers SET status = ?, status_detail = NULL
+           WHERE id = ? AND changes() = 1 AND ? = (
+             SELECT id FROM jobs
+             WHERE container_id = ?
+               AND op IN ('provision','rebuild','start','stop','destroy','resize')
+             ORDER BY created_at DESC, rowid DESC LIMIT 1
+           )`,
+        ).bind(next, container.id, job.id, container.id),
+      ])) as Array<{ meta: { changes?: number } }>;
+      claimed = results[0] ?? { meta: {} };
+    } else {
+      claimed = await env.DB.prepare(
+        "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+      )
+        .bind(completedAt, job.id)
+        .run();
+    }
     if (!claimed.meta.changes) return (await getJob(env, job.id)) ?? job;
     if (job.op === "destroy") {
       await finalizeDestroy(env, container);
     } else {
-      const next = successStatusFor(job.op);
-      if (next) {
-        await env.DB.prepare(
-          "UPDATE containers SET status = ?, status_detail = NULL WHERE id = ?",
-        )
-          .bind(next, container.id)
-          .run();
-      }
       const result = status.result as ProvisionResult | null;
       if (result?.hostKeyFingerprints?.length) {
         await env.DB.prepare("UPDATE containers SET host_key_fingerprints = ? WHERE id = ?")
@@ -305,16 +346,7 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
       }
     }
   } else if (status.status === "failed") {
-    const claimed = await env.DB.prepare(
-      "UPDATE jobs SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
-    )
-      .bind(status.error ?? "job failed on host", Date.now(), job.id)
-      .run();
-    if (claimed.meta.changes && LIFECYCLE_OPS.has(job.op)) {
-      await env.DB.prepare("UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?")
-        .bind(status.error ?? "job failed on host", job.container_id)
-        .run();
-    }
+    await failJob(env, job, status.error ?? "job failed on host");
   } else {
     // A positive daemon heartbeat renews the lease. Long-but-healthy image or
     // agent work must not time out merely because it exceeds the original

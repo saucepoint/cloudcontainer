@@ -126,6 +126,25 @@ describe("enqueueJob", () => {
     expect(daemon.submitted[0]).toMatchObject({ op: "stop", containerId: "container-1" });
   });
 
+  it("allows only one active lifecycle job per container", async () => {
+    const { env, host, container } = await setup();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const results = await Promise.allSettled([
+      enqueueJob(env, "stop", container, host),
+      enqueueJob(env, "stop", container, host),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({ message: "lifecycle operation already in progress" }),
+    });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
+    expect(daemon.submitted).toHaveLength(1);
+  });
+
   it("fails the job and drops the container to error when the daemon is unreachable (lifecycle op)", async () => {
     const { env, host, container } = await setup();
     stubFetch(() => {
@@ -458,6 +477,29 @@ describe("startProvision", () => {
     expect(host?.ram_allocated_mb).toBe(2048);
     expect(host?.disk_allocated_gb).toBe(16);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
+  it("does not turn an unrelated placement database failure into a waitlist row", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const database = env.DB;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property === "batch") {
+          return async () => {
+            throw new Error("database unavailable");
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+      "database unavailable",
+    );
+    expect(await env.DB.prepare("SELECT * FROM containers").all()).toMatchObject({ results: [] });
+    expect(await env.DB.prepare("SELECT * FROM waitlist").all()).toMatchObject({ results: [] });
   });
 
   it("surfaces a post-placement job enqueue failure instead of treating it as a duplicate", async () => {

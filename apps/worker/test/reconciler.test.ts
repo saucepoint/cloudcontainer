@@ -75,12 +75,46 @@ describe("stuck-job timeout", () => {
     stubFetch(statsRoute([{ containerId: "container-1", incusStatus }]));
 
     await reconcile(env, () => t0);
+    await reconcile(env, () => t0 + 1);
 
     const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
       status: string;
       status_detail: string;
     }>();
     expect(container).toEqual({ status: "error", status_detail: "operation timed out" });
+  });
+
+  it("does not let an older timed-out lifecycle job overwrite a newer result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, {
+      id: "job-old",
+      op: "start",
+      status: "running",
+      created_at: t0 - STUCK_JOB_MS - 2,
+      updated_at: t0 - STUCK_JOB_MS - 1,
+    });
+    await insertJob(env, {
+      id: "job-new",
+      op: "start",
+      status: "succeeded",
+      created_at: t0 - 1,
+      updated_at: t0 - 1,
+    });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus: "Running" }]));
+
+    await reconcile(env, () => t0);
+
+    const oldJob = await env.DB.prepare("SELECT * FROM jobs WHERE id = 'job-old'").first<JobRow>();
+    expect(oldJob?.status).toBe("failed");
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string | null;
+    }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
   });
 
   it("fails a timed-out background job without changing container state", async () => {
@@ -201,6 +235,38 @@ describe("waitlist admission", () => {
     expect(daemon.submitted).toMatchObject([
       { op: "provision", containerId: "container-first" },
     ]);
+  });
+
+  it("marks an admitted container as error when its provision job cannot be queued", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });
+    await seedContainer(env, {
+      user_id: user.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1000)",
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_provision_job BEFORE INSERT ON jobs
+       WHEN NEW.op = 'provision'
+       BEGIN SELECT RAISE(FAIL, 'job insert failed'); END`,
+    ).run();
+    stubFetch(statsRoute([]));
+
+    await reconcile(env, () => 10_000);
+
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE user_id = 'user-1'",
+    ).first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({
+      status: "error",
+      status_detail: "provisioning could not be queued",
+    });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
   });
 
   it("does not admit a tenant after the current host health check fails", async () => {

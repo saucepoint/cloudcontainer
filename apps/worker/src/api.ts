@@ -20,6 +20,7 @@ import {
   verifyGithubRepositories,
 } from "./github.js";
 import {
+  ActiveLifecycleJobError,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
@@ -160,8 +161,15 @@ export const apiRoutes = new Hono<AppContext>()
       if (!host) return c.json({ error: "host unavailable" }, 503);
       const failed = await latestJob(c.env, container.id);
       const retryOp: JobOp = failed && failed.status === "failed" ? failed.op : "provision";
-      const job = await enqueueJob(c.env, retryOp, container, host);
-      return c.json({ job: { id: job.id, status: job.status } }, 202);
+      try {
+        const job = await enqueueJob(c.env, retryOp, container, host);
+        return c.json({ job: { id: job.id, status: job.status } }, 202);
+      } catch (error) {
+        if (error instanceof ActiveLifecycleJobError) {
+          return c.json({ error: error.message }, 409);
+        }
+        throw error;
+      }
     }
 
     const validOps: JobOp[] = ["start", "stop", "rebuild", "destroy"];
@@ -172,8 +180,15 @@ export const apiRoutes = new Hono<AppContext>()
     if (!container.host_id) return c.json({ error: "no host assigned" }, 409);
     const host = await getHost(c.env, container.host_id);
     if (!host) return c.json({ error: "host unavailable" }, 503);
-    const job = await enqueueJob(c.env, op as JobOp, container, host);
-    return c.json({ job: { id: job.id, status: job.status } }, 202);
+    try {
+      const job = await enqueueJob(c.env, op as JobOp, container, host);
+      return c.json({ job: { id: job.id, status: job.status } }, 202);
+    } catch (error) {
+      if (error instanceof ActiveLifecycleJobError) {
+        return c.json({ error: error.message }, 409);
+      }
+      throw error;
+    }
   })
 
   // ------------------------------------------------------------------ ssh keys

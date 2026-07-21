@@ -110,20 +110,29 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
     .bind(cutoff)
     .all<JobRow>();
   for (const job of stuck.results) {
-    const claimed = await env.DB.prepare(
+    const claim = env.DB.prepare(
       `UPDATE jobs SET status = 'failed', error = 'timed out', updated_at = ?
        WHERE id = ? AND status IN ('queued','running') AND updated_at <= ?`,
-    )
-      .bind(now(), job.id, cutoff)
-      .run();
-    if (!claimed.meta.changes) continue;
+    ).bind(now(), job.id, cutoff);
+    let claimed: { meta: { changes?: number } };
     if (LIFECYCLE_OPS.has(job.op)) {
-      await env.DB.prepare(
-        "UPDATE containers SET status = 'error', status_detail = 'operation timed out' WHERE id = ?",
-      )
-        .bind(job.container_id)
-        .run();
+      const results = (await env.DB.batch([
+        claim,
+        env.DB.prepare(
+          `UPDATE containers SET status = 'error', status_detail = 'operation timed out'
+           WHERE id = ? AND changes() = 1 AND ? = (
+             SELECT id FROM jobs
+             WHERE container_id = ?
+               AND op IN ('provision','rebuild','start','stop','destroy','resize')
+             ORDER BY created_at DESC, rowid DESC LIMIT 1
+           )`,
+        ).bind(job.container_id, job.id, job.container_id),
+      ])) as Array<{ meta: { changes?: number } }>;
+      claimed = results[0] ?? { meta: {} };
+    } else {
+      claimed = await claim.run();
     }
+    if (!claimed.meta.changes) continue;
     console.warn(JSON.stringify({ event: "job_timed_out", jobId: job.id, op: job.op }));
   }
 }
@@ -148,7 +157,17 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
     );
     if (!host) break;
     const admitted = await placeWaitlistedContainer(env, container, host, now());
-    if (admitted) await enqueueJob(env, "provision", admitted, host);
+    if (!admitted) continue;
+    try {
+      await enqueueJob(env, "provision", admitted, host);
+    } catch (error) {
+      await env.DB.prepare(
+        "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
+      )
+        .bind(admitted.id)
+        .run();
+      throw error;
+    }
   }
 }
 
@@ -337,6 +356,7 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
         }
         continue;
       }
+      if (row.status !== "running" && row.status !== "stopped") continue;
       const expected = row.status === "running" ? "Running" : "Stopped";
       if (incus !== expected && (incus === "Running" || incus === "Stopped")) {
         const corrected = incus === "Running" ? "running" : "stopped";

@@ -14,6 +14,9 @@ import { webAuthnErrorMessage } from "./webauthn-errors.js";
 
 type AuthTab = "passkey" | "invite";
 
+const authRequestFallback = (status: number): string =>
+  status === 401 ? "Sign-in failed." : "Could not complete that request.";
+
 function isAuthTab(value: string | number): value is AuthTab {
   return value === "passkey" || value === "invite";
 }
@@ -73,12 +76,15 @@ function LandingAuth(): React.JSX.Element {
     try {
       const optionsJSON = await postJson<PublicKeyCredentialRequestOptionsJSON>(
         "/auth/passkey/authenticate/options",
+        undefined,
+        authRequestFallback,
       );
       const response = await startAuthentication({ optionsJSON });
       setPasskeyStatus("Verifying…");
       const result = await postJson<{ redirect: string }>(
         "/auth/passkey/authenticate/verify",
         { response },
+        authRequestFallback,
       );
       window.location.assign(result.redirect);
     } catch (error) {
@@ -103,12 +109,14 @@ function LandingAuth(): React.JSX.Element {
       const optionsJSON = await postJson<PublicKeyCredentialCreationOptionsJSON>(
         "/auth/invite/register/options",
         { code },
+        authRequestFallback,
       );
       const response = await startRegistration({ optionsJSON });
       setInviteStatus("Creating your account…");
       const result = await postJson<{ redirect: string }>(
         "/auth/invite/register/verify",
         { response },
+        authRequestFallback,
       );
       window.location.assign(result.redirect);
     } catch (error) {

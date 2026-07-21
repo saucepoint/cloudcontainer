@@ -21,12 +21,15 @@ async function addPasskey(
   try {
     const optionsJSON = await postJson<PublicKeyCredentialCreationOptionsJSON>(
       "/auth/passkey/register/options",
+      undefined,
+      "The passkey could not be added.",
     );
     const response = await startRegistration({ optionsJSON });
     setupStatus.textContent = "Verifying…";
     const result = await postJson<{ verified: true; passkeyCount: number }>(
       "/auth/passkey/register/verify",
       { response },
+      "The passkey could not be added.",
     );
     passkeyCount.textContent = `${result.passkeyCount} ${result.passkeyCount === 1 ? "passkey" : "passkeys"}`;
     addButton.textContent = "Add another passkey →";

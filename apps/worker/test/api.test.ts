@@ -45,10 +45,14 @@ describe("auth gating", () => {
 });
 
 describe("request limits", () => {
-  it("rejects oversized JSON before route handlers buffer it", async () => {
+  async function setup() {
     const { env } = makeEnv();
     const user = await seedUser(env);
-    const headers = await login(env, user);
+    return { env, headers: await login(env, user) };
+  }
+
+  it("rejects oversized streamed JSON before route handlers buffer it", async () => {
+    const { env, headers } = await setup();
     const res = await workerApp.request(
       "/api/provision",
       json({ agents: ["claude"], padding: "x".repeat(300 * 1024) }, headers),
@@ -58,6 +62,50 @@ describe("request limits", () => {
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: "request body is too large" });
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+  });
+
+  it("rejects an oversized declared content length without reading the body", async () => {
+    const { env, headers } = await setup();
+    const body = JSON.stringify({ agents: ["claude"], padding: "x".repeat(300 * 1024) });
+    const res = await workerApp.request(
+      "/api/provision",
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "content-length": String(body.length),
+        },
+        body,
+      },
+      env,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+  });
+
+  it("allows a body exactly at the declared limit to reach route validation", async () => {
+    const { env, headers } = await setup();
+    const wrapper = '{"agents":[],"padding":""}';
+    const body = `{"agents":[],"padding":"${"x".repeat(256 * 1024 - wrapper.length)}"}`;
+    expect(body.length).toBe(256 * 1024);
+
+    const res = await workerApp.request(
+      "/api/provision",
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "content-length": String(body.length),
+        },
+        body,
+      },
+      env,
+    );
+
+    expect(res.status).toBe(400);
   });
 });
 
@@ -407,6 +455,25 @@ describe("POST /api/container/:op", () => {
     expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
     const row = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(row?.status).toBe("destroying");
+  });
+
+  it("returns a conflict instead of enqueueing a second lifecycle operation", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "running" });
+    await env.DB.prepare(
+      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES ('active', 'container-1', 'stop', 'running', ?, ?)",
+    )
+      .bind(Date.now(), Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/container/stop", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "lifecycle operation already in progress" });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
   });
 
   it("retry re-runs the failed op from the error state", async () => {

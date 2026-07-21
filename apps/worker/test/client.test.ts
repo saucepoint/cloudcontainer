@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pollDelay, type ContainerView } from "../client/dashboard-model.js";
-import { HttpError, requestJson } from "../client/http.js";
+import { HttpError, postJson, requestJson } from "../client/http.js";
 import { webAuthnErrorMessage } from "../client/webauthn-errors.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -43,6 +43,16 @@ describe("browser JSON transport", () => {
 
     await expect(requestJson("/api/example", undefined, "Temporarily unavailable"))
       .rejects.toMatchObject({ message: "Temporarily unavailable", status: 502 });
+  });
+
+  it("supports status-aware endpoint fallbacks through postJson", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("unauthorized", { status: 401 })));
+
+    await expect(postJson(
+      "/auth/example",
+      undefined,
+      (status) => status === 401 ? "Sign-in failed." : "Could not complete that request.",
+    )).rejects.toMatchObject({ message: "Sign-in failed.", status: 401 });
   });
 });
 

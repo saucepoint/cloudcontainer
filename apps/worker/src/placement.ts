@@ -32,8 +32,8 @@ export async function startProvision(
 
   // D1 batches are transactional. Capacity is checked in the INSERT itself,
   // then `changes()` gates host accounting on that INSERT winning. This avoids
-  // oversubscription when two signups race for the last slot. A unique-port
-  // collision rolls the batch back and is retried with a fresh allocation.
+  // oversubscription when two signups race for the last slot. Only a host-port
+  // conflict is ignored and retried; unrelated database failures stay visible.
   for (let attempt = 0; attempt < 4; attempt++) {
     const host = await pickHost(env, tier.cpu, tier.ramMb, reservedDiskGb);
     if (!host) break;
@@ -52,7 +52,8 @@ export async function startProvision(
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
              AND h.disk_total_gb - h.disk_allocated_gb >= ?
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
-             AND h.consecutive_failures = 0`,
+             AND h.consecutive_failures = 0
+           ON CONFLICT(host_id, ssh_port) DO NOTHING`,
         ).bind(
           containerId,
           user.id,
@@ -78,15 +79,19 @@ export async function startProvision(
         ).bind(tier.cpu, tier.ramMb, reservedDiskGb, host.id),
       ])) as Array<{ meta?: { changes?: number } }>;
     } catch (error) {
-      // Only reservation conflicts are idempotent/retryable here. Errors after
-      // a successful placement must remain visible to the caller and user.
+      // A concurrent request for the same account may win its user_id unique
+      // constraint. Return that row, but never reinterpret other failures as
+      // capacity or port contention.
       const existing = await getContainerForUser(env, user.id);
       if (existing) return existing;
-      if (attempt === 3) throw error;
-      continue;
+      throw error;
     }
 
-    if (!results[0]?.meta?.changes) continue;
+    if (!results[0]?.meta?.changes) {
+      const existing = await getContainerForUser(env, user.id);
+      if (existing) return existing;
+      continue;
+    }
     const container = await getContainerForUser(env, user.id);
     if (!container) throw new Error("container row vanished");
     try {
