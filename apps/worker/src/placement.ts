@@ -39,8 +39,9 @@ export async function startProvision(
     if (!host) break;
     const port = await allocatePort(env, host.id);
     const heartbeatCutoff = Date.now() - HOST_HEARTBEAT_MAX_AGE_MS;
+    let results: Array<{ meta?: { changes?: number } }>;
     try {
-      const results = (await env.DB.batch([
+      results = (await env.DB.batch([
         env.DB.prepare(
           `INSERT INTO containers
              (id, user_id, host_id, ssh_port, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
@@ -76,19 +77,29 @@ export async function startProvision(
            WHERE id = ? AND changes() = 1`,
         ).bind(tier.cpu, tier.ramMb, reservedDiskGb, host.id),
       ])) as Array<{ meta?: { changes?: number } }>;
-
-      if (!results[0]?.meta?.changes) continue;
-      const container = await getContainerForUser(env, user.id);
-      if (!container) throw new Error("container row vanished");
-      await enqueueJob(env, "provision", container, host);
-      return (await getContainerForUser(env, user.id)) ?? container;
     } catch (error) {
-      // A duplicate request for the same account is idempotent. Otherwise a
-      // concurrent port allocation may have won; retry from fresh DB state.
+      // Only reservation conflicts are idempotent/retryable here. Errors after
+      // a successful placement must remain visible to the caller and user.
       const existing = await getContainerForUser(env, user.id);
       if (existing) return existing;
       if (attempt === 3) throw error;
+      continue;
     }
+
+    if (!results[0]?.meta?.changes) continue;
+    const container = await getContainerForUser(env, user.id);
+    if (!container) throw new Error("container row vanished");
+    try {
+      await enqueueJob(env, "provision", container, host);
+    } catch (error) {
+      await env.DB.prepare(
+        "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
+      )
+        .bind(container.id)
+        .run();
+      throw error;
+    }
+    return (await getContainerForUser(env, user.id)) ?? container;
   }
 
   try {
