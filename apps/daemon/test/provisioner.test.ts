@@ -457,6 +457,24 @@ describe("provision command construction", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("fails credential refresh when selected-agent metadata cannot be read", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      if (args.join(" ").includes("/etc/workbench-agents")) {
+        throw new Error("agent metadata unavailable");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "refresh-credentials",
+      jobId: "j-agent-metadata",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    })).rejects.toThrow("agent metadata unavailable");
+  });
+
   it("rejects malformed Wrangler auth without exposing its contents in the error", async () => {
     const sealed = sealJson(
       { wranglerOauth: '{"oauth_token":"CANARY-secret"}' },
