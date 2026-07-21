@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
+import { app as workerApp } from "../src/index.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
@@ -40,6 +41,23 @@ describe("auth gating", () => {
     const res = await app().request("/api/container", {}, env);
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthenticated" });
+  });
+});
+
+describe("request limits", () => {
+  it("rejects oversized JSON before route handlers buffer it", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    const res = await workerApp.request(
+      "/api/provision",
+      json({ agents: ["claude"], padding: "x".repeat(300 * 1024) }, headers),
+      env,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
 });
 
