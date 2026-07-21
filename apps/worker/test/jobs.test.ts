@@ -460,6 +460,37 @@ describe("startProvision", () => {
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
   });
 
+  it("surfaces a post-placement job enqueue failure instead of treating it as a duplicate", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const database = env.DB;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            if (sql.startsWith("INSERT INTO jobs")) throw new Error("job insert failed");
+            return target.prepare(sql);
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+      "job insert failed",
+    );
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({
+      status: "error",
+      status_detail: "provisioning could not be queued",
+    });
+  });
+
   it("does not oversubscribe the final host slot when two provisions race", async () => {
     const { env } = makeEnv();
     const alice = await seedUser(env, "alice");
