@@ -11,7 +11,7 @@ import { allowedUserOps } from "./state.js";
 import { hasSshKey, sshCommandFor } from "./ssh.js";
 import type { Bindings, ContainerRow, JobRow } from "./types.js";
 
-export interface ContainerView {
+interface ContainerView {
   id: string;
   status: string;
   statusDetail: string | null;

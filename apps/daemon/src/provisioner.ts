@@ -165,7 +165,7 @@ export class Provisioner {
       try {
         if (await this.incus.exists(name)) await this.incus.delete(name);
       } catch (cleanupError) {
-        console.log(
+        console.error(
           JSON.stringify({
             event: "provision_cleanup_failed",
             containerId: request.containerId,

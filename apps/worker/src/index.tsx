@@ -25,7 +25,7 @@ app.use("*", async (c, next) => {
 });
 
 app.onError((err, c) => {
-  console.log(JSON.stringify({ event: "unhandled_error", path: c.req.path, error: String(err) }));
+  console.error(JSON.stringify({ event: "unhandled_error", path: c.req.path, error: String(err) }));
   if (c.req.path.startsWith("/api")) {
     return c.json({ error: "internal error" }, 500);
   }

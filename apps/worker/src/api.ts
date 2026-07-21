@@ -54,7 +54,7 @@ export const apiRoutes = new Hono<AppContext>()
       cloudflareToken?: unknown;
       githubRepos?: unknown;
     }>(c);
-    const requested = new Set(Array.isArray(body?.agents) ? body!.agents : []);
+    const requested = new Set(body && Array.isArray(body.agents) ? body.agents : []);
     // Normalize to canonical order; reject empty or unknown picks.
     const agents = AGENTS.filter((a) => requested.has(a));
     if (!body || agents.length === 0 || agents.length !== requested.size) {

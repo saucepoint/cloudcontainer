@@ -5,7 +5,7 @@ import { bodyLimit } from "hono/body-limit";
  * is populated. Keep enough headroom for encoding overhead without allowing a
  * request to consume the Worker's full memory limit before validation runs.
  */
-export const REQUEST_BODY_MAX_BYTES = 256 * 1024;
+const REQUEST_BODY_MAX_BYTES = 256 * 1024;
 
 export const requestBodyLimit = bodyLimit({
   maxSize: REQUEST_BODY_MAX_BYTES,

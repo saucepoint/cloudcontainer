@@ -100,7 +100,7 @@ async function s256Challenge(verifier: string): Promise<string> {
 
 function logFailure(event: string, err: unknown): void {
   // Log the failure kind only, never token material (§10).
-  console.log(JSON.stringify({ event, error: String(err) }));
+  console.error(JSON.stringify({ event, error: String(err) }));
 }
 
 export const subscriptionRoutes = new Hono<AppContext>()

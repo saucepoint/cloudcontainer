@@ -126,7 +126,7 @@ function githubRepository(row: GithubRepositoryResponse): GithubRepository | nul
 }
 
 /** Fetch one repository when the user token and App installation can access it. */
-export async function fetchGithubRepository(
+async function fetchGithubRepository(
   token: string,
   fullName: string,
 ): Promise<GithubRepository | null> {
@@ -289,7 +289,7 @@ export const githubRoutes = new Hono<AppContext>()
       await pushCredentialsToContainer(c.env, row.user_id);
     } catch (err) {
       // Log the credential *kind* only, never values (§10 secrets hygiene).
-      console.log(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
       return c.text("GitHub authorization failed. Please retry from the dashboard.", 502);
     }
     return c.redirect(row.return_to === "/onboarding" ? "/onboarding" : "/dashboard");
@@ -304,7 +304,7 @@ export const githubRoutes = new Hono<AppContext>()
       const repositories = await searchGithubRepositories(token, query);
       return c.json({ repositories });
     } catch (err) {
-      console.log(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
       return c.json({ error: "Could not load GitHub repositories. Reconnect GitHub and retry." }, 502);
     }
   });

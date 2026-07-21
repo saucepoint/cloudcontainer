@@ -62,7 +62,7 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
   try {
     await correctDrift(env, now);
   } catch (error) {
-    console.log(
+    console.error(
       JSON.stringify({ event: "reconcile_task_failed", task: "host_health", error: String(error) }),
     );
   }
@@ -78,7 +78,7 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
   const results = await Promise.allSettled(tasks.map(([, task]) => task));
   results.forEach((result, index) => {
     if (result.status === "rejected") {
-      console.log(
+      console.error(
         JSON.stringify({
           event: "reconcile_task_failed",
           task: tasks[index]?.[0] ?? "unknown",
@@ -124,7 +124,7 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
         .bind(job.container_id)
         .run();
     }
-    console.log(JSON.stringify({ event: "job_timed_out", jobId: job.id, op: job.op }));
+    console.warn(JSON.stringify({ event: "job_timed_out", jobId: job.id, op: job.op }));
   }
 }
 
@@ -234,7 +234,7 @@ async function refreshGithubTokens(env: Bindings, now: () => number): Promise<vo
       await pushCredentialsToContainer(env, row.user_id);
     } catch (err) {
       // Credential kind only — never values (§10 secrets hygiene).
-      console.log(
+      console.error(
         JSON.stringify({ event: "github_token_refresh_failed", userId: row.user_id, error: String(err) }),
       );
     }
@@ -326,7 +326,7 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
                WHERE id = ?`,
             ).bind(row.cpu, row.ram_mb, diskReservationGb(row.disk_gb), host.id),
           ]);
-          console.log(
+          console.error(
             JSON.stringify({
               event: "container_missing_on_host",
               containerId: row.id,

@@ -48,7 +48,7 @@ async function findOrCreateDevUser(env: Bindings, subject: string): Promise<User
   return user;
 }
 
-export async function postLoginPath(env: Bindings, userId: string): Promise<string> {
+async function postLoginPath(env: Bindings, userId: string): Promise<string> {
   const container = await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?")
     .bind(userId)
     .first();

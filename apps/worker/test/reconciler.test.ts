@@ -83,6 +83,24 @@ describe("stuck-job timeout", () => {
     expect(container).toEqual({ status: "error", status_detail: "operation timed out" });
   });
 
+  it("fails a timed-out background job without changing container state", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, { op: "sync-keys", updated_at: t0 - STUCK_JOB_MS - 1 });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus: "Running" }]));
+
+    await reconcile(env, () => t0);
+
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string | null;
+    }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
+  });
+
   it("leaves recent running jobs alone (they get polled instead)", async () => {
     const { env } = makeEnv();
     await seedUser(env);

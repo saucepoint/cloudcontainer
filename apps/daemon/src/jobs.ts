@@ -64,7 +64,7 @@ export class JobRunner {
           record.status = "failed";
           // Error strings reference operations/kinds, never credential values.
           record.error = err instanceof Error ? err.message : "job failed";
-          console.log(
+          console.error(
             JSON.stringify({ event: "job_failed", jobId: record.jobId, op: record.op, error: record.error }),
           );
         }

@@ -44,16 +44,3 @@ export async function allocatePort(
   }
   throw new Error("no free ssh ports on host");
 }
-
-export async function quarantinePort(
-  env: Bindings,
-  hostId: string,
-  port: number,
-  now: number = Date.now(),
-): Promise<void> {
-  await env.DB.prepare(
-    "INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
-  )
-    .bind(hostId, port, now)
-    .run();
-}

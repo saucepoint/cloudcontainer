@@ -41,7 +41,7 @@ export function buildApp(opts: {
       ...(opts.now ? { now: opts.now } : {}),
     });
     if (failure) {
-      console.log(JSON.stringify({ event: "rpc_rejected", reason: failure }));
+      console.warn(JSON.stringify({ event: "rpc_rejected", reason: failure }));
       return c.json({ error: failure }, 401);
     }
     c.set("rawBody", body);
