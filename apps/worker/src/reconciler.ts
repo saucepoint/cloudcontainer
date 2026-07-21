@@ -23,6 +23,7 @@ import {
   refreshJob,
 } from "./jobs.js";
 import { allocatePort } from "./ports.js";
+import { LIFECYCLE_OPS } from "./state.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
 export const STUCK_JOB_MS = 15 * 60 * 1000;
@@ -116,12 +117,13 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
       .bind(now(), job.id, cutoff)
       .run();
     if (!claimed.meta.changes) continue;
-    await env.DB.prepare(
-      `UPDATE containers SET status = 'error', status_detail = 'operation timed out'
-       WHERE id = ? AND status IN ('provisioning','destroying')`,
-    )
-      .bind(job.container_id)
-      .run();
+    if (LIFECYCLE_OPS.has(job.op)) {
+      await env.DB.prepare(
+        "UPDATE containers SET status = 'error', status_detail = 'operation timed out' WHERE id = ?",
+      )
+        .bind(job.container_id)
+        .run();
+    }
     console.log(JSON.stringify({ event: "job_timed_out", jobId: job.id, op: job.op }));
   }
 }
