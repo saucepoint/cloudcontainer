@@ -8,7 +8,10 @@ import { makeEnv, seedUser } from "./helpers/env.js";
 
 const workerPackage = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as { scripts: { "build:client": string } };
+) as {
+  scripts: { "build:client": string };
+  dependencies: Record<string, string>;
+};
 
 function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
@@ -24,13 +27,12 @@ const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.m
 const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
-  ["landing", () => LandingPage({ devAuth: false, worldIdEnvironment: "production" })],
+  ["landing", () => LandingPage({ devAuth: false })],
   ["security", () => SecurityPage({
     signupMethod: "world_id",
     passkeyCount: 0,
     continueHref: "/onboarding",
     welcome: true,
-    worldIdEnvironment: "production",
   })],
   ["onboarding", () => OnboardingPage({})],
   ["dashboard", () => DashboardPage({})],
@@ -47,11 +49,11 @@ describe("compiled page clients", () => {
   }
 });
 
-describe("World ID environment wiring", () => {
-  it("renders the configured environment independently of dev auth", () => {
-    const html = String(LandingPage({ devAuth: true, worldIdEnvironment: "production" }));
-    expect(html).toContain('data-world-id-environment="production"');
-    expect(landingClient).toContain('worldIdEnvironment === "staging"');
+describe("World ID v4 wiring", () => {
+  it("loads the environment and fresh RP context from the server", () => {
+    const html = String(LandingPage({ devAuth: true }));
+    expect(landingClient).toContain('fetch("/auth/world-id/context"');
+    expect(landingClient).toContain("environment={worldIdContext.environment}");
     expect(html).toContain("Dev login");
   });
 
@@ -60,21 +62,24 @@ describe("World ID environment wiring", () => {
     expect(landingClient).toContain("localStorage.removeItem(SESSION_STORAGE_KEY)");
   });
 
-  it("creates v4 sessions, preserves the native World App bridge, and explicitly falls back to Orb v3", () => {
-    expect(landingClient).toContain('constraints(any(CredentialRequest("proof_of_human")))');
-    expect(landingClient).toContain("IDKit.createSession(baseConfig)");
-    expect(landingClient).toContain("allow_legacy_proofs: true");
-    expect(landingClient).toContain(".preset(orbLegacy())");
-    expect(landingClient).toContain('completion.error === "world_id_4_not_available"');
-    expect(landingClient).toContain("isInWorldApp()");
-    expect(securityClient).toContain("isInWorldApp()");
+  it("uses the official React session widget with a v4 Proof of Human constraint", () => {
+    expect(landingClient).toContain('from "@worldcoin/idkit"');
+    expect(landingClient).toContain("<IDKitSessionWidget");
+    expect(landingClient).toContain('const PROOF_OF_HUMAN = CredentialRequest("proof_of_human");');
+    expect(landingClient).not.toContain('any(CredentialRequest("proof_of_human"))');
+    expect(landingClient).toContain("{...(worldIdSessionId ? { existing_session_id: worldIdSessionId } : {})}");
+    expect(landingClient).not.toContain("allow_legacy_proofs");
+    expect(landingClient).not.toContain("orbLegacy");
   });
 
-  it("bundles typed IDKit and QR dependencies without a runtime CDN global", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
-    expect(landingClient).toContain('from "@worldcoin/idkit-core"');
-    expect(landingClient).toContain('import QRCode from "qrcode"');
+  it("delegates QR and native transport to IDKit React without direct core or QR dependencies", () => {
+    const html = String(LandingPage({ devAuth: false }));
+    expect(landingClient).not.toContain('from "@worldcoin/idkit-core"');
+    expect(landingClient).not.toContain('from "qrcode"');
     expect(html).not.toContain("cdn.jsdelivr.net");
+    expect(workerPackage.dependencies["@worldcoin/idkit"]).toMatch(/^\^4\./);
+    expect(workerPackage.dependencies["@worldcoin/idkit-core"]).toBeUndefined();
+    expect(workerPackage.dependencies.qrcode).toBeUndefined();
   });
 
   it("ships the IDKit WebAssembly sidecar at the URL used by the bundle", () => {
@@ -86,7 +91,7 @@ describe("World ID environment wiring", () => {
 
 describe("landing page call to action", () => {
   it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain("A cloud workbench for command-line agents");
     expect(html).toContain("An always-on workbench for coding and long running jobs. Access from any terminal client on any device.");
     expect(html).toContain("Free for each unique person");
@@ -103,7 +108,7 @@ describe("landing page call to action", () => {
   });
 
   it("groups every auth path in Base UI tabs", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    const html = String(LandingPage({ devAuth: false }));
 
     expect(html).toContain('id="landing-auth-root"');
     expect(landingClient).toContain('import { Tabs } from "@base-ui/react/tabs"');
@@ -133,22 +138,20 @@ describe("passkey security page", () => {
       passkeyCount: 0,
       continueHref: "/onboarding",
       welcome: true,
-      worldIdEnvironment: "production",
     }));
     expect(worldId).toContain("World ID remains available");
-    expect(worldId).toContain("Update World ID sign-in");
+    expect(worldId).not.toContain("Update World ID sign-in");
     expect(worldId).toContain("Skip for now");
     expect(worldId).toContain('src="/security.js"');
     expect(securityClient).toContain('"/auth/passkey/register/options"');
-    expect(securityClient).toContain('IDKit.createSession(config)');
-    expect(securityClient).toContain('"/auth/session/migrate"');
+    expect(securityClient).not.toContain("IDKit");
+    expect(securityClient).not.toContain("world-id");
 
     const invited = String(SecurityPage({
       signupMethod: "invite",
       passkeyCount: 1,
       continueHref: "/dashboard",
       welcome: false,
-      worldIdEnvironment: "production",
     }));
     expect(invited).toContain("This account uses passkeys to sign in");
     expect(invited).toContain("Add another passkey");
@@ -439,7 +442,7 @@ describe("interface foundation", () => {
   });
 
   it("uses the light, borderless action system", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain("color-scheme: light");
     expect(html).toContain(".btn.secondary, .btn.danger { border: 0");
     expect(html).toContain("color: var(--accent)");
@@ -458,7 +461,7 @@ describe("interface foundation", () => {
   });
 
   it("keeps the landing divider full width while constraining sign-in content", () => {
-    const html = String(LandingPage({ devAuth: false, worldIdEnvironment: "production" }));
+    const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('class="card landing-signin"');
     expect(html).toContain('class="landing-signin-content"');
     expect(html).toContain(".landing-signin-content { max-width: 580px; }");

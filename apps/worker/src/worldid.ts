@@ -1,198 +1,151 @@
-/**
- * World ID authentication supports two compatible proof paths:
- *
- * - v4 sign-ins create and later prove a session, using its stable `session_id`.
- * - A v3-only user falls back to an action-scoped proof-of-human request until
- *   their World App can create a v4 session.
- *
- * The v3 fallback nullifier is normalized before persistence so equivalent
- * hexadecimal encodings cannot create multiple accounts. v4 uniqueness proofs
- * are verified defensively but must never become reusable account identities.
- */
-import { signRequest } from "@worldcoin/idkit-core/signing";
+import { signRequest } from "@worldcoin/idkit/signing";
 import type { Bindings } from "./types.js";
 
-const VERIFY_URL = (rpId: string) => `https://developer.world.org/api/v4/verify/${rpId}`;
 const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
-const NULLIFIER_PATTERN = /^0x[0-9a-f]{64}$/i;
 
-interface WorldIdRpContext {
-  rp_id: string;
-  nonce: string;
-  created_at: number;
-  expires_at: number;
-  signature: string;
+function verifyUrl(rpId: string): string {
+  return `https://developer.world.org/api/v4/verify/${rpId}`;
 }
-
-type WorldIdProofMode = "proof" | "session";
-
-/** Sign a fresh RP context. Uniqueness proofs bind the configured login action. */
-export function signWorldIdRequest(
-  env: Bindings,
-  mode: WorldIdProofMode,
-): WorldIdRpContext {
-  const { sig, nonce, createdAt, expiresAt } = signRequest({
-    signingKeyHex: env.RP_SIGNING_KEY,
-    ...(mode === "proof" ? { action: env.WORLD_ID_ACTION } : {}),
-  });
-  return {
-    rp_id: env.WORLD_ID_RP_ID,
-    nonce,
-    created_at: createdAt,
-    expires_at: expiresAt,
-    signature: sig,
-  };
-}
-
-export interface WorldIdIdentity {
-  identityKey: string;
-  kind: "session" | "uniqueness";
-  protocolVersion: "3.0" | "4.0";
-}
-
-type ParsedProof =
-  | { kind: "session"; payload: Record<string, unknown>; sessionId: string }
-  | {
-      kind: "uniqueness";
-      payload: Record<string, unknown>;
-      protocolVersion: "3.0" | "4.0";
-      nullifier: string;
-    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function normalizeNullifier(value: unknown): string | null {
-  if (typeof value !== "string" || !NULLIFIER_PATTERN.test(value)) return null;
-  return BigInt(value).toString(10);
+export class WorldIdVerificationError extends Error {
+  constructor(
+    message: string,
+    readonly status: 400 | 502,
+  ) {
+    super(message);
+    this.name = "WorldIdVerificationError";
+  }
 }
 
-function parseProof(env: Bindings, value: unknown): ParsedProof {
-  if (!isRecord(value)) throw new Error("world id proof must be an object");
-  if (value.environment !== env.WORLD_ID_ENVIRONMENT) {
-    throw new Error(
-      `world id environment mismatch: expected ${env.WORLD_ID_ENVIRONMENT}, received ${String(value.environment)}`,
-    );
+export function createWorldIdContext(env: Bindings) {
+  const { sig, nonce, createdAt, expiresAt } = signRequest({
+    signingKeyHex: env.RP_SIGNING_KEY,
+  });
+  return {
+    app_id: env.WORLD_ID_APP_ID,
+    environment: env.WORLD_ID_ENVIRONMENT,
+    rp_context: {
+      rp_id: env.WORLD_ID_RP_ID,
+      nonce,
+      created_at: createdAt,
+      expires_at: expiresAt,
+      signature: sig,
+    },
+  };
+}
+
+function parseSessionProof(
+  env: Bindings,
+  value: unknown,
+): { payload: Record<string, unknown>; sessionId: string } {
+  if (!isRecord(value)) {
+    throw new WorldIdVerificationError("World ID response must be an object", 400);
   }
-  if (typeof value.nonce !== "string" || !value.nonce) {
-    throw new Error("world id proof has an invalid nonce");
+  if (value.protocol_version !== "4.0") {
+    throw new WorldIdVerificationError("World ID response is not protocol version 4.0", 400);
+  }
+  if (value.environment !== env.WORLD_ID_ENVIRONMENT) {
+    throw new WorldIdVerificationError("World ID response has the wrong environment", 400);
+  }
+  if (typeof value.nonce !== "string" || value.nonce.length === 0) {
+    throw new WorldIdVerificationError("World ID response has an invalid nonce", 400);
+  }
+  const sessionId = value.session_id;
+  if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId)) {
+    throw new WorldIdVerificationError("World ID response is not a session proof", 400);
   }
   if (!Array.isArray(value.responses) || value.responses.length === 0) {
-    throw new Error("world id proof has no credential responses");
+    throw new WorldIdVerificationError("World ID response has no credentials", 400);
   }
-
-  if (value.protocol_version === "4.0" && SESSION_ID_PATTERN.test(String(value.session_id))) {
-    const credential = value.responses.find((response) =>
-      isRecord(response) && response.identifier === "proof_of_human" && response.issuer_schema_id === 1
+  const proofOfHuman = value.responses.find((response) =>
+    isRecord(response)
+    && response.identifier === "proof_of_human"
+    && response.issuer_schema_id === 1
+    && Array.isArray(response.proof)
+    && response.proof.length === 5
+    && response.proof.every((part) => typeof part === "string" && part.length > 0)
+    && Array.isArray(response.session_nullifier)
+    && response.session_nullifier.length === 2
+    && response.session_nullifier.every((part) => typeof part === "string" && part.length > 0)
+  );
+  if (!proofOfHuman) {
+    throw new WorldIdVerificationError(
+      "World ID session is missing the Proof of Human credential",
+      400,
     );
-    if (!credential) {
-      throw new Error("world id session proof is missing the proof-of-human credential");
-    }
-    return { kind: "session", payload: value, sessionId: String(value.session_id) };
   }
-
-  if (value.action !== env.WORLD_ID_ACTION) {
-    throw new Error(
-      `world id action mismatch: expected ${env.WORLD_ID_ACTION}, received ${String(value.action)}`,
-    );
-  }
-
-  const protocolVersion = value.protocol_version;
-  if (protocolVersion !== "3.0" && protocolVersion !== "4.0") {
-    throw new Error(`unsupported world id protocol version: ${String(protocolVersion)}`);
-  }
-  const credential = value.responses.find((response) => {
-    if (!isRecord(response)) return false;
-    return protocolVersion === "3.0"
-      ? response.identifier === "orb"
-      : response.identifier === "proof_of_human" && response.issuer_schema_id === 1;
-  });
-  if (!isRecord(credential)) {
-    throw new Error("world id proof is missing the required proof-of-human credential");
-  }
-  const nullifier = normalizeNullifier(credential.nullifier);
-  if (!nullifier) throw new Error("world id proof has an invalid nullifier");
-  return {
-    kind: "uniqueness",
-    payload: value,
-    protocolVersion,
-    nullifier,
-  };
+  return { payload: value, sessionId };
 }
 
-function verifiedNullifier(response: Record<string, unknown>): string | null {
-  const topLevel = normalizeNullifier(response.nullifier);
-  if (topLevel) return topLevel;
-  if (!Array.isArray(response.results)) return null;
-  for (const result of response.results) {
-    if (isRecord(result) && result.success === true) {
-      const normalized = normalizeNullifier(result.nullifier);
-      if (normalized) return normalized;
-    }
-  }
-  return null;
+function verifierCode(value: Record<string, unknown> | null): string {
+  return typeof value?.code === "string" && /^[a-z0-9_]{1,64}$/.test(value.code)
+    ? ` (${value.code})`
+    : "";
 }
 
-/** Forward an unmodified IDKit result to the Developer Portal and extract its verified identity. */
-export async function verifyWorldIdProof(
+/** Verify an unmodified IDKit v4 session result and return its durable identity. */
+export async function verifyWorldIdSession(
   env: Bindings,
   idkitResponse: unknown,
-): Promise<WorldIdIdentity> {
-  const proof = parseProof(env, idkitResponse);
-  const res = await fetch(VERIFY_URL(env.WORLD_ID_RP_ID), {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "user-agent": "codestation-world-id/1.0",
-    },
-    body: JSON.stringify(proof.payload),
-  });
-  const responseBody = await res.text();
-  let verifierResponse: Record<string, unknown> | null = null;
+): Promise<string> {
+  const proof = parseSessionProof(env, idkitResponse);
+  let response: Response;
+  try {
+    response = await fetch(verifyUrl(env.WORLD_ID_RP_ID), {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "codestation-world-id/2.0",
+      },
+      body: JSON.stringify(proof.payload),
+    });
+  } catch {
+    throw new WorldIdVerificationError("World ID verifier is unavailable", 502);
+  }
+
+  const responseBody = await response.text();
+  let verified: Record<string, unknown> | null = null;
   try {
     const parsed: unknown = JSON.parse(responseBody);
-    if (isRecord(parsed)) verifierResponse = parsed;
+    if (isRecord(parsed)) verified = parsed;
   } catch {
-    // A successful verifier response is JSON and is rejected below otherwise.
+    // Rejected below. Successful verifier responses are JSON objects.
   }
-  if (!res.ok) {
-    const verifierCode =
-      typeof verifierResponse?.code === "string" && /^[a-z0-9_]{1,64}$/.test(verifierResponse.code)
-        ? ` (${verifierResponse.code})`
-        : "";
-    throw new Error(`world id proof verification failed with status ${res.status}${verifierCode}`);
-  }
-  if (!verifierResponse) {
-    throw new Error("world id proof verification failed: verifier returned invalid JSON");
-  }
-  if (verifierResponse.success !== true) {
-    throw new Error(
-      `world id proof verification failed: verifier returned success=${String(verifierResponse.success)}`,
+  if (!response.ok) {
+    throw new WorldIdVerificationError(
+      `World ID verifier rejected the proof${verifierCode(verified)}`,
+      response.status >= 500 ? 502 : 400,
     );
   }
-  if ("environment" in verifierResponse && verifierResponse.environment !== env.WORLD_ID_ENVIRONMENT) {
-    throw new Error("world id verifier returned a different environment");
+  if (!verified) {
+    throw new WorldIdVerificationError("World ID verifier returned invalid JSON", 502);
   }
-
-  if (proof.kind === "session") {
-    if (verifierResponse.session_id !== proof.sessionId) {
-      throw new Error("world id verifier returned a different session_id");
-    }
-    return { identityKey: proof.sessionId, kind: "session", protocolVersion: "4.0" };
+  if (verified.success !== true) {
+    throw new WorldIdVerificationError("World ID verifier rejected the proof", 400);
   }
-
-  if ("action" in verifierResponse && verifierResponse.action !== env.WORLD_ID_ACTION) {
-    throw new Error("world id verifier returned a different action");
+  if (verified.session_id !== proof.sessionId) {
+    throw new WorldIdVerificationError("World ID verifier returned a different session", 400);
   }
-  const nullifier = verifiedNullifier(verifierResponse);
-  if (!nullifier || nullifier !== proof.nullifier) {
-    throw new Error("world id verifier returned a different nullifier");
+  if (
+    "environment" in verified
+    && verified.environment !== env.WORLD_ID_ENVIRONMENT
+  ) {
+    throw new WorldIdVerificationError("World ID verifier returned a different environment", 400);
   }
-  return {
-    identityKey: `worldid-nullifier:${nullifier}`,
-    kind: "uniqueness",
-    protocolVersion: proof.protocolVersion,
-  };
+  if (
+    !Array.isArray(verified.results)
+    || !verified.results.some((result) =>
+      isRecord(result)
+      && result.identifier === "proof_of_human"
+      && result.success === true
+    )
+  ) {
+    throw new WorldIdVerificationError("World ID verifier did not verify Proof of Human", 400);
+  }
+  return proof.sessionId;
 }

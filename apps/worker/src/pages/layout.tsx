@@ -160,8 +160,6 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   vertical-align: -1px; margin-right: 0.35rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .err { min-height: 1.2rem; margin-top: 0.55rem; color: var(--danger); font-size: 0.88rem; }
-.qr { display: flex; justify-content: flex-start; margin-top: 1rem; }
-.qr canvas { background: #fff; padding: 10px; border: 1px solid var(--line); }
 .landing-title { max-width: 650px; }
 .landing-signin-content { max-width: 580px; }
 .landing-signin h2 { margin-bottom: 0.25rem; }

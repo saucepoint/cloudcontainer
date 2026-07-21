@@ -1,17 +1,12 @@
 import { Tabs } from "@base-ui/react/tabs";
 import {
   CredentialRequest,
-  IDKit,
-  any,
-  isInWorldApp,
-  orbLegacy,
+  IDKitSessionWidget,
+  type IDKitDebugReport,
   type IDKitErrorCodes,
-  type IDKitRequest,
-  type IDKitRequestConfig,
   type IDKitResultSession,
-  type IDKitSessionConfig,
   type RpContext,
-} from "@worldcoin/idkit-core";
+} from "@worldcoin/idkit";
 import {
   browserSupportsWebAuthn,
   startAuthentication,
@@ -19,13 +14,13 @@ import {
   type PublicKeyCredentialCreationOptionsJSON,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
-import QRCode from "qrcode";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 const SESSION_STORAGE_KEY = "cs_world_id_session";
 const SESSION_ID_PATTERN = /^session_[0-9a-f]{128}$/i;
+const PROOF_OF_HUMAN = CredentialRequest("proof_of_human");
 const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
   timeout: "Timed out waiting for World App.",
   cancelled: "Cancelled in World App.",
@@ -36,13 +31,12 @@ const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
   unknown_rp: "World ID does not recognize this site’s RP ID.",
   inactive_rp: "This World ID registration is not active yet.",
   world_id_4_not_available: "Your World App does not have a World ID 4.0 credential yet.",
-  world_id_3_not_available: "Your World App no longer has the legacy credential needed for this older account.",
   credential_unavailable: "This World ID is not Orb-verified and cannot prove personhood.",
   malformed_request: "World ID rejected this site’s request configuration.",
   connection_failed: "The connection to World App was lost. Please try again.",
   failed_by_host_app: "World App could not process this request. Please try again.",
   generic_error: "World App could not process this request. Please try again.",
-  nullifier_replayed: "This old one-time World ID proof cannot sign in again. Refresh the page to start a session sign-in.",
+  nullifier_replayed: "This World ID response was already used. Please start again.",
   rp_signature_expired: "The World ID request expired. Please start again.",
   unexpected_response: "World App returned an unexpected response. Please try again.",
   duplicate_nonce: "This World ID request was already used. Please start again.",
@@ -51,9 +45,9 @@ const ERROR_MESSAGES: Partial<Record<IDKitErrorCodes, string>> = {
   invalid_timestamp: "Your device time appears incorrect. Please correct it and try again.",
 };
 
-type RpContextResponse = {
+type WorldIdContext = {
   app_id: `app_${string}`;
-  action: string;
+  environment: "production" | "staging";
   rp_context: RpContext;
 };
 
@@ -128,10 +122,6 @@ function isSessionId(value: unknown): value is `session_${string}` {
   return typeof value === "string" && SESSION_ID_PATTERN.test(value);
 }
 
-function isSessionResult(value: unknown): value is IDKitResultSession {
-  return typeof value === "object" && value !== null && isSessionId((value as { session_id?: unknown }).session_id);
-}
-
 function readSavedSessionId(): `session_${string}` | null {
   try {
     const stored = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -144,8 +134,9 @@ function readSavedSessionId(): `session_${string}` | null {
   return null;
 }
 
-async function fetchRpContext(mode: "proof" | "session"): Promise<RpContextResponse> {
-  const response = await fetch(`/auth/session/rp-context?mode=${mode}`, {
+async function fetchWorldIdContext(): Promise<WorldIdContext> {
+  const response = await fetch("/auth/world-id/context", {
+    method: "POST",
     headers: { accept: "application/json" },
     cache: "no-store",
   });
@@ -156,30 +147,32 @@ async function fetchRpContext(mode: "proof" | "session"): Promise<RpContextRespo
       : "Could not start World ID sign-in.";
     throw new Error(message);
   }
-  const context = body as Partial<RpContextResponse> | null;
+  const context = body as Partial<WorldIdContext> | null;
   if (
     !context
     || typeof context.app_id !== "string"
     || !context.app_id.startsWith("app_")
-    || typeof context.action !== "string"
+    || (context.environment !== "production" && context.environment !== "staging")
     || !context.rp_context
   ) {
     throw new Error("World ID returned an invalid request context.");
   }
-  return context as RpContextResponse;
+  return context as WorldIdContext;
 }
 
-async function reportFailure(code: IDKitErrorCodes, request: IDKitRequest): Promise<void> {
-  const report = request.getDebugReport();
+async function reportWorldIdFailure(
+  code: IDKitErrorCodes,
+  report?: IDKitDebugReport,
+): Promise<void> {
   try {
-    await fetch("/auth/session/failure", {
+    await fetch("/auth/world-id/failure", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         code,
-        request_id: request.requestId,
-        transport: report.transport,
-        mini_app: report.mini_app,
+        request_id: report?.request_id,
+        transport: report?.transport,
+        mini_app: report?.mini_app,
       }),
       keepalive: true,
     });
@@ -188,22 +181,22 @@ async function reportFailure(code: IDKitErrorCodes, request: IDKitRequest): Prom
   }
 }
 
-function isWorldAppV1OnlyError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("verify v2 is not supported");
-}
-
-function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" | "staging" }): React.JSX.Element {
+function LandingAuth(): React.JSX.Element {
   const supportsWebAuthn = browserSupportsWebAuthn();
   const reducedMotion = useReducedMotion();
   const [activeTab, setActiveTab] = React.useState<AuthTab>("passkey");
-  const qrContainer = React.useRef<HTMLDivElement>(null);
   const inviteInput = React.useRef<HTMLInputElement>(null);
+  const worldIdRedirect = React.useRef<string | null>(null);
+  const worldIdHostError = React.useRef<string | null>(null);
   const [passkeyStatus, setPasskeyStatus] = React.useState(
     supportsWebAuthn ? "" : "This browser does not support passkeys.",
   );
   const [passkeyPending, setPasskeyPending] = React.useState(false);
   const [worldIdStatus, setWorldIdStatus] = React.useState("");
   const [worldIdPending, setWorldIdPending] = React.useState(false);
+  const [worldIdOpen, setWorldIdOpen] = React.useState(false);
+  const [worldIdContext, setWorldIdContext] = React.useState<WorldIdContext | null>(null);
+  const [worldIdSessionId, setWorldIdSessionId] = React.useState<`session_${string}` | null>(null);
   const [inviteCode, setInviteCode] = React.useState("");
   const [inviteStatus, setInviteStatus] = React.useState(
     supportsWebAuthn ? "" : "Use a passkey-capable browser to redeem an invite.",
@@ -264,123 +257,53 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
     }
   };
 
-  const renderConnection = async (connectorURI: string): Promise<void> => {
-    // IDKit has already sent the request through the native bridge. A World
-    // App webview generally has no connector URL, and navigating here would
-    // abandon the in-flight native request before it can return a proof.
-    if (isInWorldApp()) {
-      setWorldIdStatus("Confirm sign-in in World App…");
-      return;
-    }
-
-    if (/Mobi|Android/i.test(navigator.userAgent)) {
-      if (!connectorURI) throw new Error("Could not open World App. Please try again.");
-      setWorldIdStatus("Opening World App…");
-      window.location.assign(connectorURI);
-      return;
-    }
-
-    const container = qrContainer.current;
-    if (!container) throw new Error("Could not show the World ID QR code.");
-    if (!connectorURI) throw new Error("Could not start the World ID request. Please try again.");
-
-    setWorldIdStatus("Scan with World App");
-    const canvas = document.createElement("canvas");
-    container.replaceChildren(canvas);
-    await QRCode.toCanvas(canvas, connectorURI, { width: 220, margin: 1 });
-  };
-
   const startWorldIdSignIn = async (): Promise<void> => {
     setWorldIdPending(true);
-    setWorldIdStatus("Connecting to World ID…");
-    qrContainer.current?.replaceChildren();
-
+    setWorldIdStatus("Preparing World ID…");
+    worldIdRedirect.current = null;
+    worldIdHostError.current = null;
     try {
-      const savedSessionId = readSavedSessionId();
-      const { app_id, rp_context } = await fetchRpContext("session");
-      const baseConfig: IDKitSessionConfig = {
-        app_id,
-        rp_context,
-        environment: worldIdEnvironment === "staging" ? "staging" : "production",
-      };
-      const createLegacyRequest = async (): Promise<IDKitRequest> => {
-        const { app_id: legacyAppId, action, rp_context: legacyRpContext } = await fetchRpContext("proof");
-        return IDKit.request({
-          app_id: legacyAppId,
-          action,
-          rp_context: legacyRpContext,
-          allow_legacy_proofs: true,
-          environment: worldIdEnvironment === "staging" ? "staging" : "production",
-        } satisfies IDKitRequestConfig).preset(orbLegacy());
-      };
-
-      let request: IDKitRequest;
-      let usingLegacyRequest = false;
-      try {
-        request = savedSessionId
-          ? await IDKit.proveSession(savedSessionId, baseConfig)
-            .constraints(any(CredentialRequest("proof_of_human")))
-          : await IDKit.createSession(baseConfig)
-            .constraints(any(CredentialRequest("proof_of_human")));
-      } catch (error) {
-        // World App v1 cannot receive a v4 session request over the native
-        // bridge. It can still complete an explicit Orb v3 proof until the
-        // documented transition window ends.
-        if (savedSessionId || !isWorldAppV1OnlyError(error)) throw error;
-        usingLegacyRequest = true;
-        setWorldIdStatus("Using World ID 3 compatibility…");
-        request = await createLegacyRequest();
-      }
-
-      await renderConnection(request.connectorURI);
-      let completion = await request.pollUntilCompletion({ timeout: 180_000 });
-      // v3 identities cannot create v4 sessions. During the documented
-      // migration window, retry them with the action-scoped compatibility
-      // proof. New and returning v4 users never consume that one-time proof.
-      if (!completion.success && !usingLegacyRequest && !savedSessionId && completion.error === "world_id_4_not_available") {
-        await reportFailure(completion.error, request);
-        setWorldIdStatus("Using World ID 3 compatibility…");
-        qrContainer.current?.replaceChildren();
-        request = await createLegacyRequest();
-        usingLegacyRequest = true;
-        await renderConnection(request.connectorURI);
-        completion = await request.pollUntilCompletion({ timeout: 180_000 });
-      }
-      if (!completion.success) {
-        await reportFailure(completion.error, request);
-        throw new Error(ERROR_MESSAGES[completion.error] ?? `World ID error: ${completion.error}`);
-      }
-      setWorldIdStatus("Verifying…");
-      qrContainer.current?.replaceChildren();
-      const response = await fetch("/auth/session/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ idkitResponse: completion.result }),
-      });
-      const body: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message = typeof (body as { error?: unknown } | null)?.error === "string"
-          ? (body as { error: string }).error
-          : "Sign-in failed.";
-        throw new Error(message);
-      }
-      const redirect = (body as { redirect?: unknown } | null)?.redirect;
-      if (typeof redirect !== "string" || !redirect.startsWith("/")) {
-        throw new Error("Sign-in returned an invalid redirect.");
-      }
-
-      if (isSessionResult(completion.result)) {
-        try {
-          localStorage.setItem(SESSION_STORAGE_KEY, completion.result.session_id);
-        } catch {
-          // The authenticated cookie still works when storage is unavailable.
-        }
-      }
-      window.location.assign(redirect);
+      setWorldIdSessionId(readSavedSessionId());
+      setWorldIdContext(await fetchWorldIdContext());
+      setWorldIdStatus("");
+      setWorldIdOpen(true);
     } catch (error) {
       setWorldIdStatus(error instanceof Error ? error.message : "Something went wrong. Please try again.");
       setWorldIdPending(false);
     }
+  };
+
+  const verifyWorldId = async (result: IDKitResultSession): Promise<void> => {
+    setWorldIdStatus("Verifying…");
+    try {
+      const response = await postJson<{ redirect: unknown }>(
+        "/auth/world-id/verify",
+        { idkitResponse: result },
+      );
+      if (typeof response.redirect !== "string" || !response.redirect.startsWith("/")) {
+        throw new Error("Sign-in returned an invalid redirect.");
+      }
+      worldIdRedirect.current = response.redirect;
+    } catch (error) {
+      worldIdHostError.current = errorMessage(error, "Sign-in failed.");
+      setWorldIdStatus(worldIdHostError.current);
+      throw error;
+    }
+  };
+
+  const finishWorldIdSignIn = (result: IDKitResultSession): void => {
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, result.session_id);
+    } catch {
+      // The authenticated cookie still works when storage is unavailable.
+    }
+    const redirect = worldIdRedirect.current;
+    if (!redirect) {
+      setWorldIdStatus("Sign-in returned an invalid redirect.");
+      setWorldIdPending(false);
+      return;
+    }
+    window.location.assign(redirect);
   };
 
   return (
@@ -435,13 +358,12 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
             id="worldid-btn"
             className="btn"
             type="button"
-            disabled={worldIdPending}
+            disabled={worldIdPending || worldIdOpen}
             onClick={() => void startWorldIdSignIn()}
           >
             Continue with World ID →
           </button>
           <p id="worldid-status" className="muted" role="status" aria-live="polite">{worldIdStatus}</p>
-          <div ref={qrContainer} id="worldid-qr" className="qr" role="status" aria-live="polite"></div>
         </AnimatedAuthOption>
       </Tabs.Panel>
 
@@ -480,12 +402,37 @@ function LandingAuth({ worldIdEnvironment }: { worldIdEnvironment: "production" 
           </form>
         </AnimatedAuthOption>
       </Tabs.Panel>
+      {worldIdContext ? (
+        <IDKitSessionWidget
+          open={worldIdOpen}
+          onOpenChange={(open) => {
+            setWorldIdOpen(open);
+            if (!open) setWorldIdPending(false);
+          }}
+          app_id={worldIdContext.app_id}
+          rp_context={worldIdContext.rp_context}
+          environment={worldIdContext.environment}
+          {...(worldIdSessionId ? { existing_session_id: worldIdSessionId } : {})}
+          constraints={PROOF_OF_HUMAN}
+          polling={{ timeout: 180_000 }}
+          handleVerify={verifyWorldId}
+          onSuccess={finishWorldIdSignIn}
+          onError={async (code, report) => {
+            await reportWorldIdFailure(code, report);
+            setWorldIdStatus(
+              code === "failed_by_host_app" && worldIdHostError.current
+                ? worldIdHostError.current
+                : ERROR_MESSAGES[code] ?? `World ID error: ${code}`,
+            );
+            setWorldIdPending(false);
+          }}
+        />
+      ) : null}
     </Tabs.Root>
   );
 }
 
 const root = document.getElementById("landing-auth-root");
 if (root) {
-  const worldIdEnvironment = root.dataset.worldIdEnvironment === "staging" ? "staging" : "production";
-  createRoot(root).render(<LandingAuth worldIdEnvironment={worldIdEnvironment} />);
+  createRoot(root).render(<LandingAuth />);
 }

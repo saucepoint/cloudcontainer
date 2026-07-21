@@ -80,7 +80,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- World ID proof-of-human authentication with World ID 4.0 and Orb v3 support,
+- World ID v4 Proof of Human session authentication,
   passwordless passkey login, and single-use administrator invite signup.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
@@ -137,10 +137,9 @@ The landing page explains the available authentication paths and key service fac
 - the current service is free and needs no credit card; and
 - the environment is a shared-kernel cloud container.
 
-For a new sign-in, the user proves the fixed `codestation-login` action with a
-v4 proof-of-human credential or the Orb v3 fallback. The action-scoped
-nullifier is normalized and reused for later sign-ins. A browser that already
-holds a v4 session ID continues to use the session-proof path.
+For a new sign-in, IDKit React creates a World ID v4 Proof of Human session.
+The browser retains the session ID and proves that session on later sign-ins.
+Only v4 session proofs are accepted; legacy and uniqueness proofs are rejected.
 
 An eight-character uppercase alphanumeric invite is generated only through the
 administrator script. Entering a valid unused code starts passkey registration.
@@ -263,15 +262,12 @@ usable with keyboard alone. Specifically:
 
 ### World ID
 
-New v4 sign-ins create a proof-of-human session and returning v4 sign-ins prove
+New sign-ins create a v4 Proof of Human session and returning sign-ins prove
 that session; the verified RP-scoped `session_id` is the durable account
-identity. A user whose World App cannot create a v4 session receives the
-fixed-action `codestation-login` proof-of-human request with
-`allow_legacy_proofs` enabled, preserving the Orb v3 migration fallback. The
-backend normalizes and stores only the verified v3 fallback nullifier. It never
-uses a v4 uniqueness nullifier as a reusable login identity. Existing World ID
-accounts can replace their old identity with a verified v4 session while their
-Codestation login remains active.
+identity. The backend rejects World ID 3, uniqueness proofs, and any credential
+other than the v4 Proof of Human session credential. IDKit React owns QR,
+polling, and native World App transport; the application stores the returned
+session ID for subsequent proofs.
 
 World ID identifiers live in auth_identities under the `world_id` provider and
 are unique provider subjects; they are not columns on the user profile.
@@ -739,8 +735,8 @@ coverage.
 A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
-1. **Identity:** a valid v4 proof-of-human session or Orb v3 fallback creates
-   or reuses the account for its verified identity; a valid invite is consumed
+1. **Identity:** a valid v4 Proof of Human session creates or reuses the account
+   for its verified session identity; a valid invite is consumed
    exactly once only after its required passkey is verified; a World ID account
    may attach a passkey; either World ID or a registered passkey can reaccess
    the appropriate account; a banned identity is refused; logout revokes the

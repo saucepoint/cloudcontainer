@@ -149,13 +149,13 @@ Copy the returned IDs into wrangler.jsonc, then:
     npx wrangler secret put INVITE_ADMIN_SECRET
     npx wrangler deploy
 
-World ID setup is in the World Developer Portal. The app must be upgraded for
-World ID 4.0, register the `WORLD_ID_ACTION` action, and provide
-`WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, `WORLD_ID_ENVIRONMENT`, and the one-time RP
-signing key. Use `WORLD_ID_ENVIRONMENT=production` with the real World App. Use
-`staging` only when the configured app/RP and World simulator are also staging.
-`DEV_AUTH` does not select the World ID environment. Version 4 sign-in uses
-World ID sessions; retain the action only for the temporary Orb v3 fallback.
+World ID setup is in the World Developer Portal. The app must have a registered
+World ID 4.0 RP and provide `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`,
+`WORLD_ID_ENVIRONMENT`, and the one-time RP signing key. Use
+`WORLD_ID_ENVIRONMENT=production` with the real World App. Use `staging` only
+when the configured app/RP and World simulator are also staging. `DEV_AUTH`
+does not select the World ID environment. Sign-in uses v4 Proof of Human
+sessions exclusively; the React IDKit widget owns the World App handoff.
 
 ### Administrator invites
 

@@ -14,10 +14,7 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
   opencode: "The open source AI coding agent.",
 };
 
-export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production" | "staging" }> = ({
-  devAuth,
-  worldIdEnvironment,
-}) => (
+export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
     <h1 class="landing-title">A cloud workbench for command-line agents</h1>
     <p class="lead">
@@ -42,7 +39,7 @@ export const LandingPage: FC<{ devAuth: boolean; worldIdEnvironment: "production
     <div class="card landing-signin">
       <div class="landing-signin-content" aria-labelledby="signin-heading">
         <h2 id="signin-heading">Sign in or create an account</h2>
-        <div id="landing-auth-root" data-world-id-environment={worldIdEnvironment}></div>
+        <div id="landing-auth-root"></div>
         {devAuth ? (
           <div class="auth-dev-option">
             <a class="btn secondary" href="/auth/dev">
@@ -61,8 +58,7 @@ export const SecurityPage: FC<{
   passkeyCount: number;
   continueHref: string;
   welcome: boolean;
-  worldIdEnvironment: "production" | "staging";
-}> = ({ signupMethod, passkeyCount, continueHref, welcome, worldIdEnvironment }) => (
+}> = ({ signupMethod, passkeyCount, continueHref, welcome }) => (
   <Layout title="Account security" loggedIn>
     <h1>{welcome ? "Your account is ready." : "Account security."}</h1>
     <p class="lead">
@@ -85,22 +81,6 @@ export const SecurityPage: FC<{
       </button>
       <p id="passkey-setup-status" class="muted" role="status" aria-live="polite"></p>
     </section>
-    {signupMethod === "world_id" ? (
-      <section id="world-id-session-migration" class="card" data-world-id-environment={worldIdEnvironment} aria-labelledby="world-id-session-heading">
-        <div class="card-head">
-          <h2 id="world-id-session-heading">World ID sign-in</h2>
-          <span class="badge running">recommended</span>
-        </div>
-        <p class="muted">
-          Update this account to a reusable World ID 4 session. It keeps World ID sign-in working after the older one-time proof is exhausted.
-        </p>
-        <button id="upgrade-world-id-btn" class="btn secondary" type="button">
-          Update World ID sign-in →
-        </button>
-        <p id="world-id-upgrade-status" class="muted" role="status" aria-live="polite"></p>
-        <div id="world-id-upgrade-qr" class="qr" role="status" aria-live="polite"></div>
-      </section>
-    ) : null}
     <div class="row">
       <a id="security-continue" class="btn secondary" href={continueHref}>
         {welcome && passkeyCount === 0 ? "Skip for now" : "Continue"} →

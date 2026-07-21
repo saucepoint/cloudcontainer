@@ -12,7 +12,11 @@ import {
   SESSION_COOKIE,
   sessionCookie,
 } from "./sessions.js";
-import { signWorldIdRequest, verifyWorldIdProof } from "./worldid.js";
+import {
+  createWorldIdContext,
+  verifyWorldIdSession,
+  WorldIdVerificationError,
+} from "./worldid.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -54,8 +58,8 @@ async function findOrCreateUser(
     .first<UserRow>();
   if (existing) return existing.status === "banned" ? null : { user: existing, isNew: false };
 
-  // The v4 session ID or action-scoped normalized nullifier bounds an accepted
-  // identity to one account. The HMAC match survives account deletion (§13).
+  // The verified provider subject bounds an accepted identity to one account.
+  // Its keyed HMAC survives account deletion (§13).
   const banned = await env.DB.prepare(
     "SELECT nullifier_hmac FROM banned_nullifiers WHERE nullifier_hmac = ?",
   )
@@ -142,56 +146,17 @@ export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
   return next();
 };
 
-/** Replace a pre-v4 login identity with the verified stable v4 session ID. */
-async function migrateWorldIdIdentity(
-  env: Bindings,
-  userId: string,
-  identityKey: string,
-): Promise<"migrated" | "already_used" | "not_world_id"> {
-  const owner = await env.DB.prepare(
-    "SELECT user_id FROM auth_identities WHERE provider = 'world_id' AND provider_subject = ?",
-  ).bind(identityKey).first<{ user_id: string }>();
-  if (owner && owner.user_id !== userId) return "already_used";
-
-  const current = await env.DB.prepare(
-    "SELECT provider FROM auth_identities WHERE user_id = ?",
-  ).bind(userId).first<{ provider: string }>();
-  if (!current || current.provider !== "world_id") return "not_world_id";
-
-  try {
-    await env.DB.prepare(
-      `UPDATE auth_identities
-       SET provider_subject = ?, protocol_version = '4.0', last_authenticated_at = ?
-       WHERE user_id = ?`,
-    ).bind(identityKey, Date.now(), userId).run();
-  } catch (error) {
-    // Another active account may have completed the same migration between the
-    // owner lookup and this update. Preserve the unique session identity.
-    const winner = await env.DB.prepare(
-      "SELECT user_id FROM auth_identities WHERE provider = 'world_id' AND provider_subject = ?",
-    ).bind(identityKey).first<{ user_id: string }>();
-    if (winner && winner.user_id !== userId) return "already_used";
-    throw error;
-  }
-  return "migrated";
-}
-
 export const authRoutes = new Hono<AppContext>()
-  // Client fetches this immediately before opening IDKit. Session proofs omit
-  // the action; the v3 compatibility fallback signs the fixed login action.
-  .get("/auth/session/rp-context", (c) => {
-    const mode = c.req.query("mode") === "session" ? "session" : "proof";
+  .post("/auth/world-id/context", (c) => {
     c.header("cache-control", "no-store");
-    return c.json({
-      app_id: c.env.WORLD_ID_APP_ID,
-      action: c.env.WORLD_ID_ACTION,
-      rp_context: signWorldIdRequest(c.env, mode),
-    });
+    try {
+      return c.json(createWorldIdContext(c.env));
+    } catch (error) {
+      console.log(JSON.stringify({ event: "worldid_sign_failed", error: String(error) }));
+      return c.json({ error: "Could not start World ID sign-in." }, 500);
+    }
   })
-  // Capture a World App protocol outcome when the native client only shows a
-  // generic error. The browser intentionally sends no proof, identity, or
-  // session value to this endpoint.
-  .post("/auth/session/failure", async (c) => {
+  .post("/auth/world-id/failure", async (c) => {
     const body = await readJsonBody<{
       code?: unknown;
       request_id?: unknown;
@@ -241,32 +206,26 @@ export const authRoutes = new Hono<AppContext>()
     }));
     return c.body(null, 204);
   })
-  .post("/auth/session/verify", async (c) => {
+  .post("/auth/world-id/verify", async (c) => {
     const body = await readJsonBody<{ idkitResponse?: unknown }>(c);
     if (!body || typeof body !== "object" || !("idkitResponse" in body)) {
       return c.json({ error: "missing idkitResponse" }, 400);
     }
 
-    let identity;
+    let sessionId: string;
     try {
-      identity = await verifyWorldIdProof(c.env, body.idkitResponse);
+      sessionId = await verifyWorldIdSession(c.env, body.idkitResponse);
     } catch (err) {
       console.log(JSON.stringify({ event: "worldid_verify_failed", error: String(err) }));
-      return c.json({ error: "World ID verification failed. Please try again." }, 502);
-    }
-
-    // v4 nullifiers are single-use action results, not durable login IDs. The
-    // browser only creates them for its v3 fallback, so never persist one for
-    // a v4 user even if an old cached client submits it.
-    if (identity.kind === "uniqueness" && identity.protocolVersion === "4.0") {
-      return c.json({ error: "World ID 4 sign-in must use a session proof. Please start again." }, 409);
+      const status = err instanceof WorldIdVerificationError ? err.status : 502;
+      return c.json({ error: "World ID verification failed. Please try again." }, status);
     }
 
     const login = await findOrCreateUser(
       c.env,
       "world_id",
-      identity.identityKey,
-      identity.protocolVersion,
+      sessionId,
+      "4.0",
     );
     if (!login) return c.json({ error: "This World ID is not eligible for an account." }, 403);
     const { location, cookie } = await loginAndRedirect(
@@ -277,38 +236,6 @@ export const authRoutes = new Hono<AppContext>()
     );
     c.header("set-cookie", cookie);
     return c.json({ redirect: location });
-  })
-  // Existing accounts were created with a one-time uniqueness proof. While
-  // their normal Codestation cookie is still valid, replace that identity with
-  // a verified v4 session ID so future World ID sign-ins remain reusable.
-  .post("/auth/session/migrate", requireUser, async (c) => {
-    if (c.get("user").signup_method !== "world_id") {
-      return c.json({ error: "Only World ID accounts can update World ID sign-in." }, 409);
-    }
-    const body = await readJsonBody<{ idkitResponse?: unknown }>(c);
-    if (!body || typeof body !== "object" || !("idkitResponse" in body)) {
-      return c.json({ error: "missing idkitResponse" }, 400);
-    }
-
-    let identity;
-    try {
-      identity = await verifyWorldIdProof(c.env, body.idkitResponse);
-    } catch (err) {
-      console.log(JSON.stringify({ event: "worldid_migration_verify_failed", error: String(err) }));
-      return c.json({ error: "World ID verification failed. Please try again." }, 502);
-    }
-    if (identity.kind !== "session") {
-      return c.json({ error: "World ID must return a version 4 session proof." }, 400);
-    }
-
-    const result = await migrateWorldIdIdentity(c.env, c.get("user").id, identity.identityKey);
-    if (result === "already_used") {
-      return c.json({ error: "That World ID session is already linked to another account." }, 409);
-    }
-    if (result === "not_world_id") {
-      return c.json({ error: "This account has no World ID sign-in to update." }, 409);
-    }
-    return c.json({ migrated: true });
   })
   // Local-only development login, exposed only when explicitly enabled.
   .get("/auth/dev", async (c) => {

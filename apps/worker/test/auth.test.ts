@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { hmacNullifier } from "@codestation/contract";
 import { authRoutes } from "../src/auth.js";
-import { createSession } from "../src/sessions.js";
 import type { AppContext, UserRow } from "../src/types.js";
 import { makeEnv, seedContainer, seedHost, seedUser } from "./helpers/env.js";
 
@@ -105,51 +104,27 @@ describe("signup and login via session identity", () => {
   });
 });
 
-describe("/auth/session/verify", () => {
-  it("creates an account from a verified Orb v3 nullifier", async () => {
+describe("/auth/world-id", () => {
+  it("returns a fresh v4 session context without an action", async () => {
     const { env } = makeEnv();
-    const nullifier = `0x${"a".repeat(64)}`;
-    const idkitResponse = {
-      protocol_version: "3.0",
-      nonce: "proof-nonce",
-      action: "codestation-login",
-      environment: "production",
-      responses: [{
-        identifier: "orb",
-        proof: "0xproof",
-        merkle_root: `0x${"b".repeat(64)}`,
-        nullifier,
-      }],
-    };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        success: true,
-        action: "codestation-login",
-        nullifier,
-      }), { status: 200 }),
-    ));
-
-    const res = await app().request(
-      "/auth/session/verify",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ idkitResponse }),
-      },
-      env,
-    );
+    const res = await app().request("/auth/world-id/context", { method: "POST" }, env);
 
     expect(res.status).toBe(200);
-    const identities = await env.DB.prepare(
-      "SELECT provider_subject, protocol_version FROM auth_identities",
-    ).all<{ provider_subject: string; protocol_version: string }>();
-    expect(identities.results).toEqual([{
-      provider_subject: `worldid-nullifier:${BigInt(nullifier).toString(10)}`,
-      protocol_version: "3.0",
-    }]);
+    expect(await res.json()).toEqual({
+      app_id: "app_test",
+      environment: "production",
+      rp_context: {
+        rp_id: "rp_test",
+        nonce: expect.any(String),
+        created_at: expect.any(Number),
+        expires_at: expect.any(Number),
+        signature: expect.stringMatching(/^0x[0-9a-f]+$/),
+      },
+    });
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("creates the session for the identity confirmed by the verifier", async () => {
+  it("creates and reuses the identity confirmed by a v4 session proof", async () => {
     const { env } = makeEnv();
     const submittedSessionId = `session_${"b".repeat(128)}`;
     const idkitResponse = {
@@ -160,22 +135,27 @@ describe("/auth/session/verify", () => {
       responses: [{
         identifier: "proof_of_human",
         issuer_schema_id: 1,
-        proof: ["proof"],
+        proof: ["0x1", "0x2", "0x3", "0x4", "0x5"],
         expires_at_min: 1,
-        session_nullifier: ["nullifier", "action"],
+        session_nullifier: ["0xnullifier", "0xaction"],
       }],
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ success: true, session_id: submittedSessionId }), {
+      vi.fn().mockImplementation(() => Promise.resolve(
+        new Response(JSON.stringify({
+          success: true,
+          session_id: submittedSessionId,
+          environment: "production",
+          results: [{ identifier: "proof_of_human", success: true }],
+        }), {
           status: 200,
         }),
-      ),
+      )),
     );
 
     const res = await app().request(
-      "/auth/session/verify",
+      "/auth/world-id/verify",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -195,30 +175,8 @@ describe("/auth/session/verify", () => {
       provider_subject: submittedSessionId,
       protocol_version: "4.0",
     }]);
-  });
-
-  it("does not store a reusable account identity from a one-time v4 uniqueness proof", async () => {
-    const { env } = makeEnv();
-    const nullifier = `0x${"c".repeat(64)}`;
-    const idkitResponse = {
-      protocol_version: "4.0",
-      nonce: "proof-nonce",
-      action: "codestation-login",
-      environment: "production",
-      responses: [{
-        identifier: "proof_of_human",
-        issuer_schema_id: 1,
-        proof: ["proof"],
-        expires_at_min: 1,
-        nullifier,
-      }],
-    };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: true, nullifier }), { status: 200 }),
-    ));
-
-    const res = await app().request(
-      "/auth/session/verify",
+    const again = await app().request(
+      "/auth/world-id/verify",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -226,65 +184,45 @@ describe("/auth/session/verify", () => {
       },
       env,
     );
-
-    expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({
-      error: "World ID 4 sign-in must use a session proof. Please start again.",
-    });
-    expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(0);
+    expect(again.status).toBe(200);
+    expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(1);
   });
 
-  it("replaces an active legacy World ID login with a verified v4 session", async () => {
+  it("rejects a non-session or non-v4 response before calling the verifier", async () => {
     const { env } = makeEnv();
-    const user = await seedUser(env);
-    const sid = await createSession(env, user.id);
-    const worldIdSession = `session_${"d".repeat(128)}`;
-    const idkitResponse = {
-      protocol_version: "4.0",
-      nonce: "proof-nonce",
-      environment: "production",
-      session_id: worldIdSession,
-      responses: [{
-        identifier: "proof_of_human",
-        issuer_schema_id: 1,
-        proof: ["proof"],
-        expires_at_min: 1,
-        session_nullifier: ["nullifier", "action"],
-      }],
-    };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: true, session_id: worldIdSession }), { status: 200 }),
-    ));
-
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
     const res = await app().request(
-      "/auth/session/migrate",
+      "/auth/world-id/verify",
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie: `cs_session=${sid}`,
-        },
-        body: JSON.stringify({ idkitResponse }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idkitResponse: {
+          protocol_version: "3.0",
+          environment: "production",
+          nonce: "proof-nonce",
+          responses: [],
+        } }),
       },
       env,
     );
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ migrated: true });
-    const identity = await env.DB.prepare(
-      "SELECT provider_subject, protocol_version FROM auth_identities WHERE user_id = ?",
-    ).bind(user.id).first<{ provider_subject: string; protocol_version: string }>();
-    expect(identity).toEqual({ provider_subject: worldIdSession, protocol_version: "4.0" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "World ID verification failed. Please try again.",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(0);
   });
 });
 
-describe("/auth/session/failure", () => {
+describe("/auth/world-id/failure", () => {
   it("logs only a sanitized World App failure code and opaque request ID", async () => {
     const { env } = makeEnv();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const res = await app().request(
-      "/auth/session/failure",
+      "/auth/world-id/failure",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -311,7 +249,7 @@ describe("/auth/session/failure", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const res = await app().request(
-      "/auth/session/failure",
+      "/auth/world-id/failure",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -349,6 +287,24 @@ describe("/auth/session/failure", () => {
         },
       }),
     );
+  });
+});
+
+/*
+  Keep the old route names absent: v3 compatibility and migration were removed
+  with the clean World ID v4 integration.
+*/
+describe("removed World ID routes", () => {
+  it("does not expose the previous session endpoints", async () => {
+    const { env } = makeEnv();
+    for (const path of [
+      "/auth/session/rp-context",
+      "/auth/session/verify",
+      "/auth/session/failure",
+      "/auth/session/migrate",
+    ]) {
+      expect((await app().request(path, { method: "POST" }, env)).status).toBe(404);
+    }
   });
 });
 

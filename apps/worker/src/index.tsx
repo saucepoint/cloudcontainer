@@ -32,10 +32,7 @@ app.onError((err, c) => {
 
 app.get("/", (c) =>
   c.html(
-    <LandingPage
-      devAuth={c.env.DEV_AUTH === "1"}
-      worldIdEnvironment={c.env.WORLD_ID_ENVIRONMENT}
-    />,
+    <LandingPage devAuth={c.env.DEV_AUTH === "1"} />,
   ),
 );
 
@@ -63,7 +60,6 @@ app.get("/security", requireUser, async (c) => {
       passkeyCount={passkeys?.count ?? 0}
       continueHref={container ? "/dashboard" : "/onboarding"}
       welcome={c.req.query("welcome") === "1"}
-      worldIdEnvironment={c.env.WORLD_ID_ENVIRONMENT}
     />,
   );
 });

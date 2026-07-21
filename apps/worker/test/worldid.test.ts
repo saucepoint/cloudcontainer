@@ -1,36 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { verifyWorldIdProof } from "../src/worldid.js";
+import {
+  createWorldIdContext,
+  verifyWorldIdSession,
+  WorldIdVerificationError,
+} from "../src/worldid.js";
 import { makeEnv } from "./helpers/env.js";
 
-const nullifier = `0x${"a".repeat(64)}`;
-const normalizedNullifier = BigInt(nullifier).toString(10);
-const v3Proof = {
-  protocol_version: "3.0",
-  nonce: "proof-nonce",
-  action: "codestation-login",
-  environment: "production",
-  user_presence_completed: false,
-  responses: [{
-    identifier: "orb",
-    proof: "0xproof",
-    merkle_root: `0x${"b".repeat(64)}`,
-    nullifier,
-  }],
-};
-const v4Proof = {
-  protocol_version: "4.0",
-  nonce: "proof-nonce",
-  action: "codestation-login",
-  environment: "production",
-  user_presence_completed: false,
-  responses: [{
-    identifier: "proof_of_human",
-    issuer_schema_id: 1,
-    proof: ["proof"],
-    expires_at_min: 1,
-    nullifier,
-  }],
-};
 const sessionProof = {
   protocol_version: "4.0",
   nonce: "proof-nonce",
@@ -39,113 +14,110 @@ const sessionProof = {
   responses: [{
     identifier: "proof_of_human",
     issuer_schema_id: 1,
-    proof: ["proof"],
+    proof: ["0x1", "0x2", "0x3", "0x4", "0x5"],
     expires_at_min: 1,
-    session_nullifier: ["nullifier", "action"],
+    session_nullifier: ["0xnullifier", "0xaction"],
   }],
 };
 
+function verifiedResponse(overrides: Record<string, unknown> = {}) {
+  return new Response(JSON.stringify({
+    success: true,
+    session_id: sessionProof.session_id,
+    environment: "production",
+    results: [{ identifier: "proof_of_human", success: true }],
+    ...overrides,
+  }), { status: 200 });
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
-describe("World ID proof verification", () => {
-  it("accepts an Orb v3 proof for the configured action", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        success: true,
-        action: "codestation-login",
-        nullifier,
-      }), { status: 200 }),
-    );
+describe("World ID v4 session integration", () => {
+  it("signs an actionless RP context on the server", () => {
+    const context = createWorldIdContext(makeEnv().env);
+
+    expect(context).toEqual({
+      app_id: "app_test",
+      environment: "production",
+      rp_context: {
+        rp_id: "rp_test",
+        nonce: expect.any(String),
+        created_at: expect.any(Number),
+        expires_at: expect.any(Number),
+        signature: expect.stringMatching(/^0x[0-9a-f]+$/),
+      },
+    });
+    expect(context).not.toHaveProperty("action");
+    expect(context.rp_context.expires_at).toBeGreaterThan(context.rp_context.created_at);
+  });
+
+  it("forwards an unmodified v4 session proof and accepts its verified session ID", async () => {
+    const fetch = vi.fn().mockResolvedValue(verifiedResponse());
     vi.stubGlobal("fetch", fetch);
 
-    await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).resolves.toEqual({
-      identityKey: `worldid-nullifier:${normalizedNullifier}`,
-      kind: "uniqueness",
-      protocolVersion: "3.0",
-    });
+    await expect(verifyWorldIdSession(makeEnv().env, sessionProof)).resolves.toBe(
+      sessionProof.session_id,
+    );
     expect(fetch).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/v4\/verify\/rp_/),
-      expect.objectContaining({ body: JSON.stringify(v3Proof), method: "POST" }),
+      expect.stringMatching(/\/api\/v4\/verify\/rp_test$/),
+      expect.objectContaining({
+        body: JSON.stringify(sessionProof),
+        method: "POST",
+      }),
     );
   });
 
-  it("accepts the matching v4 proof-of-human uniqueness proof", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        success: true,
-        results: [{ success: true, nullifier }],
-      }), { status: 200 }),
-    ));
-
-    await expect(verifyWorldIdProof(makeEnv().env, v4Proof)).resolves.toEqual({
-      identityKey: `worldid-nullifier:${normalizedNullifier}`,
-      kind: "uniqueness",
-      protocolVersion: "4.0",
-    });
-  });
-
-  it("retains compatibility with an existing v4 session identity", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: true, session_id: sessionProof.session_id }), {
-        status: 200,
-      }),
-    ));
-
-    await expect(verifyWorldIdProof(makeEnv().env, sessionProof)).resolves.toEqual({
-      identityKey: sessionProof.session_id,
-      kind: "session",
-      protocolVersion: "4.0",
-    });
-  });
-
-  it("rejects the wrong environment, action, or credential before verification", async () => {
+  it("rejects legacy, uniqueness, wrong-environment, and wrong-credential payloads locally", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
 
-    await expect(verifyWorldIdProof(
-      makeEnv({ WORLD_ID_ENVIRONMENT: "staging" }).env,
-      v3Proof,
-    )).rejects.toThrow("expected staging, received production");
-    await expect(verifyWorldIdProof(makeEnv().env, {
-      ...v3Proof,
-      action: "different-action",
-    })).rejects.toThrow("expected codestation-login, received different-action");
-    await expect(verifyWorldIdProof(makeEnv().env, {
-      ...v3Proof,
-      responses: [{ ...v3Proof.responses[0], identifier: "device" }],
-    })).rejects.toThrow("missing the required proof-of-human credential");
+    await expect(verifyWorldIdSession(makeEnv().env, {
+      ...sessionProof,
+      protocol_version: "3.0",
+    })).rejects.toThrow("not protocol version 4.0");
+    await expect(verifyWorldIdSession(makeEnv().env, {
+      ...sessionProof,
+      session_id: undefined,
+      action: "codestation-login",
+    })).rejects.toThrow("not a session proof");
+    await expect(verifyWorldIdSession(makeEnv({ WORLD_ID_ENVIRONMENT: "staging" }).env, sessionProof))
+      .rejects.toThrow("wrong environment");
+    await expect(verifyWorldIdSession(makeEnv().env, {
+      ...sessionProof,
+      responses: [{ ...sessionProof.responses[0], identifier: "passport" }],
+    })).rejects.toThrow("missing the Proof of Human credential");
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("rejects a false result or a verifier identity mismatch", async () => {
+  it("requires the verifier to confirm the same session and Proof of Human result", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: true, nullifier: `0x${"d".repeat(64)}` }), {
-        status: 200,
-      }),
+      verifiedResponse({ session_id: `session_${"d".repeat(128)}` }),
     ));
-    await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).rejects.toThrow(
-      "different nullifier",
+    await expect(verifyWorldIdSession(makeEnv().env, sessionProof)).rejects.toThrow(
+      "different session",
     );
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: false }), { status: 200 }),
+      verifiedResponse({ results: [{ identifier: "proof_of_human", success: false }] }),
     ));
-    await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).rejects.toThrow(
-      "verifier returned success=false",
+    await expect(verifyWorldIdSession(makeEnv().env, sessionProof)).rejects.toThrow(
+      "did not verify Proof of Human",
     );
   });
 
-  it("retains verifier errors for diagnostics and rejects non-JSON success", async () => {
+  it("classifies verifier rejections and outages without exposing the proof", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ code: "invalid_rp_signature" }), { status: 400 }),
     ));
-    await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).rejects.toThrow(
-      /400.*invalid_rp_signature/,
-    );
+    await expect(verifyWorldIdSession(makeEnv().env, sessionProof)).rejects.toMatchObject({
+      message: "World ID verifier rejected the proof (invalid_rp_signature)",
+      status: 400,
+    } satisfies Partial<WorldIdVerificationError>);
 
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
-    await expect(verifyWorldIdProof(makeEnv().env, v3Proof)).rejects.toThrow(
-      "verifier returned invalid JSON",
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 200 })));
+    await expect(verifyWorldIdSession(makeEnv().env, sessionProof)).rejects.toMatchObject({
+      message: "World ID verifier returned invalid JSON",
+      status: 502,
+    } satisfies Partial<WorldIdVerificationError>);
   });
 });
