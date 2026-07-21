@@ -3,8 +3,10 @@ import { createServer } from "node:https";
 import { availableParallelism, freemem, loadavg, totalmem, uptime } from "node:os";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   HealthResponseSchema,
+  INPUT_LIMITS,
   JobRequestSchema,
   MemoryNonceStore,
   verifyRequest,
@@ -28,6 +30,14 @@ export function buildApp(opts: {
   const nonces = new MemoryNonceStore(opts.now);
   const app = new Hono<{ Variables: { rawBody: string } }>();
 
+  // Bound every request body, not just /jobs: the signature middleware below
+  // buffers POST bodies for hashing on any path, so an oversized body sent
+  // anywhere must be rejected before it is read.
+  app.use("*", bodyLimit({
+    maxSize: INPUT_LIMITS.jobRequestBytes,
+    onError: (context) => context.json({ error: "request body is too large" }, 413),
+  }));
+
   // Every route requires a valid Worker signature (timestamp + nonce + body hash).
   app.use("*", async (c, next) => {
     const body = c.req.method === "POST" ? await c.req.text() : "";
@@ -41,7 +51,7 @@ export function buildApp(opts: {
       ...(opts.now ? { now: opts.now } : {}),
     });
     if (failure) {
-      console.log(JSON.stringify({ event: "rpc_rejected", reason: failure }));
+      console.warn(JSON.stringify({ event: "rpc_rejected", reason: failure }));
       return c.json({ error: failure }, 401);
     }
     c.set("rawBody", body);

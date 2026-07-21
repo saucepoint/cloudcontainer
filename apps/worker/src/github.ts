@@ -6,14 +6,23 @@
  * `refresh-credentials` jobs.
  */
 import { Hono } from "hono";
-import { encryptJsonAtRest, GithubRepoNameSchema, toHex } from "@workbench/contract";
+import {
+  CredentialPayloadSchema,
+  encryptJsonAtRest,
+  GithubRepoNameSchema,
+  toHex,
+} from "@workbench/contract";
 import {
   CREDENTIALS_LOCKED_ERROR,
   credentialsCanBeChanged,
   requireCredentialSetup,
   requireUser,
 } from "./auth.js";
-import { decryptString, getCredentialsRow } from "./credentials.js";
+import {
+  buildCredentialPayload,
+  decryptString,
+  getCredentialsRow,
+} from "./credentials.js";
 import { enqueueJobForUser } from "./jobs.js";
 import type { AppContext, Bindings } from "./types.js";
 
@@ -126,7 +135,7 @@ function githubRepository(row: GithubRepositoryResponse): GithubRepository | nul
 }
 
 /** Fetch one repository when the user token and App installation can access it. */
-export async function fetchGithubRepository(
+async function fetchGithubRepository(
   token: string,
   fullName: string,
 ): Promise<GithubRepository | null> {
@@ -202,6 +211,12 @@ export async function storeGithubTokens(
   const key = env.CREDENTIAL_MASTER_KEY;
   const expiresAt = Date.now() + (tokens.expires_in ?? 8 * 3600) * 1000;
   const login = await fetchGithubLogin(tokens.access_token);
+  const existing = buildCredentialPayload(env, await getCredentialsRow(env, userId));
+  CredentialPayloadSchema.parse({
+    ...existing,
+    githubToken: tokens.access_token,
+    ...(login ? { githubLogin: login } : {}),
+  });
   await env.DB.prepare(
     `INSERT INTO credentials_encrypted (user_id, github_token, github_refresh_token, github_expires_at, github_login, rotated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -289,7 +304,7 @@ export const githubRoutes = new Hono<AppContext>()
       await pushCredentialsToContainer(c.env, row.user_id);
     } catch (err) {
       // Log the credential *kind* only, never values (§10 secrets hygiene).
-      console.log(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
       return c.text("GitHub authorization failed. Please retry from the dashboard.", 502);
     }
     return c.redirect(row.return_to === "/onboarding" ? "/onboarding" : "/dashboard");
@@ -304,7 +319,7 @@ export const githubRoutes = new Hono<AppContext>()
       const repositories = await searchGithubRepositories(token, query);
       return c.json({ repositories });
     } catch (err) {
-      console.log(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
       return c.json({ error: "Could not load GitHub repositories. Reconnect GitHub and retry." }, 502);
     }
   });

@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decryptJsonAtRest, encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
+import { enqueueJob, getContainerForUser, getHost, refreshJob } from "../src/jobs.js";
 import { GRACE_DAYS, reconcile, STUCK_JOB_MS } from "../src/reconciler.js";
 import type { CredentialsRow, JobRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
@@ -58,6 +59,83 @@ describe("stuck-job timeout", () => {
     expect(container?.status_detail).toBe("operation timed out");
   });
 
+  it.each([
+    { op: "start" as const, initialStatus: "stopped" as const, incusStatus: "Stopped" },
+    { op: "stop" as const, initialStatus: "running" as const, incusStatus: "Running" },
+  ])("moves a steady-state container to error when its $op job times out", async ({
+    op,
+    initialStatus,
+    incusStatus,
+  }) => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: initialStatus });
+    const t0 = Date.now();
+    await insertJob(env, { op, updated_at: t0 - STUCK_JOB_MS - 1 });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus }]));
+
+    await reconcile(env, () => t0);
+    await reconcile(env, () => t0 + 1);
+
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string;
+    }>();
+    expect(container).toEqual({ status: "error", status_detail: "operation timed out" });
+  });
+
+  it("does not let an older timed-out lifecycle job overwrite a newer result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, {
+      id: "job-old",
+      op: "start",
+      status: "running",
+      created_at: t0 - STUCK_JOB_MS - 2,
+      updated_at: t0 - STUCK_JOB_MS - 1,
+    });
+    await insertJob(env, {
+      id: "job-new",
+      op: "start",
+      status: "succeeded",
+      created_at: t0 - 1,
+      updated_at: t0 - 1,
+    });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus: "Running" }]));
+
+    await reconcile(env, () => t0);
+
+    const oldJob = await env.DB.prepare("SELECT * FROM jobs WHERE id = 'job-old'").first<JobRow>();
+    expect(oldJob?.status).toBe("failed");
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string | null;
+    }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
+  });
+
+  it("fails a timed-out background job without changing container state", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, { op: "sync-keys", updated_at: t0 - STUCK_JOB_MS - 1 });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus: "Running" }]));
+
+    await reconcile(env, () => t0);
+
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string | null;
+    }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
+  });
+
   it("leaves recent running jobs alone (they get polled instead)", async () => {
     const { env } = makeEnv();
     await seedUser(env);
@@ -74,6 +152,36 @@ describe("stuck-job timeout", () => {
     expect(job?.status).toBe("succeeded");
     const container = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(container?.status).toBe("running"); // provision succeeded
+  });
+});
+
+describe("failed background synchronization", () => {
+  it("retries the latest failed key sync after the backoff", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    const t0 = Date.now();
+    await insertJob(env, {
+      id: "failed-sync",
+      op: "sync-keys",
+      status: "failed",
+      created_at: t0 - 2 * 60 * 60 * 1000,
+      updated_at: t0 - 2 * 60 * 60 * 1000,
+    });
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      statsRoute([{ containerId: "container-1", incusStatus: "Running" }]),
+    );
+
+    await reconcile(env, () => t0);
+
+    expect(daemon.submitted).toMatchObject([{ op: "sync-keys", containerId: "container-1" }]);
+    const jobs = await env.DB.prepare(
+      "SELECT status FROM jobs WHERE container_id = 'container-1' ORDER BY rowid",
+    ).all<{ status: string }>();
+    expect(jobs.results.map((job) => job.status)).toEqual(["failed", "running"]);
   });
 });
 
@@ -160,6 +268,95 @@ describe("waitlist admission", () => {
     ]);
   });
 
+  it("admits on another eligible host when the preferred host has no SSH ports", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, {
+      id: "ports-full",
+      ram_total_mb: 65536,
+      ram_reserve_mb: 8192,
+      daemon_endpoint: "https://ports-full.test:8443",
+      daemon_pubkey: generateX25519Keypair().publicKey,
+    });
+    await seedHost(env, {
+      id: "ports-free",
+      ram_total_mb: 32768,
+      ram_reserve_mb: 8192,
+      daemon_endpoint: "https://ports-free.test:8443",
+      daemon_pubkey: generateX25519Keypair().publicKey,
+    });
+    await seedContainer(env, {
+      user_id: user.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1000)",
+    ).run();
+    await env.DB.prepare(
+      `WITH RECURSIVE ports(port) AS (
+         VALUES(30000) UNION ALL SELECT port + 1 FROM ports WHERE port < 39999
+       )
+       INSERT INTO port_quarantine (host_id, port, released_at)
+       SELECT 'ports-full', port, ? FROM ports`,
+    )
+      .bind(Date.now())
+      .run();
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      (url) => url.pathname === "/stats"
+        ? Response.json({
+            hostId: url.hostname.replace(".test", ""),
+            containers: [],
+            ramTotalMb: 65536,
+            uptimeSec: 100,
+          })
+        : null,
+    );
+
+    await reconcile(env, Date.now);
+
+    const container = await env.DB.prepare(
+      "SELECT host_id, status FROM containers WHERE id = 'container-1'",
+    ).first<{ host_id: string; status: string }>();
+    expect(container).toEqual({ host_id: "ports-free", status: "provisioning" });
+    expect(daemon.submitted).toHaveLength(1);
+  });
+
+  it("marks an admitted container as error when its provision job cannot be queued", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });
+    await seedContainer(env, {
+      user_id: user.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
+    });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1000)",
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_provision_job BEFORE INSERT ON jobs
+       WHEN NEW.op = 'provision'
+       BEGIN SELECT RAISE(FAIL, 'job insert failed'); END`,
+    ).run();
+    stubFetch(statsRoute([]));
+
+    await reconcile(env, () => 10_000);
+
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE user_id = 'user-1'",
+    ).first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({
+      status: "error",
+      status_detail: "provisioning could not be queued",
+    });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+  });
+
   it("does not admit a tenant after the current host health check fails", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -191,6 +388,47 @@ describe("waitlist admission", () => {
 });
 
 describe("drift correction (D1 <-> incus)", () => {
+  it("does not apply host stats captured before a newer lifecycle result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "running" });
+    let statsRequested!: () => void;
+    let releaseStats!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      statsRequested = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseStats = resolve;
+    });
+    stubFetch((url) => {
+      if (url.pathname !== "/stats") return null;
+      statsRequested();
+      return release.then(() => Response.json({
+        hostId: "host-1",
+        containers: [],
+        ramTotalMb: 65536,
+        uptimeSec: 100,
+      }));
+    });
+
+    const reconciliation = reconcile(env, Date.now);
+    await requested;
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('newer-rebuild', 'container-1', 'rebuild', 'succeeded', ?, ?)`,
+    )
+      .bind(Date.now(), Date.now())
+      .run();
+    releaseStats();
+    await reconciliation;
+
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE id = 'container-1'",
+    ).first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({ status: "running", status_detail: null });
+  });
+
   it("adopts the host's actual state when D1 disagrees", async () => {
     const { env } = makeEnv();
     await seedUser(env);
@@ -215,7 +453,7 @@ describe("drift correction (D1 <-> incus)", () => {
     expect(row?.status).toBe("running");
   });
 
-  it("frees capacity and marks as error when a running container is missing from the host", async () => {
+  it("marks a missing running container as error while preserving its reservation", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
@@ -233,10 +471,25 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 0, ram_allocated_mb: 0, disk_allocated_gb: 0 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
-  it("frees capacity when a stopped container is missing from the host", async () => {
+  it("preserves missing-container capacity across overlapping reconciliations", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+
+    await Promise.all([reconcile(env, Date.now), reconcile(env, Date.now)]);
+
+    const host = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+  });
+
+  it("preserves capacity when a stopped container is missing from the host", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
@@ -253,7 +506,51 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 0, ram_allocated_mb: 0, disk_allocated_gb: 0 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+  });
+
+  it("reuses the preserved reservation when retrying a missing container", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+    await reconcile(env, Date.now);
+    const container = await getContainerForUser(env, "user-1");
+    const host = await getHost(env, "host-1");
+    if (!container || !host) throw new Error("test setup missing container or host");
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await enqueueJob(env, "provision", container, host);
+
+    const accounting = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(accounting).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+  });
+
+  it("releases a missing container's reservation once when destroy succeeds", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    await seedContainer(env, { status: "running", cpu: 1, ram_mb: 2048, disk_gb: 8 });
+    stubFetch(statsRoute([]));
+    await reconcile(env, Date.now);
+    const container = await getContainerForUser(env, "user-1");
+    const host = await getHost(env, "host-1");
+    if (!container || !host) throw new Error("test setup missing container or host");
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const job = await enqueueJob(env, "destroy", container, host);
+    await refreshJob(env, job);
+
+    expect(await getContainerForUser(env, "user-1")).toBeNull();
+    const accounting = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(accounting).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
   });
 
   it("skips a missing container when a lifecycle job is still active for it", async () => {

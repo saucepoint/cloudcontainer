@@ -4,7 +4,6 @@ import {
   PORT_RANGE_END,
   PORT_RANGE_START,
   QUARANTINE_DAYS,
-  quarantinePort,
 } from "../src/ports.js";
 import { makeEnv, seedHost, seedUser, seedContainer } from "./helpers/env.js";
 
@@ -53,7 +52,11 @@ describe("allocatePort", () => {
     const survivor = PORT_RANGE_START + 42;
     blockAllPortsExcept(db, "host-1", [survivor], now);
     // The survivor was itself quarantined, but long enough ago to be reusable.
-    await quarantinePort(env, "host-1", survivor, now - (QUARANTINE_DAYS + 1) * DAY_MS);
+    await env.DB.prepare(
+      "INSERT INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
+    )
+      .bind("host-1", survivor, now - (QUARANTINE_DAYS + 1) * DAY_MS)
+      .run();
 
     expect(await allocatePort(env, "host-1", now)).toBe(survivor);
   });

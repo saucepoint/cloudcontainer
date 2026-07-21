@@ -6,7 +6,7 @@ import {
   type JobRequest,
 } from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
-import { containerName, homeVolumeName, Incus, type ExecFn } from "../src/incus.js";
+import { containerName, homeVolumeName, Incus, IncusNotFoundError, type ExecFn } from "../src/incus.js";
 import { JobConflictError, JobRunner } from "../src/jobs.js";
 import { Provisioner } from "../src/provisioner.js";
 
@@ -34,9 +34,16 @@ function fakeExec(calls: Call[], respond?: (args: string[]) => string): ExecFn {
     calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
     // Fresh provision: the container and volume don't exist yet.
     if (args[0] === "info" || (args[0] === "storage" && args[2] === "show")) {
-      throw new Error("not found");
+      throw new IncusNotFoundError();
     }
-    return { stdout: respond ? respond(args) : "", stderr: "" };
+    const stdout = respond ? respond(args) : "";
+    if (args[0] === "list" && !stdout) {
+      return {
+        stdout: JSON.stringify([{ name: args[1], status: "Running" }]),
+        stderr: "",
+      };
+    }
+    return { stdout, stderr: "" };
   };
 }
 
@@ -177,6 +184,18 @@ describe("provision command construction", () => {
     for (const command of commands) expect(command).not.toContain("CANARY-");
   });
 
+  it("rejects repository selections that would clone into the same directory", async () => {
+    const calls: Call[] = [];
+    const request = provisionRequest();
+    request.githubRepos = ["octocat/project", "acme/project"];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+
+    await expect(provisioner.run(request)).rejects.toThrow(
+      "selected GitHub repositories must have unique names",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it("installs every selected agent in one idempotent script", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
@@ -205,11 +224,11 @@ describe("provision command construction", () => {
     const exec: ExecFn = async (_cmd, args, stdin) => {
       calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
       if (args[0] === "info") {
-        if (!rootExists) throw new Error("not found");
+        if (!rootExists) throw new IncusNotFoundError();
         return { stdout: "", stderr: "" };
       }
       if (args[0] === "storage" && args[1] === "volume" && args[2] === "show") {
-        if (!homeExists) throw new Error("not found");
+        if (!homeExists) throw new IncusNotFoundError();
         return { stdout: "", stderr: "" };
       }
       if (args[0] === "storage" && args[1] === "volume" && args[2] === "create") {
@@ -445,6 +464,44 @@ describe("provision command construction", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("fails credential refresh when selected-agent metadata cannot be read", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      if (args.join(" ").includes("/etc/workbench-agents")) {
+        throw new Error("agent metadata unavailable");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "refresh-credentials",
+      jobId: "j-agent-metadata",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    })).rejects.toThrow("agent metadata unavailable");
+  });
+
+  it("does not mask a command-level metadata read failure", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      const script = args.at(-1) ?? "";
+      if (script.includes("/etc/workbench-agents")) {
+        if (/\btrue\s*$/.test(script)) return { stdout: "", stderr: "metadata read failed" };
+        throw new Error("metadata read failed");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "refresh-credentials",
+      jobId: "j-agent-metadata-command",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    })).rejects.toThrow("metadata read failed");
+  });
+
   it("rejects malformed Wrangler auth without exposing its contents in the error", async () => {
     const sealed = sealJson(
       { wranglerOauth: '{"oauth_token":"CANARY-secret"}' },
@@ -475,7 +532,12 @@ describe("resize / destroy", () => {
       { llmKeys: { anthropic: "CANARY-after-stop" } },
       hostKeys.publicKey,
     );
-    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => args[0] === "list"
+        ? JSON.stringify([{ name: "cs-aaaaaaaabbbb", status: "Stopped" }])
+        : "")),
+      makeConfig(),
+    );
 
     await provisioner.run({
       op: "start",
@@ -486,10 +548,63 @@ describe("resize / destroy", () => {
       sealedCredentials: sealed,
     });
 
-    expect(calls[0]?.args.join(" ")).toBe("start cs-aaaaaaaabbbb");
+    expect(calls.map((call) => call.args.join(" "))).toContain("start cs-aaaaaaaabbbb");
     expect(calls.some((call) => call.stdin?.includes("ssh-ed25519 AAAA new-laptop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("CANARY-after-stop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("https://workbench.example"))).toBe(true);
+  });
+
+  it("retries start setup without starting an already-running container again", async () => {
+    const calls: Call[] = [];
+    let status = "Stopped";
+    let metadataReads = 0;
+    const exec: ExecFn = async (_cmd, args, stdin) => {
+      calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
+      if (args[0] === "list") {
+        return {
+          stdout: JSON.stringify([{ name: "cs-aaaaaaaabbbb", status }]),
+          stderr: "",
+        };
+      }
+      if (args[0] === "start") {
+        status = "Running";
+        return { stdout: "", stderr: "" };
+      }
+      if (args.join(" ").includes("/etc/workbench-agents")) {
+        metadataReads += 1;
+        if (metadataReads === 1) throw new Error("metadata temporarily unavailable");
+        return { stdout: "claude\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+    const request: JobRequest = {
+      op: "start",
+      jobId: "retry-start",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      sshKeys: [],
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson({}, hostKeys.publicKey),
+    };
+
+    await expect(provisioner.run(request)).rejects.toThrow("metadata temporarily unavailable");
+    await expect(provisioner.run(request)).resolves.toBeNull();
+
+    expect(calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
+  });
+
+  it("does not stop an already-stopped container again", async () => {
+    const calls: Call[] = [];
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => args[0] === "list"
+        ? JSON.stringify([{ name: "cs-c1", status: "Stopped" }])
+        : "")),
+      makeConfig(),
+    );
+
+    await provisioner.run({ op: "stop", jobId: "retry-stop", containerId: "c-1" });
+
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
 
   it("resize raises cgroup limits and grows the home volume", async () => {
@@ -528,6 +643,33 @@ describe("resize / destroy", () => {
     await expect(
       provisioner.run({ op: "destroy", jobId: "j", containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
     ).resolves.toBeNull();
+  });
+
+  it("fails destroy instead of treating an unavailable Incus service as absent", async () => {
+    const unavailable: ExecFn = async () => {
+      throw new Error("incus service unavailable");
+    };
+    const provisioner = new Provisioner(new Incus(unavailable), makeConfig());
+
+    await expect(provisioner.run({
+      op: "destroy",
+      jobId: "destroy-unavailable",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    })).rejects.toThrow("incus service unavailable");
+  });
+
+  it("fails destroy when the volume probe fails operationally", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      if (args[0] === "info") throw new IncusNotFoundError();
+      throw new Error("storage service unavailable");
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "destroy",
+      jobId: "destroy-storage-unavailable",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    })).rejects.toThrow("storage service unavailable");
   });
 });
 

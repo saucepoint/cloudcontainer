@@ -35,7 +35,7 @@ export class Provisioner {
       case "rebuild":
         return this.provision(request, name);
       case "start": {
-        await this.incus.start(name);
+        await this.ensureRunning(name);
         // Optional fields preserve compatibility with older Workers during a
         // daemon-first rollout. Current Workers always send a full snapshot.
         if (request.sshKeys && request.dashboardUrl) {
@@ -57,10 +57,10 @@ export class Provisioner {
         return null;
       }
       case "export-window":
-        await this.incus.start(name);
+        await this.ensureRunning(name);
         return null;
       case "stop":
-        await this.incus.stop(name);
+        await this.ensureStopped(name);
         return null;
       case "resize":
         await this.incus.setLimits(name, this.provisionedCpu(request.spec.cpu), request.spec.ramMb);
@@ -108,6 +108,7 @@ export class Provisioner {
     name: string,
   ): Promise<ProvisionResult> {
     const { spec, sshKeys, dashboardUrl } = request;
+    this.validateGithubRepositoryTargets(request.githubRepos);
     const credentials = this.credentialInstaller.unseal(request.sealedCredentials);
     const volume = homeVolumeName(request.containerId);
 
@@ -164,7 +165,7 @@ export class Provisioner {
       try {
         if (await this.incus.exists(name)) await this.incus.delete(name);
       } catch (cleanupError) {
-        console.log(
+        console.error(
           JSON.stringify({
             event: "provision_cleanup_failed",
             containerId: request.containerId,
@@ -178,6 +179,19 @@ export class Provisioner {
 
   private provisionedCpu(presentedCpu: number): number {
     return Math.max(PROVISIONED_VCPU_FLOOR, presentedCpu);
+  }
+
+  private validateGithubRepositoryTargets(repositories: readonly string[]): void {
+    const destinations = new Set<string>();
+    for (const repository of repositories) {
+      const repo = repository.split("/")[1];
+      if (!repo) throw new Error("invalid GitHub repository name");
+      const destination = repo.toLowerCase();
+      if (destinations.has(destination)) {
+        throw new Error("selected GitHub repositories must have unique names");
+      }
+      destinations.add(destination);
+    }
   }
 
   /** Clone requested repositories once into ~/repos/repository-name. */
@@ -196,6 +210,16 @@ export class Provisioner {
       ].join("\n");
       await this.incus.shell(name, `su - dev -c ${shellQuote(clone)}`);
     }
+  }
+
+  private async ensureRunning(name: string): Promise<void> {
+    if (await this.incus.status(name) === "Running") return;
+    await this.incus.start(name);
+  }
+
+  private async ensureStopped(name: string): Promise<void> {
+    if (await this.incus.status(name) === "Stopped") return;
+    await this.incus.stop(name);
   }
 
   /** Pubkey-only SSH; no keys means no authorized_keys file. */
@@ -228,23 +252,20 @@ export class Provisioner {
     );
   }
 
-  /** All agents whose binary is installed in the container. */
+  /** Selected agents, with a binary scan fallback for pre-metadata containers. */
   private async agentsOf(name: string): Promise<Agent[]> {
-    try {
-      const { stdout } = await this.incus.shell(
-        name,
-        `if test -s /etc/workbench-agents; then
-           cat /etc/workbench-agents
-         else
-           for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done
-         fi
-         true`,
-      );
-      const found = new Set(stdout.split("\n").map((line) => line.trim()));
-      return AGENTS.filter((agent) => found.has(agent));
-    } catch {
-      return [];
-    }
+    const { stdout } = await this.incus.shell(
+      name,
+      `if test -s /etc/workbench-agents; then
+         cat /etc/workbench-agents
+       else
+         for a in ${AGENTS.join(" ")}; do
+           if command -v "$a" >/dev/null 2>&1; then echo "$a"; fi
+         done
+       fi`,
+    );
+    const found = new Set(stdout.split("\n").map((line) => line.trim()));
+    return AGENTS.filter((agent) => found.has(agent));
   }
 
   private async authorizedKeyCount(name: string): Promise<number> {

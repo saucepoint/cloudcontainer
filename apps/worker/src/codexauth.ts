@@ -163,7 +163,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
       start = await requestDeviceCode();
     } catch (err) {
       // Log the failure kind only, never token material (§10).
-      console.log(JSON.stringify({ event: "codex_device_start_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "codex_device_start_failed", error: String(err) }));
       return c.json({ error: "could not reach OpenAI — try again in a minute" }, 502);
     }
     // Bind the attempt to this user so nobody else can poll it into their account.
@@ -183,7 +183,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
       result = await pollDeviceAuth(body.deviceAuthId, body.userCode);
     } catch (err) {
       await deleteOauthState(c.env, stateKey(body.deviceAuthId));
-      console.log(JSON.stringify({ event: "codex_device_poll_failed", error: String(err) }));
+      console.error(JSON.stringify({ event: "codex_device_poll_failed", error: String(err) }));
       return c.json({ error: "ChatGPT sign-in failed — start over and try again" }, 502);
     }
     if (result.status === "pending") return c.json({ status: "pending" });

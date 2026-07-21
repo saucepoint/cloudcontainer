@@ -1,5 +1,7 @@
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { copyText } from "./clipboard.js";
+import { errorMessage, postJson } from "./http.js";
 
 type AuthFlow = (element: HTMLElement, done: () => void) => void;
 type DeviceStart = {
@@ -36,36 +38,10 @@ const flowRoots = new WeakMap<HTMLElement, Root>();
 
 export const isAuthFlowActive = (element: HTMLElement) => activeFlows.has(element);
 
-async function api<T extends object>(path: string, body?: object): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const json = await response.json().catch(() => ({})) as T & { error?: string };
-  if (!response.ok) throw new Error(json.error || `request failed: ${response.status}`);
-  return json;
-}
+const api = <T extends object>(path: string, body?: object): Promise<T> =>
+  postJson<T>(path, body);
 
-const messageOf = (error: unknown) => error instanceof Error ? error.message : "Unknown error";
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-async function copyText(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
-    const input = document.createElement("textarea");
-    input.value = value;
-    input.readOnly = true;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.appendChild(input);
-    input.select();
-    const copied = document.execCommand("copy");
-    input.remove();
-    if (!copied) throw new Error("copy failed");
-  }
-}
 
 function SpinnerMessage({ children }: { children: React.ReactNode }) {
   return <p className="muted"><span className="spinner" aria-hidden="true" />{children}</p>;
@@ -101,7 +77,7 @@ function DeviceFlow({ config, complete, release }: { config: DeviceConfig; compl
       } catch (caught) {
         if (!cancelled) {
           release();
-          setError(messageOf(caught));
+          setError(errorMessage(caught));
         }
       }
     })();
@@ -155,7 +131,7 @@ function PasteFlow({ config, complete, release }: { config: PasteConfig; complet
       .catch((caught) => {
         if (!cancelled) {
           release();
-          setError(messageOf(caught));
+          setError(errorMessage(caught));
         }
       });
     return () => { cancelled = true; };
@@ -174,7 +150,7 @@ function PasteFlow({ config, complete, release }: { config: PasteConfig; complet
       complete();
     } catch (caught) {
       setBusy(false);
-      setError(messageOf(caught));
+      setError(errorMessage(caught));
     }
   };
 

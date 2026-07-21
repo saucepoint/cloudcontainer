@@ -2,19 +2,7 @@ import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { animate } from "motion/mini";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-
-type Confirmation = {
-  title: string;
-  description: string;
-  confirmLabel: string;
-  onConfirm: () => void;
-};
-
-declare global {
-  interface Window {
-    requestConfirmation?: (confirmation: Confirmation) => void;
-  }
-}
+import type { Confirmation } from "./confirmation.js";
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 

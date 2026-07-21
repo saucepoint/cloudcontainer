@@ -4,6 +4,7 @@ import { adminRoutes } from "./admin.js";
 import { authRoutes, requireUser } from "./auth.js";
 import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
+import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage, SecurityPage } from "./pages/views.js";
@@ -14,6 +15,7 @@ import type { AppContext } from "./types.js";
 
 export const app = new Hono<AppContext>();
 
+app.use("*", requestBodyLimit);
 app.use("*", async (c, next) => {
   await next();
   c.header("referrer-policy", "no-referrer");
@@ -23,7 +25,7 @@ app.use("*", async (c, next) => {
 });
 
 app.onError((err, c) => {
-  console.log(JSON.stringify({ event: "unhandled_error", path: c.req.path, error: String(err) }));
+  console.error(JSON.stringify({ event: "unhandled_error", path: c.req.path, error: String(err) }));
   if (c.req.path.startsWith("/api")) {
     return c.json({ error: "internal error" }, 500);
   }

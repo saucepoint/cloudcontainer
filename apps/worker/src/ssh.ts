@@ -9,7 +9,12 @@ type SshKeyInsertResult = "inserted" | "duplicate" | "limit";
 
 export function validPubkey(key: string): boolean {
   const normalized = key.trim();
-  return SSH_KEY_RE.test(normalized) && normalized.length <= INPUT_LIMITS.sshKeyBytes;
+  // Byte length, not code units: the job-request budget is enforced in UTF-8
+  // bytes, and key comments may contain multibyte characters.
+  return (
+    SSH_KEY_RE.test(normalized) &&
+    new TextEncoder().encode(normalized).byteLength <= INPUT_LIMITS.sshKeyBytes
+  );
 }
 
 /** SSH key changes need a ready container so they can be applied immediately. */

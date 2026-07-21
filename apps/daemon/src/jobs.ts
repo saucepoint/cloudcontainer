@@ -21,6 +21,8 @@ export class JobConflictError extends Error {}
 export class JobRunner {
   private jobs = new Map<string, JobRecord>();
   private chains = new Map<string, Promise<void>>();
+  /** Highest applied snapshot revision per `containerId:op` watermark. */
+  private revisions = new Map<string, number>();
 
   constructor(private provisioner: Provisioner) {}
 
@@ -53,18 +55,50 @@ export class JobRunner {
     };
     this.jobs.set(request.jobId, record);
 
+    const revision =
+      "revision" in request && typeof request.revision === "number"
+        ? request.revision
+        : undefined;
+    const watermarkKey = `${request.containerId}:${request.op}`;
     const prev = this.chains.get(request.containerId) ?? Promise.resolve();
     const next = prev
       .then(async () => {
         record.status = "running";
+        // A snapshot that was overtaken before it even ran must not overwrite
+        // newer desired state. Desired state is already converged (or will be
+        // reconverged by the control plane retrying the newer job), so the
+        // job is a success from the control plane's perspective.
+        if (revision !== undefined && revision <= (this.revisions.get(watermarkKey) ?? 0)) {
+          record.status = "succeeded";
+          console.log(
+            JSON.stringify({
+              event: "job_skipped_stale",
+              jobId: record.jobId,
+              op: record.op,
+              revision,
+            }),
+          );
+          this.gc();
+          return;
+        }
+        // Claim the watermark before running: even if this snapshot fails,
+        // an older one queued behind it must never be applied over it. The
+        // control plane retries the failed latest job with a fresh snapshot.
+        if (revision !== undefined) {
+          this.revisions.set(
+            watermarkKey,
+            Math.max(revision, this.revisions.get(watermarkKey) ?? 0),
+          );
+        }
         try {
           record.result = await this.provisioner.run(request);
           record.status = "succeeded";
+          if (request.op === "destroy") this.pruneRevisions(request.containerId);
         } catch (err) {
           record.status = "failed";
           // Error strings reference operations/kinds, never credential values.
           record.error = err instanceof Error ? err.message : "job failed";
-          console.log(
+          console.error(
             JSON.stringify({ event: "job_failed", jobId: record.jobId, op: record.op, error: record.error }),
           );
         }
@@ -79,6 +113,13 @@ export class JobRunner {
       });
     this.chains.set(request.containerId, next);
     return record;
+  }
+
+  /** Forget snapshot watermarks for a container that no longer exists. */
+  private pruneRevisions(containerId: string): void {
+    for (const key of this.revisions.keys()) {
+      if (key.startsWith(`${containerId}:`)) this.revisions.delete(key);
+    }
   }
 
   /** Keep the registry bounded: drop terminal jobs beyond the last 500. */

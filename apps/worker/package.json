@@ -9,8 +9,8 @@
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",
     "deploy": "wrangler deploy",
-    "types": "wrangler types",
-    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
+    "types": "wrangler types --env-file /dev/null",
+    "typecheck": "npm run types && tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
     "test": "vitest run",
     "db:migrate:local": "wrangler d1 migrations apply workbench --local",
     "db:migrate:remote": "wrangler d1 migrations apply workbench --remote",
@@ -18,9 +18,9 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@workbench/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
+    "@workbench/contract": "*",
     "hono": "^4.7.4",
     "motion": "^12.42.2",
     "react": "^19.2.7",
@@ -34,6 +34,6 @@
     "tsx": "^4.23.1",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5",
-    "wrangler": "^4.4.0"
+    "wrangler": "^4.113.0"
   }
 }

@@ -5,12 +5,15 @@
  * fields) off the wire.
  */
 import { describe, expect, it } from "vitest";
+import { generateX25519Keypair, sealJson } from "../src/crypto.js";
 import {
   ContainerSpecSchema,
+  CredentialPayloadSchema,
   INPUT_LIMITS,
   JobRequestSchema,
   JobStatusResponseSchema,
   GithubRepoNameSchema,
+  GithubReposSchema,
   LlmKeysSchema,
 } from "../src/types.js";
 
@@ -77,6 +80,41 @@ describe("JobRequestSchema", () => {
     expect(JobRequestSchema.safeParse({ op: "start", ...base }).success).toBe(true);
   });
 
+  it("accepts an optional snapshot revision on desired-state sync ops", () => {
+    for (const request of [
+      { op: "sync-keys", sshKeys: [], dashboardUrl: "https://x" },
+      { op: "refresh-credentials", dashboardUrl: "https://x", sealedCredentials: "abc" },
+    ]) {
+      expect(JobRequestSchema.safeParse({ ...request, ...base, revision: 7 }).success).toBe(true);
+      expect(JobRequestSchema.safeParse({ ...request, ...base }).success).toBe(true);
+      for (const revision of [0, -1, 1.5, "7"]) {
+        expect(JobRequestSchema.safeParse({ ...request, ...base, revision }).success).toBe(false);
+      }
+    }
+  });
+
+  it("bounds ssh keys in UTF-8 bytes, matching the aggregate job budget", () => {
+    const syncKeys = (sshKeys: string[]) =>
+      JobRequestSchema.safeParse({ op: "sync-keys", ...base, sshKeys, dashboardUrl: "https://x" });
+    // 4096 ASCII bytes: at the limit.
+    expect(syncKeys(["x".repeat(INPUT_LIMITS.sshKeyBytes)]).success).toBe(true);
+    // 4096 code units but 8192 UTF-8 bytes: a code-unit count would accept it.
+    expect(syncKeys(["é".repeat(INPUT_LIMITS.sshKeyBytes)]).success).toBe(false);
+    // Maximal multibyte keys plus maximal sealed credentials stay inside the
+    // aggregate byte budget, so a valid start never fails schema validation.
+    const request = {
+      op: "start",
+      ...base,
+      sshKeys: Array.from(
+        { length: INPUT_LIMITS.sshKeysPerAccount },
+        (_, index) => `ssh-ed25519 AAAA key-${index} ${"é".repeat(100)}`,
+      ),
+      dashboardUrl: "https://x",
+      sealedCredentials: "y".repeat(INPUT_LIMITS.sealedCredentialBytes),
+    };
+    expect(JobRequestSchema.safeParse(request).success).toBe(true);
+  });
+
   it("requires at least one agent in a spec", () => {
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: [] }).success).toBe(false);
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: ["vim"] }).success).toBe(false);
@@ -107,12 +145,65 @@ describe("LlmKeysSchema", () => {
   });
 });
 
+describe("aggregate request budgets", () => {
+  function maximalPayload(fill: string) {
+    return {
+      llmKeys: {
+        openai: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        anthropic: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        gemini: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        openrouter: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        opencode_go: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        claude_subscription_token: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        codex_subscription_token: fill.repeat(INPUT_LIMITS.codexAuthBytes / fill.length),
+        github_copilot: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      },
+      cloudflareToken: fill.repeat(INPUT_LIMITS.cloudflareTokenBytes / fill.length),
+      wranglerOauth: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      githubToken: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      githubLogin: fill.repeat(256 / fill.length),
+    };
+  }
+
+  it("accepts, seals, and transports the maximal ASCII credential combination", () => {
+    const payload = CredentialPayloadSchema.parse(maximalPayload("x"));
+    const sealed = sealJson(payload, generateX25519Keypair().publicKey);
+    expect(sealed.length).toBeLessThanOrEqual(INPUT_LIMITS.sealedCredentialBytes);
+
+    const request = {
+      op: "provision",
+      jobId: "j-max",
+      containerId: "c-max",
+      spec,
+      sshKeys: Array.from(
+        { length: INPUT_LIMITS.sshKeysPerAccount },
+        () => "x".repeat(INPUT_LIMITS.sshKeyBytes),
+      ),
+      dashboardUrl: "https://workbench.example",
+      githubRepos: [],
+      sealedCredentials: sealed,
+    };
+    expect(new TextEncoder().encode(JSON.stringify(request)).byteLength)
+      .toBeLessThanOrEqual(INPUT_LIMITS.jobRequestBytes);
+    expect(JobRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("rejects a character-valid payload that exceeds the UTF-8 aggregate budget", () => {
+    expect(CredentialPayloadSchema.safeParse(maximalPayload("💥")).success).toBe(false);
+  });
+});
+
 describe("GithubRepoNameSchema", () => {
   it("accepts owner/name and rejects path traversal or extra path components", () => {
     expect(GithubRepoNameSchema.safeParse("octocat/hello-world").success).toBe(true);
     for (const name of ["../secret", "owner/..", "owner/repo/extra", "/repo", "owner/"]) {
       expect(GithubRepoNameSchema.safeParse(name).success).toBe(false);
     }
+  });
+
+  it("rejects repositories that would clone to the same case-insensitive path", () => {
+    expect(GithubReposSchema.safeParse(["first/tools", "second/TOOLS"]).success).toBe(false);
+    expect(GithubReposSchema.safeParse(["first/api", "second/web"]).success).toBe(true);
   });
 });
 

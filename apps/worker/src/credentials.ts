@@ -1,4 +1,5 @@
 import {
+  CredentialPayloadSchema,
   decryptJsonAtRest,
   encryptJsonAtRest,
   LlmKeysSchema,
@@ -42,17 +43,32 @@ export async function upsertCredentials(
     if (v === "") delete merged[k];
     else merged[k] = v;
   }
-  const llmCipher =
-    Object.keys(merged).length > 0
-      ? encryptJsonAtRest(merged, env.CREDENTIAL_MASTER_KEY)
-      : null;
-
-  const cipherOrKeep = (current: string | null, update: string | undefined): string | null => {
-    if (update === undefined) return current;
-    return update === "" ? null : encryptJsonAtRest(update, env.CREDENTIAL_MASTER_KEY);
+  const nextString = (current: string | null, update: string | undefined): string | undefined => {
+    if (update === undefined) return decryptString(env, current);
+    return update || undefined;
   };
-  const cfCipher = cipherOrKeep(row?.cloudflare_token ?? null, updates.cloudflareToken);
-  const wranglerCipher = cipherOrKeep(row?.wrangler_oauth ?? null, updates.wranglerOauth);
+  const cloudflareToken = nextString(row?.cloudflare_token ?? null, updates.cloudflareToken);
+  const wranglerOauth = nextString(row?.wrangler_oauth ?? null, updates.wranglerOauth);
+  const candidate: CredentialPayload = {
+    ...(Object.keys(merged).length > 0 ? { llmKeys: LlmKeysSchema.parse(merged) } : {}),
+    ...(cloudflareToken ? { cloudflareToken } : {}),
+    ...(wranglerOauth ? { wranglerOauth } : {}),
+  };
+  const githubToken = decryptString(env, row?.github_token ?? null);
+  if (githubToken) {
+    candidate.githubToken = githubToken;
+    if (row?.github_login) candidate.githubLogin = row.github_login;
+  }
+  const validated = CredentialPayloadSchema.parse(candidate);
+  const llmCipher = validated.llmKeys
+    ? encryptJsonAtRest(validated.llmKeys, env.CREDENTIAL_MASTER_KEY)
+    : null;
+  const cfCipher = validated.cloudflareToken
+    ? encryptJsonAtRest(validated.cloudflareToken, env.CREDENTIAL_MASTER_KEY)
+    : null;
+  const wranglerCipher = validated.wranglerOauth
+    ? encryptJsonAtRest(validated.wranglerOauth, env.CREDENTIAL_MASTER_KEY)
+    : null;
 
   await env.DB.prepare(
     `INSERT INTO credentials_encrypted (user_id, llm_keys, cloudflare_token, wrangler_oauth, rotated_at)
@@ -70,7 +86,7 @@ export async function upsertCredentials(
  */
 export function buildCredentialPayload(env: Bindings, row: CredentialsRow | null): CredentialPayload {
   const payload: CredentialPayload = {};
-  if (!row) return payload;
+  if (!row) return CredentialPayloadSchema.parse(payload);
   const llmKeys = decryptLlmKeys(env, row);
   if (Object.keys(llmKeys).length > 0) payload.llmKeys = llmKeys;
   const cf = decryptString(env, row.cloudflare_token);
@@ -82,7 +98,7 @@ export function buildCredentialPayload(env: Bindings, row: CredentialsRow | null
     payload.githubToken = gh;
     if (row.github_login) payload.githubLogin = row.github_login;
   }
-  return payload;
+  return CredentialPayloadSchema.parse(payload);
 }
 
 /** Validate a pasted Cloudflare API token with a live call (§5 wizard). */

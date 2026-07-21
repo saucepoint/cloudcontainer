@@ -8,10 +8,8 @@ async function secretMatches(provided: string, expected: string): Promise<boolea
     crypto.subtle.digest("SHA-256", utf8(provided)),
     crypto.subtle.digest("SHA-256", utf8(expected)),
   ]);
-  const timingSafeEqual = (crypto.subtle as unknown as {
-    timingSafeEqual?: (left: BufferSource, right: BufferSource) => boolean;
-  }).timingSafeEqual;
-  if (timingSafeEqual) {
+  const { timingSafeEqual } = crypto.subtle;
+  if (typeof timingSafeEqual === "function") {
     return timingSafeEqual.call(crypto.subtle, providedHash, expectedHash);
   }
 

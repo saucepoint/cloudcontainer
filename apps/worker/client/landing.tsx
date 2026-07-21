@@ -9,8 +9,13 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { postJson } from "./http.js";
+import { webAuthnErrorMessage } from "./webauthn-errors.js";
 
 type AuthTab = "passkey" | "invite";
+
+const authRequestFallback = (status: number): string =>
+  status === 401 ? "Sign-in failed." : "Could not complete that request.";
 
 function isAuthTab(value: string | number): value is AuthTab {
   return value === "passkey" || value === "invite";
@@ -48,30 +53,6 @@ function AnimatedAuthOption({
   );
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
-  if (error.name === "NotAllowedError") return "The passkey prompt was cancelled or timed out.";
-  return error.message || fallback;
-}
-
-async function postJson<T>(path: string, body?: object): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      ...(body ? { "content-type": "application/json" } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const json: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = typeof (json as { error?: unknown } | null)?.error === "string"
-      ? (json as { error: string }).error
-      : response.status === 401 ? "Sign-in failed." : "Could not complete that request.";
-    throw new Error(message);
-  }
-  return json as T;
-}
 
 function LandingAuth(): React.JSX.Element {
   const supportsWebAuthn = browserSupportsWebAuthn();
@@ -95,16 +76,19 @@ function LandingAuth(): React.JSX.Element {
     try {
       const optionsJSON = await postJson<PublicKeyCredentialRequestOptionsJSON>(
         "/auth/passkey/authenticate/options",
+        undefined,
+        authRequestFallback,
       );
       const response = await startAuthentication({ optionsJSON });
       setPasskeyStatus("Verifying…");
       const result = await postJson<{ redirect: string }>(
         "/auth/passkey/authenticate/verify",
         { response },
+        authRequestFallback,
       );
       window.location.assign(result.redirect);
     } catch (error) {
-      setPasskeyStatus(errorMessage(error, "Passkey sign-in failed. Please try again."));
+      setPasskeyStatus(webAuthnErrorMessage(error, "Passkey sign-in failed. Please try again."));
       setPasskeyPending(false);
     }
   };
@@ -125,16 +109,18 @@ function LandingAuth(): React.JSX.Element {
       const optionsJSON = await postJson<PublicKeyCredentialCreationOptionsJSON>(
         "/auth/invite/register/options",
         { code },
+        authRequestFallback,
       );
       const response = await startRegistration({ optionsJSON });
       setInviteStatus("Creating your account…");
       const result = await postJson<{ redirect: string }>(
         "/auth/invite/register/verify",
         { response },
+        authRequestFallback,
       );
       window.location.assign(result.redirect);
     } catch (error) {
-      setInviteStatus(errorMessage(error, "Invite signup failed. Please try again."));
+      setInviteStatus(webAuthnErrorMessage(error, "Invite signup failed. Please try again."));
       setInvitePending(false);
     }
   };

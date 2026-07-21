@@ -16,7 +16,11 @@ const landingClient = readFileSync(new URL("../client/landing.tsx", import.meta.
 const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
-const dashboardClient = readFileSync(new URL("../client/dashboard.tsx", import.meta.url), "utf8");
+const dashboardClient = [
+  "dashboard.tsx",
+  "dashboard-model.ts",
+  "dashboard-ssh.tsx",
+].map((file) => readFileSync(new URL(`../client/${file}`, import.meta.url), "utf8")).join("\n");
 const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
@@ -195,19 +199,19 @@ describe("GitHub repository onboarding", () => {
     expect(onboardingClient).toContain("/api/github/repos");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
-    expect(enabled).toContain('id=\"github-repo-search\"');
+    expect(enabled).toContain('id="github-repo-search"');
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
     expect(disabled).not.toContain("Connect or update GitHub");
-    expect(disabled).not.toContain('id=\"github-repos\"');
+    expect(disabled).not.toContain('id="github-repos"');
   });
 
   it("keeps repository selection visible when GitHub is configured", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
     expect(enabled).toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
-    expect(enabled).toContain('id=\"github-repo-search\"');
-    expect(enabled).toContain('id=\"github-repos\"');
+    expect(enabled).toContain('id="github-repo-search"');
+    expect(enabled).toContain('id="github-repos"');
   });
 
   it("hides GitHub setup from onboarding without an App slug", async () => {

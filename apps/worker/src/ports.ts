@@ -4,6 +4,13 @@ export const PORT_RANGE_START = 30000;
 export const PORT_RANGE_END = 39999;
 export const QUARANTINE_DAYS = 30;
 
+export class NoFreePortsError extends Error {
+  constructor(readonly hostId: string) {
+    super("no free ssh ports on host");
+    this.name = "NoFreePortsError";
+  }
+}
+
 /**
  * Allocate an SSH port on a host: random probe within the range, avoiding
  * ports in use and ports quarantined less than 30 days ago (§8).
@@ -30,7 +37,7 @@ export async function allocatePort(
   for (const r of quarantined.results) taken.add(r.port);
 
   const span = PORT_RANGE_END - PORT_RANGE_START + 1;
-  if (taken.size >= span) throw new Error("no free ssh ports on host");
+  if (taken.size >= span) throw new NoFreePortsError(hostId);
 
   const rand = new Uint32Array(1);
   for (let i = 0; i < 200; i++) {
@@ -42,18 +49,5 @@ export async function allocatePort(
   for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) {
     if (!taken.has(p)) return p;
   }
-  throw new Error("no free ssh ports on host");
-}
-
-export async function quarantinePort(
-  env: Bindings,
-  hostId: string,
-  port: number,
-  now: number = Date.now(),
-): Promise<void> {
-  await env.DB.prepare(
-    "INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
-  )
-    .bind(hostId, port, now)
-    .run();
+  throw new NoFreePortsError(hostId);
 }

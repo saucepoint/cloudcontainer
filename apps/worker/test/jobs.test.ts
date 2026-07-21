@@ -126,6 +126,74 @@ describe("enqueueJob", () => {
     expect(daemon.submitted[0]).toMatchObject({ op: "stop", containerId: "container-1" });
   });
 
+  it("allows only one active lifecycle job per container", async () => {
+    const { env, host, container } = await setup();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const results = await Promise.allSettled([
+      enqueueJob(env, "stop", container, host),
+      enqueueJob(env, "stop", container, host),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({ message: "container state changed or lifecycle operation already in progress" }),
+    });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
+    expect(daemon.submitted).toHaveLength(1);
+  });
+
+  it("does not fail or resurrect a queued job while daemon submission is in flight", async () => {
+    const { env, host, container } = await setup();
+    let submissionStarted!: () => void;
+    let releaseSubmission!: () => void;
+    const started = new Promise<void>((resolve) => {
+      submissionStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseSubmission = resolve;
+    });
+    stubFetch((url, init) => {
+      if (url.pathname === "/jobs" && init.method === "POST") {
+        const request = JSON.parse(String(init.body)) as { jobId: string };
+        submissionStarted();
+        return release.then(() =>
+          Response.json({ jobId: request.jobId, status: "queued" }, { status: 202 })
+        );
+      }
+      if (url.pathname.startsWith("/jobs/")) return new Response("gone", { status: 404 });
+      return null;
+    });
+
+    const enqueue = enqueueJob(env, "stop", container, host);
+    await started;
+    const queued = await env.DB.prepare("SELECT * FROM jobs").first<JobRow>();
+    if (!queued) throw new Error("queued job missing");
+    expect(queued.status).toBe("queued");
+
+    await expect(refreshJob(env, queued)).resolves.toMatchObject({ status: "queued" });
+    releaseSubmission();
+    await expect(enqueue).resolves.toMatchObject({ status: "running" });
+    expect((await getContainerForUser(env, "user-1"))?.status).toBe("running");
+  });
+
+  it("rejects a lifecycle job built from a stale container snapshot", async () => {
+    const { env, host, container } = await setup();
+    await env.DB.prepare("UPDATE containers SET status = 'stopped' WHERE id = ?")
+      .bind(container.id)
+      .run();
+    stubFetch(() => {
+      throw new Error("stale work must not be dispatched");
+    });
+
+    await expect(enqueueJob(env, "stop", container, host)).rejects.toThrow(
+      "container state changed",
+    );
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+  });
+
   it("fails the job and drops the container to error when the daemon is unreachable (lifecycle op)", async () => {
     const { env, host, container } = await setup();
     stubFetch(() => {
@@ -136,6 +204,29 @@ describe("enqueueJob", () => {
     expect(job.status).toBe("failed");
     const fresh = await getContainerForUser(env, "user-1");
     expect(fresh?.status).toBe("error");
+  });
+
+  it("stamps desired-state sync jobs with their monotonic row revision", async () => {
+    const { env, host, container } = await setup();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await enqueueJob(env, "sync-keys", container, host);
+    await enqueueJob(env, "sync-keys", container, host);
+    await enqueueJob(env, "refresh-credentials", container, host);
+    await enqueueJob(env, "stop", container, host);
+
+    const revisions = daemon.submitted.map((request) =>
+      (request as { revision?: number }).revision,
+    );
+    expect(revisions[0]).toEqual(expect.any(Number));
+    // Later snapshots always carry a higher revision than earlier ones, so a
+    // delayed older job can be discarded on the host instead of overwriting
+    // newer desired state.
+    expect(revisions[1]!).toBeGreaterThan(revisions[0]!);
+    expect(revisions[2]!).toBeGreaterThan(revisions[1]!);
+    // Lifecycle ops are serialized by the job table and carry no revision.
+    expect(revisions[3]).toBeUndefined();
   });
 
   it("leaves container state alone when a background op fails (sync-keys)", async () => {
@@ -240,6 +331,38 @@ describe("refreshJob", () => {
     ]);
   });
 
+  it("does not apply stale provision metadata after a newer lifecycle result", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, {
+      status: "running",
+      host_key_fingerprints: JSON.stringify(["new-fingerprint"]),
+    });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('old-provision', 'container-1', 'provision', 'running', 1, 1),
+              ('new-provision', 'container-1', 'provision', 'succeeded', 2, 2)`,
+    ).run();
+    const job = await getJob(env, "old-provision");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/old-provision"
+        ? Response.json({
+            jobId: "old-provision",
+            status: "succeeded",
+            error: null,
+            result: { hostKeyFingerprints: ["stale-fingerprint"] },
+          })
+        : null,
+    );
+
+    await refreshJob(env, job);
+
+    const container = await getContainerForUser(env, "user-1");
+    expect(JSON.parse(container?.host_key_fingerprints ?? "[]")).toEqual(["new-fingerprint"]);
+  });
+
   it("fails fast when the daemon lost the job (restart), instead of spinning", async () => {
     const { env } = makeEnv();
     await seedUser(env);
@@ -289,6 +412,43 @@ describe("refreshJob", () => {
     }>();
     expect(q.results.map((r) => r.port)).toEqual([30500]);
     expect((await env.DB.prepare("SELECT * FROM waitlist").all()).results).toHaveLength(0);
+  });
+
+  it("keeps destroy retryable when an atomic finalization step fails", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    await seedContainer(env, { status: "destroying" });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       VALUES ('destroy-failure', 'container-1', 'destroy', 'running', 1, 1)`,
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_container_delete BEFORE DELETE ON containers
+       BEGIN SELECT RAISE(FAIL, 'delete failed'); END`,
+    ).run();
+    const job = await getJob(env, "destroy-failure");
+    if (!job) throw new Error("test job missing");
+    stubFetch((url) =>
+      url.pathname === "/jobs/destroy-failure"
+        ? Response.json({
+            jobId: "destroy-failure",
+            status: "succeeded",
+            error: null,
+            result: null,
+          })
+        : null,
+    );
+
+    await expect(refreshJob(env, job)).rejects.toThrow("delete failed");
+
+    expect(await getJob(env, job.id)).toMatchObject({ status: "running" });
+    expect(await getContainerForUser(env, "user-1")).toMatchObject({ status: "destroying" });
+    const host = await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first();
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect((await env.DB.prepare("SELECT * FROM port_quarantine").all()).results).toHaveLength(0);
   });
 
   it("applies destroy completion side effects once when dashboard and cron poll concurrently", async () => {
@@ -458,6 +618,93 @@ describe("startProvision", () => {
     expect(host?.ram_allocated_mb).toBe(2048);
     expect(host?.disk_allocated_gb).toBe(16);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
+  it("does not turn an unrelated placement database failure into a waitlist row", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const database = env.DB;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property === "batch") {
+          return async () => {
+            throw new Error("database unavailable");
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+      "database unavailable",
+    );
+    expect(await env.DB.prepare("SELECT * FROM containers").all()).toMatchObject({ results: [] });
+    expect(await env.DB.prepare("SELECT * FROM waitlist").all()).toMatchObject({ results: [] });
+  });
+
+  it("uses another eligible host when the preferred host has no SSH ports", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, {
+      id: "ports-full",
+      ram_total_mb: 65536,
+      ram_reserve_mb: 8192,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    await seedHost(env, {
+      id: "ports-free",
+      ram_total_mb: 32768,
+      ram_reserve_mb: 8192,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    await env.DB.prepare(
+      `WITH RECURSIVE ports(port) AS (
+         VALUES(30000) UNION ALL SELECT port + 1 FROM ports WHERE port < 39999
+       )
+       INSERT INTO port_quarantine (host_id, port, released_at)
+       SELECT 'ports-full', port, ? FROM ports`,
+    )
+      .bind(Date.now())
+      .run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const container = await startProvision(env, user, { agents: ["claude"] });
+
+    expect(container.host_id).toBe("ports-free");
+    expect(daemon.submitted).toHaveLength(1);
+  });
+
+  it("surfaces a post-placement job enqueue failure instead of treating it as a duplicate", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const database = env.DB;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            if (sql.startsWith("INSERT INTO jobs")) throw new Error("job insert failed");
+            return target.prepare(sql);
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+      "job insert failed",
+    );
+    const container = await env.DB.prepare(
+      "SELECT status, status_detail FROM containers WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first<{ status: string; status_detail: string | null }>();
+    expect(container).toEqual({
+      status: "error",
+      status_detail: "provisioning could not be queued",
+    });
   });
 
   it("does not oversubscribe the final host slot when two provisions race", async () => {

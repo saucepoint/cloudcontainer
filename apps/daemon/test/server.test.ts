@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   generateEd25519Keypair,
   generateX25519Keypair,
+  INPUT_LIMITS,
   signRequest,
 } from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
@@ -49,6 +50,40 @@ describe("daemon HTTP API", () => {
     const app = makeApp();
     const res = await app.request("/health");
     expect(res.status).toBe(401);
+  });
+
+  it("rejects an oversized declared job body before signature verification", async () => {
+    const app = makeApp();
+    const res = await app.request("/jobs", {
+      method: "POST",
+      headers: { "content-length": String(INPUT_LIMITS.jobRequestBytes + 1) },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+  });
+
+  it("rejects an oversized streamed job body before buffering it", async () => {
+    const app = makeApp();
+    const res = await app.request("/jobs", {
+      method: "POST",
+      body: "x".repeat(INPUT_LIMITS.jobRequestBytes + 1),
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+  });
+
+  it("rejects oversized POST bodies on any path before signature buffering", async () => {
+    const app = makeApp();
+    // Signed correctly, but the body limit runs before the signature
+    // middleware reads (and buffers) the body.
+    const body = "x".repeat(INPUT_LIMITS.jobRequestBytes + 1);
+    const res = await app.request("/stats", signedInit("POST", "/stats", body));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
   });
 
   it("rejects requests signed by an unknown key", async () => {

@@ -88,7 +88,9 @@ export const INPUT_LIMITS = {
   tokenBytes: 16 * 1024,
   codexAuthBytes: 64 * 1024,
   cloudflareTokenBytes: 4096,
-  sealedCredentialBytes: 256 * 1024,
+  credentialPayloadBytes: 256 * 1024,
+  sealedCredentialBytes: 384 * 1024,
+  jobRequestBytes: 1024 * 1024,
   githubReposPerProvision: 20,
 } as const;
 
@@ -126,6 +128,14 @@ export const WranglerOauthSchema = z
   .strict();
 export type WranglerOauth = z.infer<typeof WranglerOauthSchema>;
 
+function jsonUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
@@ -134,7 +144,11 @@ export const CredentialPayloadSchema = z
     githubToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubLogin: z.string().max(256).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (payload) => jsonUtf8Bytes(payload) <= INPUT_LIMITS.credentialPayloadBytes,
+    "credential payload exceeds the aggregate byte limit",
+  );
 export type CredentialPayload = z.infer<typeof CredentialPayloadSchema>;
 
 // ---------------------------------------------------------------------------
@@ -146,9 +160,29 @@ const base = {
   containerId: z.string().min(1).max(128),
 };
 
+// Key comments may contain multibyte characters, so the per-key limit is
+// enforced in UTF-8 bytes — the same unit as the aggregate job budget. A
+// code-unit count would let maximal multibyte keys plus credentials exceed
+// INPUT_LIMITS.jobRequestBytes and make otherwise valid `start` jobs fail.
 const SshKeysSchema = z
-  .array(z.string().min(1).max(INPUT_LIMITS.sshKeyBytes))
+  .array(
+    z
+      .string()
+      .min(1)
+      .refine(
+        (key) => utf8Bytes(key) <= INPUT_LIMITS.sshKeyBytes,
+        "ssh key exceeds the byte limit",
+      ),
+  )
   .max(INPUT_LIMITS.sshKeysPerAccount);
+
+/**
+ * Monotonic ordering token for desired-state snapshots (the control plane's
+ * job rowid). The daemon skips a snapshot whose revision it has already
+ * matched or beaten, so a delayed older job cannot overwrite newer state.
+ * Optional for rolling compatibility with older Workers.
+ */
+const SnapshotRevisionSchema = z.number().int().positive();
 const DashboardUrlSchema = z.string().url().max(2048);
 const SealedCredentialsSchema = z.string().min(1).max(INPUT_LIMITS.sealedCredentialBytes);
 export const AgentsSchema = z.array(z.enum(AGENTS)).min(1).max(AGENTS.length);
@@ -163,7 +197,13 @@ export const GithubRepoNameSchema = z
   );
 export const GithubReposSchema = z
   .array(GithubRepoNameSchema)
-  .max(INPUT_LIMITS.githubReposPerProvision);
+  .max(INPUT_LIMITS.githubReposPerProvision)
+  .refine((repositories) => {
+    const cloneTargets = repositories.map((repository) =>
+      repository.slice(repository.indexOf("/") + 1).toLowerCase()
+    );
+    return new Set(cloneTargets).size === cloneTargets.length;
+  }, "repository clone targets must be unique");
 
 export const ContainerSpecSchema = z
   .object({
@@ -227,6 +267,7 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       ...base,
       dashboardUrl: DashboardUrlSchema,
       sealedCredentials: SealedCredentialsSchema,
+      revision: SnapshotRevisionSchema.optional(),
     })
     .strict(),
   z
@@ -235,10 +276,14 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       ...base,
       sshKeys: SshKeysSchema,
       dashboardUrl: DashboardUrlSchema,
+      revision: SnapshotRevisionSchema.optional(),
     })
     .strict(),
   z.object({ op: z.literal("export-window"), ...base }).strict(),
-]);
+]).refine(
+  (request) => jsonUtf8Bytes(request) <= INPUT_LIMITS.jobRequestBytes,
+  "job request exceeds the aggregate byte limit",
+);
 export type JobRequest = z.infer<typeof JobRequestSchema>;
 
 // ---------------------------------------------------------------------------

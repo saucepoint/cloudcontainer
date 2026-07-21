@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
+import { app as workerApp } from "../src/index.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
@@ -43,6 +44,71 @@ describe("auth gating", () => {
   });
 });
 
+describe("request limits", () => {
+  async function setup() {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    return { env, headers: await login(env, user) };
+  }
+
+  it("rejects oversized streamed JSON before route handlers buffer it", async () => {
+    const { env, headers } = await setup();
+    const res = await workerApp.request(
+      "/api/provision",
+      json({ agents: ["claude"], padding: "x".repeat(300 * 1024) }, headers),
+      env,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+  });
+
+  it("rejects an oversized declared content length without reading the body", async () => {
+    const { env, headers } = await setup();
+    const body = JSON.stringify({ agents: ["claude"], padding: "x".repeat(300 * 1024) });
+    const res = await workerApp.request(
+      "/api/provision",
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "content-length": String(body.length),
+        },
+        body,
+      },
+      env,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+  });
+
+  it("allows a body exactly at the declared limit to reach route validation", async () => {
+    const { env, headers } = await setup();
+    const wrapper = '{"agents":[],"padding":""}';
+    const body = `{"agents":[],"padding":"${"x".repeat(256 * 1024 - wrapper.length)}"}`;
+    expect(body.length).toBe(256 * 1024);
+
+    const res = await workerApp.request(
+      "/api/provision",
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "content-length": String(body.length),
+        },
+        body,
+      },
+      env,
+    );
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/provision", () => {
   async function setup() {
     const { env } = makeEnv();
@@ -75,6 +141,20 @@ describe("POST /api/provision", () => {
       expect(res.status).toBe(400);
     }
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+  });
+
+  it("rejects colliding repository clone targets before placement", async () => {
+    const { env, headers, daemon } = await setup();
+
+    const res = await app().request(
+      "/api/provision",
+      json({ agents: ["claude"], githubRepos: ["first/tools", "second/TOOLS"] }, headers),
+      env,
+    );
+
+    expect(res.status).toBe(400);
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+    expect(daemon.submitted).toHaveLength(0);
   });
 
   it("provisions: stores the key, encrypts credentials, dispatches the job", async () => {
@@ -389,6 +469,45 @@ describe("POST /api/container/:op", () => {
     expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
     const row = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(row?.status).toBe("destroying");
+  });
+
+  it("returns a conflict instead of enqueueing a second lifecycle operation", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "running" });
+    await env.DB.prepare(
+      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES ('active', 'container-1', 'stop', 'running', ?, ?)",
+    )
+      .bind(Date.now(), Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/container/stop", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "container state changed or lifecycle operation already in progress" });
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(1);
+  });
+
+  it("retry ignores newer background jobs and re-runs the failed lifecycle op", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "error" });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, error, created_at, updated_at)
+       VALUES ('failed-stop', 'container-1', 'stop', 'failed', 'boom', 1, 1),
+              ('newer-sync', 'container-1', 'sync-keys', 'succeeded', NULL, 2, 2)`,
+    ).run();
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const res = await app().request("/api/container/retry", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(202);
+    expect(daemon.submitted).toMatchObject([{ op: "stop" }]);
   });
 
   it("retry re-runs the failed op from the error state", async () => {
@@ -720,6 +839,59 @@ describe("account deletion (U8)", () => {
     expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).not.toBeNull();
   });
 
+  it("returns a conflict when waitlist admission wins the deletion race", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    const headers = await login(env, user);
+    const database = env.DB;
+    let raced = false;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property !== "prepare") return Reflect.get(target, property, receiver) as unknown;
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.startsWith("SELECT * FROM containers WHERE user_id = ?")) return statement;
+          return new Proxy(statement, {
+            get(statementTarget, statementProperty, statementReceiver) {
+              if (statementProperty !== "bind") {
+                return Reflect.get(statementTarget, statementProperty, statementReceiver) as unknown;
+              }
+              return (...values: unknown[]) => {
+                const bound = statementTarget.bind(...values);
+                return new Proxy(bound, {
+                  get(boundTarget, boundProperty, boundReceiver) {
+                    if (boundProperty !== "first") {
+                      return Reflect.get(boundTarget, boundProperty, boundReceiver) as unknown;
+                    }
+                    return async () => {
+                      const row = await boundTarget.first();
+                      if (!raced) {
+                        raced = true;
+                        await target.prepare(
+                          "UPDATE containers SET host_id = 'host-1', status = 'provisioning' WHERE id = 'container-1'",
+                        ).run();
+                      }
+                      return row;
+                    };
+                  },
+                });
+              };
+            },
+          });
+        };
+      },
+    });
+
+    const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(409);
+    expect(await env.DB.prepare("SELECT * FROM containers WHERE user_id = ?")
+      .bind(user.id)
+      .first()).toMatchObject({ host_id: "host-1", status: "provisioning" });
+  });
+
   it("purges credentials, keys, and the user row; revokes the session", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -751,6 +923,31 @@ describe("account deletion (U8)", () => {
     // Session unusable afterwards.
     const after = await app().request("/api/container", { headers }, env);
     expect(after.status).toBe(401);
+  });
+
+  it("rolls back the waitlisted-container claim when account purge fails", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    await env.DB.prepare(
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('user-1', 1)",
+    ).run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_user_delete BEFORE DELETE ON users
+       BEGIN SELECT RAISE(FAIL, 'user delete failed'); END`,
+    ).run();
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
+
+    expect(res.status).toBe(500);
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).not.toBeNull();
+    expect(await env.DB.prepare(
+      "SELECT status FROM containers WHERE user_id = 'user-1'",
+    ).first()).toMatchObject({ status: "waitlisted" });
+    expect(await env.DB.prepare(
+      "SELECT user_id FROM waitlist WHERE user_id = 'user-1'",
+    ).first()).not.toBeNull();
   });
 
   it("drops a hostless waitlisted container as part of deletion", async () => {

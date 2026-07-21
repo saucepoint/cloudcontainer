@@ -21,6 +21,7 @@ export async function pickHost(
   ramMb: number,
   diskGb: number,
   now: () => number = Date.now,
+  excludedHostIds: readonly string[] = [],
 ): Promise<HostRow | null> {
   return env.DB.prepare(
     `SELECT * FROM hosts
@@ -30,11 +31,18 @@ export async function pickHost(
        AND disk_total_gb - disk_allocated_gb >= ?
        AND last_seen_at IS NOT NULL AND last_seen_at >= ?
        AND consecutive_failures = 0
+       AND id NOT IN (SELECT value FROM json_each(?))
      ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC,
               vcpu_capacity - vcpu_allocated DESC,
               id
      LIMIT 1`,
   )
-    .bind(cpu, ramMb, diskGb, now() - HOST_HEARTBEAT_MAX_AGE_MS)
+    .bind(
+      cpu,
+      ramMb,
+      diskGb,
+      now() - HOST_HEARTBEAT_MAX_AGE_MS,
+      JSON.stringify(excludedHostIds),
+    )
     .first<HostRow>();
 }
