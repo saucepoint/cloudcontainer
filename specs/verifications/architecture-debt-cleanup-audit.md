@@ -7,7 +7,7 @@
 - [x] **Repository conventions** — strict ESM TypeScript, two-space indentation, double quotes, semicolons, `.js` relative imports, type-only imports, and workspace-local tests are preserved. `git diff --check` passes.
 - [x] **Mechanical quality gate** — `npm run lint` runs Oxlint with warnings denied, elevates `typescript/no-floating-promises`, and validates all deploy/infra shell syntax. It is enforced by CI and the release script.
 - [x] **Type safety** — all workspace and browser type checks pass; the production diff adds no `any`, TypeScript suppression, or double assertion.
-- [x] **Test coverage** — 24 files / 314 tests pass. New regressions cover request-body limits, lifecycle timeout state, enqueue rollback, Incus metadata failure, repository path collisions, shared browser transport, and polling policy.
+- [x] **Test coverage** — 24 files / 324 tests pass. New regressions cover request-body limits, lifecycle timeout state, enqueue rollback, Incus metadata failure, repository path collisions, shared browser transport, and polling policy.
 - [x] **FIRST properties** — added tests are fast, isolated, repeatable, self-verifying, and behavior-focused. External systems are mocked or command execution is injected.
 - [x] **Error handling** — broad placement failure masking was narrowed; daemon metadata failures propagate; timed-out lifecycle operations now surface container failure; expected failures carry actionable messages without credentials.
 - [x] **Security** — bounded input, bound SQL, authenticated ownership, schema validation, shell quoting, sealed credential paths, and static-only style injection were reviewed. No high-confidence findings. See `specs/security/REVIEW.md`.

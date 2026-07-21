@@ -23,7 +23,7 @@ phases:
     passed: true
     command: "npm test"
     files: 24
-    tests: 314
+    tests: 324
   dependency_audit:
     passed: true
     command: "npm audit"
@@ -40,7 +40,7 @@ phases:
     command: "npm run deploy -- --dry-run --skip-install"
     exit_code: 0
     captured_at: "2026-07-21T21:24:33Z"
-    note: "Single contiguous run; all type checks and lint passed, followed by 24 test files and 314 tests."
+    note: "Single contiguous run; the browser build, all type checks, and lint passed, followed by 24 test files and 324 tests."
   manual:
     - step: "Compare stylesheet payload before and after extraction"
       expected: "No rendered CSS change"
