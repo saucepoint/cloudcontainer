@@ -5,8 +5,8 @@ Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
 
-The current release is a free service reached through World ID or a one-time
-administrator invite: one Incus system container per account, reached over
+The current release is a free, invite-only service: one Incus system container
+per account, reached over
 public-key SSH. It is intentionally described as a cloud container rather than
 a hardware-isolated VM. Paid plans,
 Stripe, email, backups, and production redundancy are roadmap work, not current
@@ -26,11 +26,10 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 
 ## User flow
 
-1. The user signs in with World ID or a passkey, or creates an account with an
-   eight-character, single-use administrator invite. Invite signup creates a
+1. The user signs in with a passkey or creates an account with an eight-character,
+   single-use administrator invite. Invite signup creates a
    discoverable passkey before consuming the code, because that passkey is the
-   account's required return path. A new World ID account can optionally add a
-   passkey and can always continue signing in with World ID.
+   account's required return path.
 2. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the server. Later credential
@@ -95,7 +94,7 @@ The fast suite never contacts live external services or infrastructure:
 - Daemon tests inject command execution and assert the generated Incus commands.
 - Contract tests exercise signing, replay rejection, encryption, sealing,
   cross-runtime-safe encodings, and tamper failures.
-- GitHub, Cloudflare, World ID, Codex auth endpoints, WebAuthn verification,
+- GitHub, Cloudflare, Codex auth endpoints, WebAuthn verification,
   and daemon HTTP are mocked.
 - CI runs npm ci, npm run typecheck, and npm test on Node.js 22.
 
@@ -107,13 +106,11 @@ evidence listed in SPEC.md. The destructive multi-tenant staging gate is in
 ## Control-plane configuration
 
 apps/worker/wrangler.jsonc declares the deployed Worker, D1 binding, KV binding,
-five-minute Cron trigger, public base URL, and World ID identifiers.
+five-minute Cron trigger, and public base URL.
 
 Required Worker secrets:
 
-- RP_SIGNING_KEY
 - CREDENTIAL_MASTER_KEY
-- NULLIFIER_HMAC_KEY
 - WORKER_RPC_PRIVATE_KEY
 - INVITE_ADMIN_SECRET
 
@@ -143,19 +140,9 @@ Copy the returned IDs into wrangler.jsonc, then:
 
     npm run db:migrate:remote
     npx wrangler secret put CREDENTIAL_MASTER_KEY
-    npx wrangler secret put NULLIFIER_HMAC_KEY
     npx wrangler secret put WORKER_RPC_PRIVATE_KEY
-    npx wrangler secret put RP_SIGNING_KEY
     npx wrangler secret put INVITE_ADMIN_SECRET
     npx wrangler deploy
-
-World ID setup is in the World Developer Portal. The app must have a registered
-World ID 4.0 RP and provide `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`,
-`WORLD_ID_ENVIRONMENT`, and the one-time RP signing key. Use
-`WORLD_ID_ENVIRONMENT=production` with the real World App. Use `staging` only
-when the configured app/RP and World simulator are also staging. `DEV_AUTH`
-does not select the World ID environment. Sign-in uses v4 Proof of Human
-sessions exclusively; the React IDKit widget owns the World App handoff.
 
 ### Administrator invites
 

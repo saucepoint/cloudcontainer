@@ -458,8 +458,8 @@ export const passkeyRoutes = new Hono<AppContext>()
       await c.env.DB.batch([
         c.env.DB.prepare(
           `INSERT INTO users
-             (id, webauthn_user_id, signup_method, created_at, last_authenticated_at)
-           VALUES (?, ?, 'invite', ?, ?)`,
+             (id, webauthn_user_id, created_at, last_authenticated_at)
+           VALUES (?, ?, ?, ?)`,
         ).bind(context.pendingUserId, context.webauthnUserId, now, now),
         passkeyInsert(c.env, context.pendingUserId, verification, now),
         c.env.DB.prepare(

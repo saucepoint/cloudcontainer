@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/security.ts client/onboarding.ts client/dashboard.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public && cp ../../node_modules/@worldcoin/idkit-core/dist/idkit_wasm_bg.wasm public/idkit_wasm_bg.wasm",
+    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/security.ts client/onboarding.ts client/dashboard.tsx --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
     "predev": "npm run build:client",
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",
@@ -21,7 +21,6 @@
     "@codestation/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "@worldcoin/idkit": "^4.2.1",
     "hono": "^4.7.4",
     "motion": "^12.42.2",
     "react": "^19.2.7",

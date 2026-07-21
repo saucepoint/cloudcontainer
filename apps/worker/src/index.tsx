@@ -56,7 +56,6 @@ app.get("/security", requireUser, async (c) => {
   const container = await getContainerForUser(c.env, user.id);
   return c.html(
     <SecurityPage
-      signupMethod={user.signup_method}
       passkeyCount={passkeys?.count ?? 0}
       continueHref={container ? "/dashboard" : "/onboarding"}
       welcome={c.req.query("welcome") === "1"}

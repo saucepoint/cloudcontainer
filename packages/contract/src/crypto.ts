@@ -8,13 +8,11 @@
  *   plaintext secrets never transit the wire, even inside the mTLS tunnel.
  * - At-rest encryption: XChaCha20-Poly1305 under the credential master key
  *   (Workers Secret). Used for D1 `credentials_encrypted` blobs.
- * - HMAC-SHA256: banned-nullifier hashes.
  */
 import { x25519 } from "@noble/curves/ed25519";
 import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
-import { hmac } from "@noble/hashes/hmac";
 import { randomBytes } from "@noble/hashes/utils";
 
 const SEALED_INFO = "codestation-sealed-v1";
@@ -127,13 +125,6 @@ export function encryptJsonAtRest(value: unknown, masterKeyB64: string): string 
 
 export function decryptJsonAtRest<T = unknown>(ciphertextB64: string, masterKeyB64: string): T {
   return JSON.parse(decoder.decode(decryptAtRest(ciphertextB64, masterKeyB64))) as T;
-}
-
-// -- nullifier HMAC ------------------------------------------------------------
-
-/** Keyed hash of a World ID nullifier for the ban table (survives account deletion). */
-export function hmacNullifier(nullifier: string, hmacKeyB64: string): string {
-  return toHex(hmac(sha256, fromB64(hmacKeyB64), utf8(nullifier)));
 }
 
 export function generateSymmetricKey(): string {
