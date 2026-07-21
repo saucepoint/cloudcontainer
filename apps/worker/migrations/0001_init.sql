@@ -1,4 +1,4 @@
--- Codestation D1 schema (spec §8, minus Stripe/email tables)
+-- Workbench D1 schema (spec §8, minus Stripe/email tables)
 
 CREATE TABLE users (
   id                   TEXT PRIMARY KEY,            -- UUID, internal identity

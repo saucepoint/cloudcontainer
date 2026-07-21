@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { encryptJsonAtRest, generateX25519Keypair } from "@codestation/contract";
+import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
 import { createSession } from "../src/sessions.js";
@@ -265,7 +265,7 @@ describe("GET /api/container", () => {
     const body = await res.json();
     expect(body).toMatchObject({ container: { status: "running", sshCommand: null } });
     expect(JSON.stringify(body)).not.toContain("30500");
-    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+    expect(JSON.stringify(body)).not.toContain("host-1.workbench.test");
   });
 
   it("exposes the ssh command and allowed ops for a running container with an authorized key", async () => {
@@ -284,7 +284,7 @@ describe("GET /api/container", () => {
     const { container } = (await res.json()) as {
       container: { sshCommand: string; allowedOps: string[]; hostKeyFingerprints: string[] };
     };
-    expect(container.sshCommand).toBe("ssh -p 30500 dev@host-1.codestation.test");
+    expect(container.sshCommand).toBe("ssh -p 30500 dev@host-1.workbench.test");
     expect(container.allowedOps).toContain("stop");
     expect(container.hostKeyFingerprints).toEqual(["fp1"]);
   });
@@ -317,7 +317,7 @@ describe("GET /api/dashboard", () => {
     const body = await res.json();
     expect(body).toMatchObject({ container: { sshCommand: null }, keys: [] });
     expect(JSON.stringify(body)).not.toContain("30500");
-    expect(JSON.stringify(body)).not.toContain("host-1.codestation.test");
+    expect(JSON.stringify(body)).not.toContain("host-1.workbench.test");
   });
 
   it("returns the initial container and key state together", async () => {
@@ -341,7 +341,7 @@ describe("GET /api/dashboard", () => {
     expect(body.container).toMatchObject({
       status: "running",
       diskGb: 8,
-      sshCommand: "ssh -p 30500 dev@host-1.codestation.test",
+      sshCommand: "ssh -p 30500 dev@host-1.workbench.test",
     });
     expect(body.container).not.toHaveProperty("rootDiskGb");
     expect(body.keys).toMatchObject([{ label: "laptop", pubkey: PUBKEY }]);
@@ -647,7 +647,7 @@ describe("enrollment (U4, no-key path)", () => {
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({
       ok: true,
-      sshCommand: "ssh -p 30500 dev@host-1.codestation.test",
+      sshCommand: "ssh -p 30500 dev@host-1.workbench.test",
     });
     expect(daemon.submitted).toMatchObject([{ op: "sync-keys", sshKeys: [PUBKEY] }]);
 

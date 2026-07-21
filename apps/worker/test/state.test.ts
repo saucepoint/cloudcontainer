@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { allowedUserOps, pendingStatusFor, successStatusFor } from "../src/state.js";
-import { CONTAINER_STATUSES } from "@codestation/contract";
+import { CONTAINER_STATUSES } from "@workbench/contract";
 
 describe("container lifecycle policy", () => {
   it("keeps suspended and user-stopped distinguishable", () => {

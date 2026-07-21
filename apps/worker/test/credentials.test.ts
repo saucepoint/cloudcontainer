@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { encryptJsonAtRest } from "@codestation/contract";
+import { encryptJsonAtRest } from "@workbench/contract";
 import {
   buildCredentialPayload,
   decryptLlmKeys,

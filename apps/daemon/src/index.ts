@@ -10,7 +10,7 @@ import {
   verifyRequest,
   type JobStatusResponse,
   type StatsResponse,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import { loadConfig } from "./config.js";
 import { Incus, realExec } from "./incus.js";
 import { JobConflictError, JobRunner } from "./jobs.js";
@@ -58,9 +58,9 @@ export function buildApp(opts: {
     const res: StatsResponse = {
       hostId: config.hostId,
       containers: containers
-        .filter((ct) => ct.config["user.codestation.id"])
+        .filter((ct) => ct.config["user.workbench.id"])
         .map((ct) => ({
-          containerId: ct.config["user.codestation.id"] as string,
+          containerId: ct.config["user.workbench.id"] as string,
           incusStatus: ct.status,
         })),
       ramTotalMb: Math.floor(totalmem() / (1024 * 1024)),

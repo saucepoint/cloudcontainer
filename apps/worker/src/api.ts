@@ -4,7 +4,7 @@ import {
   GithubReposSchema,
   toHex,
   type JobOp,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import {
   requireCredentialSetup,
   requireUnrevokedSession,

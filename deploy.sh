@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release the Codestation control plane from a clean checkout.
+# Release the Workbench control plane from a clean checkout.
 #
 # Usage:
 #   ./deploy.sh [--yes] [--dry-run] [--skip-install] [--skip-checks]

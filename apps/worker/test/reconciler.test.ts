@@ -3,7 +3,7 @@
  * a 7-day grace expiry runs in milliseconds ("time never passes in tests").
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decryptJsonAtRest, encryptJsonAtRest, generateX25519Keypair } from "@codestation/contract";
+import { decryptJsonAtRest, encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { GRACE_DAYS, reconcile, STUCK_JOB_MS } from "../src/reconciler.js";
 import type { CredentialsRow, JobRow } from "../src/types.js";
 import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
@@ -346,7 +346,7 @@ describe("github token refresh loop", () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-1",
       GITHUB_APP_CLIENT_SECRET: "shh",
-      GITHUB_APP_SLUG: "codestation-test",
+      GITHUB_APP_SLUG: "workbench-test",
     });
     await seedUser(env);
     await seedHost(env, { daemon_pubkey: generateX25519Keypair().publicKey });

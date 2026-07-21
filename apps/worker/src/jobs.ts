@@ -10,7 +10,7 @@ import {
   type Agent,
   type JobRequest,
   type ProvisionResult,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import { diskReservationGb } from "./capacity.js";
 import { daemonJobStatus, daemonSubmitJob } from "./daemon.js";
 import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";

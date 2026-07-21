@@ -4,7 +4,7 @@
  * daemon restart; the control-plane reconciler times such jobs out to `error`
  * with a working retry — never a stuck spinner.
  */
-import type { JobRequest, JobStatus, ProvisionResult } from "@codestation/contract";
+import type { JobRequest, JobStatus, ProvisionResult } from "@workbench/contract";
 import type { Provisioner } from "./provisioner.js";
 
 export interface JobRecord {

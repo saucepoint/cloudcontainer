@@ -14,7 +14,7 @@ function argument(name: string): string | undefined {
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-const baseUrl = (argument("--url") ?? env.CODESTATION_URL)?.replace(/\/$/, "");
+const baseUrl = (argument("--url") ?? env.WORKBENCH_URL)?.replace(/\/$/, "");
 const secret = env.INVITE_ADMIN_SECRET;
 let target: URL | null = null;
 try {
@@ -26,7 +26,7 @@ const localHttp = target?.protocol === "http:"
   && (target.hostname === "localhost" || target.hostname === "127.0.0.1");
 
 if (!target || (target.protocol !== "https:" && !localHttp)) {
-  console.error("Pass an HTTPS --url (HTTP is allowed only for localhost) or set CODESTATION_URL.");
+  console.error("Pass an HTTPS --url (HTTP is allowed only for localhost) or set WORKBENCH_URL.");
   exit(1);
 }
 if (!secret) {

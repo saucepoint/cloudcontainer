@@ -1,4 +1,4 @@
-import type { ContainerStatus, JobOp, JobStatus, Tier } from "@codestation/contract";
+import type { ContainerStatus, JobOp, JobStatus, Tier } from "@workbench/contract";
 
 /**
  * Bindings = generated Cloudflare.Env (vars + D1/KV bindings from wrangler.jsonc)

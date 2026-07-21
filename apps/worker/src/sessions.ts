@@ -1,4 +1,4 @@
-import { toHex, utf8 } from "@codestation/contract";
+import { toHex, utf8 } from "@workbench/contract";
 import type { Bindings } from "./types.js";
 
 const SESSION_TTL_SEC = 7 * 24 * 3600;

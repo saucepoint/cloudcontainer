@@ -10,7 +10,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
-import { generateEd25519Keypair, generateSymmetricKey } from "@codestation/contract";
+import { generateEd25519Keypair, generateSymmetricKey } from "@workbench/contract";
 import type { Bindings, ContainerRow, HostRow, UserRow } from "../../src/types.js";
 
 // -- fake D1 over node:sqlite -------------------------------------------------
@@ -115,7 +115,7 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
   const env = {
     DB: new FakeD1(db),
     SESSIONS: kv,
-    BASE_URL: "https://codestation.test",
+    BASE_URL: "https://workbench.test",
     DEV_AUTH: "0",
     GITHUB_APP_CLIENT_ID: "",
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),
@@ -147,7 +147,7 @@ export async function seedHost(
     id: "host-1",
     ipv4: "203.0.113.1",
     ipv6: null,
-    ssh_hostname: "host-1.codestation.test",
+    ssh_hostname: "host-1.workbench.test",
     daemon_endpoint: "https://daemon-1.test:8443",
     daemon_cert_fp: null,
     daemon_pubkey: overrides.daemon_pubkey ?? "",

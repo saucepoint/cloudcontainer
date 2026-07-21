@@ -17,9 +17,9 @@ export interface DaemonConfig {
   tlsKeyPath?: string;
 }
 
-const DEFAULT_PATH = "/etc/codestation/daemon.json";
+const DEFAULT_PATH = "/etc/workbench/daemon.json";
 
-export function loadConfig(path = process.env.CS_DAEMON_CONFIG ?? DEFAULT_PATH): DaemonConfig {
+export function loadConfig(path = process.env.WB_DAEMON_CONFIG ?? DEFAULT_PATH): DaemonConfig {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<DaemonConfig>;
   for (const key of ["hostId", "workerRpcPublicKey", "x25519PrivateKey"] as const) {
     if (!raw[key]) throw new Error(`daemon config missing required field: ${key}`);
@@ -29,10 +29,10 @@ export function loadConfig(path = process.env.CS_DAEMON_CONFIG ?? DEFAULT_PATH):
     listenPort: raw.listenPort ?? 8443,
     workerRpcPublicKey: raw.workerRpcPublicKey!,
     x25519PrivateKey: raw.x25519PrivateKey!,
-    baseImage: raw.baseImage ?? "codestation-base",
+    baseImage: raw.baseImage ?? "workbench-base",
     storagePool: raw.storagePool ?? "default",
     // Keep existing daemon configs compatible. New hosts explicitly select the
-    // restricted `codestation` project during bootstrap.
+    // restricted `workbench` project during bootstrap.
     project: raw.project ?? "default",
     ...(raw.tlsCertPath ? { tlsCertPath: raw.tlsCertPath } : {}),
     ...(raw.tlsKeyPath ? { tlsKeyPath: raw.tlsKeyPath } : {}),

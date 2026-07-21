@@ -3,7 +3,7 @@
  * runs here so no state depends on a user or webhook happening to arrive.
  * Clock is injected for tests ("time never passes in tests", §18).
  */
-import { decryptJsonAtRest } from "@codestation/contract";
+import { decryptJsonAtRest } from "@workbench/contract";
 import { daemonStats } from "./daemon.js";
 import {
   diskReservationGb,

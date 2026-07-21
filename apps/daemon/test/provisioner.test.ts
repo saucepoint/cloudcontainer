@@ -4,7 +4,7 @@ import {
   generateX25519Keypair,
   sealJson,
   type JobRequest,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
 import { containerName, homeVolumeName, Incus, type ExecFn } from "../src/incus.js";
 import { JobConflictError, JobRunner } from "../src/jobs.js";
@@ -18,7 +18,7 @@ function makeConfig(): DaemonConfig {
     listenPort: 8443,
     workerRpcPublicKey: generateEd25519Keypair().publicKey,
     x25519PrivateKey: hostKeys.privateKey,
-    baseImage: "codestation-base",
+    baseImage: "workbench-base",
     storagePool: "default",
     project: "default",
   };
@@ -47,7 +47,7 @@ function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision
     containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 8, sshPort: 30500 },
     sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test@laptop"],
-    dashboardUrl: "https://codestation.example",
+    dashboardUrl: "https://workbench.example",
     githubRepos: [],
     ...(sealed ? { sealedCredentials: sealed } : {}),
   };
@@ -75,7 +75,7 @@ describe("provision command construction", () => {
 
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=8GiB"));
-    const init = flat.find((f) => f.startsWith("init codestation-base cs-aaaaaaaabbbb"));
+    const init = flat.find((f) => f.startsWith("init workbench-base cs-aaaaaaaabbbb"));
     expect(init).toContain("limits.cpu=2");
     expect(init).toContain("limits.cpu.allowance=200%");
     expect(init).toContain("limits.memory=2048MiB");
@@ -92,7 +92,7 @@ describe("provision command construction", () => {
     // reject an explicit security.idmap.size as low-level configuration.
     expect(init).not.toContain("security.idmap.size");
     expect(init).toContain("security.nesting=false");
-    expect(init).toContain("user.codestation.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    expect(init).toContain("user.workbench.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     expect(flat).toContain(
       "config device override cs-aaaaaaaabbbb root size=8GiB",
     );
@@ -191,7 +191,7 @@ describe("provision command construction", () => {
     expect(install).toContain("@openai/codex");
     expect(install).toContain("@earendil-works/pi-coding-agent");
     const selectedAgents = calls.find((call) =>
-      call.args.join(" ").includes("/etc/codestation-agents"),
+      call.args.join(" ").includes("/etc/workbench-agents"),
     );
     expect(selectedAgents?.stdin).toBe("claude\ncodex\npi\n");
   });
@@ -457,7 +457,7 @@ describe("provision command construction", () => {
       op: "refresh-credentials",
       jobId: "j-invalid-wrangler",
       containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      dashboardUrl: "https://codestation.example",
+      dashboardUrl: "https://workbench.example",
       sealedCredentials: sealed,
     }).catch((caught: unknown) => caught);
 
@@ -482,14 +482,14 @@ describe("resize / destroy", () => {
       jobId: "j-start",
       containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       sshKeys: ["ssh-ed25519 AAAA new-laptop"],
-      dashboardUrl: "https://codestation.example",
+      dashboardUrl: "https://workbench.example",
       sealedCredentials: sealed,
     });
 
     expect(calls[0]?.args.join(" ")).toBe("start cs-aaaaaaaabbbb");
     expect(calls.some((call) => call.stdin?.includes("ssh-ed25519 AAAA new-laptop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("CANARY-after-stop"))).toBe(true);
-    expect(calls.some((call) => call.stdin?.includes("https://codestation.example"))).toBe(true);
+    expect(calls.some((call) => call.stdin?.includes("https://workbench.example"))).toBe(true);
   });
 
   it("resize raises cgroup limits and grows the home volume", async () => {

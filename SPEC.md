@@ -1,4 +1,4 @@
-# Codestation — Current Release Specification
+# Workbench — Current Release Specification
 
 **Status:** Normative current-release specification
 
@@ -14,7 +14,7 @@ listed under Roadmap is not a current-release promise or release gate.
 
 ## 1. Product contract
 
-Codestation gives a developer a persistent, SSH-accessible Debian environment
+Workbench gives a developer a persistent, SSH-accessible Debian environment
 with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
 only two product decisions after authentication:
@@ -36,7 +36,7 @@ returns immediately and the dashboard explains every intermediate state.
   specific errors, and explicit consequences for destructive actions.
 - **Agent-ready by default.** Debian, the development toolchain, Pi, Claude
   Code, Codex, and OpenCode are baked into the base image.
-- **Bring your own model access.** Codestation does not subsidize inference.
+- **Bring your own model access.** Workbench does not subsidize inference.
 - **Defer optional setup.** A missing credential never blocks provisioning.
 - **Fail visibly.** A failed operation reaches an error state with a retry or
   recovery path; it never leaves an indefinite spinner.
@@ -292,7 +292,7 @@ environments keep DEV_AUTH=0.
 
 ### Base image
 
-The codestation-base image is Debian 13 and contains:
+The workbench-base image is Debian 13 and contains:
 
 - openssh-server, sudo, git, GitHub CLI, build-essential, CMake, and OpenSSL and SQLite development libraries;
 - Python 3, virtual environments, and uv;
@@ -325,7 +325,7 @@ managed home volume so Retry can start cleanly without deleting user data.
 The daemon:
 
 1. creates or reuses the quota-limited home volume;
-2. initializes a fresh root filesystem from codestation-base;
+2. initializes a fresh root filesystem from workbench-base;
 3. caps the root filesystem, applies CPU/RAM limits, and enables boot.autostart;
 4. mounts the volume at /home/dev;
 5. adds the host-to-container SSH proxy;
@@ -372,7 +372,7 @@ can mint a random single-use enrollment token:
 
 Once the server is Ready, the dashboard supplies a copyable prompt that tells a
 local coding agent to create an ed25519 keypair, transmit only the public key,
-add a Host codestation entry to the local SSH config, and verify the connection.
+add a Host workbench entry to the local SSH config, and verify the connection.
 
 ---
 

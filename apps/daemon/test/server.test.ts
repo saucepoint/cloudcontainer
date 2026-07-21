@@ -3,7 +3,7 @@ import {
   generateEd25519Keypair,
   generateX25519Keypair,
   signRequest,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
 import { buildApp } from "../src/index.js";
 import { Incus, type ExecFn } from "../src/incus.js";
@@ -18,12 +18,12 @@ function makeApp() {
     listenPort: 8443,
     workerRpcPublicKey: workerKeys.publicKey,
     x25519PrivateKey: generateX25519Keypair().privateKey,
-    baseImage: "codestation-base",
+    baseImage: "workbench-base",
     storagePool: "default",
     project: "default",
   };
   const listJson = JSON.stringify([
-    { name: "cs-abc", status: "Running", config: { "user.codestation.id": "c-123" } },
+    { name: "cs-abc", status: "Running", config: { "user.workbench.id": "c-123" } },
     { name: "unrelated", status: "Running", config: {} },
   ]);
   const exec: ExecFn = async (_c, args) => ({

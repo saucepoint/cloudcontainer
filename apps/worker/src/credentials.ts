@@ -4,7 +4,7 @@ import {
   LlmKeysSchema,
   type CredentialPayload,
   type LlmKeys,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import type { Bindings, CredentialsRow } from "./types.js";
 
 export async function getCredentialsRow(

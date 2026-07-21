@@ -1,5 +1,5 @@
 {
-  "name": "@codestation/worker",
+  "name": "@workbench/worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,13 +12,13 @@
     "types": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply codestation --local",
-    "db:migrate:remote": "wrangler d1 migrations apply codestation --remote",
+    "db:migrate:local": "wrangler d1 migrations apply workbench --local",
+    "db:migrate:remote": "wrangler d1 migrations apply workbench --remote",
     "invite:create": "tsx scripts/generate-invite.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@codestation/contract": "*",
+    "@workbench/contract": "*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
     "hono": "^4.7.4",

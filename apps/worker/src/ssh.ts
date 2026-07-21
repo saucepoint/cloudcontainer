@@ -1,4 +1,4 @@
-import { INPUT_LIMITS } from "@codestation/contract";
+import { INPUT_LIMITS } from "@workbench/contract";
 import { getContainerForUser, getHost } from "./jobs.js";
 import type { Bindings, ContainerRow } from "./types.js";
 

@@ -1,14 +1,14 @@
 [Unit]
-Description=Codestation host control daemon
+Description=Workbench host control daemon
 After=network-online.target incus.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-Environment=CS_DAEMON_CONFIG=/etc/codestation/daemon.json
-WorkingDirectory=/opt/codestation/apps/daemon
-ExecStart=/usr/bin/node /opt/codestation/node_modules/.bin/tsx src/index.ts
+Environment=WB_DAEMON_CONFIG=/etc/workbench/daemon.json
+WorkingDirectory=/opt/workbench/apps/daemon
+ExecStart=/usr/bin/node /opt/workbench/node_modules/.bin/tsx src/index.ts
 Restart=always
 RestartSec=3
 # tsx forwards SIGTERM to Node, which exits 143 during an intentional restart.

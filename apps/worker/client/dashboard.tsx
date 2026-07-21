@@ -1,4 +1,4 @@
-import { AGENT_LABELS, type JobOp } from "@codestation/contract";
+import { AGENT_LABELS, type JobOp } from "@workbench/contract";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -291,22 +291,22 @@ function SshKeys({
   });
 
   const prompt = enrollment ? [
-    "Set up SSH access to my Codestation cloud workbench:",
+    "Set up SSH access to my Workbench cloud workbench:",
     "",
-    "1. Ensure an ed25519 SSH keypair exists at ~/.ssh/codestation_ed25519 (create it with ssh-keygen, no passphrase, if missing). Never read or transmit the private key file — only the .pub file is needed.",
+    "1. Ensure an ed25519 SSH keypair exists at ~/.ssh/workbench_ed25519 (create it with ssh-keygen, no passphrase, if missing). Never read or transmit the private key file — only the .pub file is needed.",
     `2. Send a POST request to ${enrollment.endpoint} with header \"content-type: application/json\" and JSON body:`,
-    `   {\"token\": \"${enrollment.token}\", \"pubkey\": \"<full contents of ~/.ssh/codestation_ed25519.pub>\"}`,
-    "3. The JSON response includes \"sshCommand\" in the form \"ssh -p PORT dev@HOSTNAME\". Using its port and hostname, append this block to ~/.ssh/config (replace any existing \"Host codestation\" block):",
+    `   {\"token\": \"${enrollment.token}\", \"pubkey\": \"<full contents of ~/.ssh/workbench_ed25519.pub>\"}`,
+    "3. The JSON response includes \"sshCommand\" in the form \"ssh -p PORT dev@HOSTNAME\". Using its port and hostname, append this block to ~/.ssh/config (replace any existing \"Host workbench\" block):",
     "",
-    "   Host codestation",
+    "   Host workbench",
     "     HostName <hostname>",
     "     Port <port>",
     "     User dev",
-    "     IdentityFile ~/.ssh/codestation_ed25519",
+    "     IdentityFile ~/.ssh/workbench_ed25519",
     "     IdentitiesOnly yes",
     "",
-    "4. Verify the connection: ssh codestation \"echo connected\"",
-    "5. Confirm to me that connecting is now just: ssh codestation",
+    "4. Verify the connection: ssh workbench \"echo connected\"",
+    "5. Confirm to me that connecting is now just: ssh workbench",
     "",
     "The token is single-use and expires in 1 hour. If the API returns 403, stop and tell me to mint a fresh token.",
   ].join("\n") : "";
@@ -360,7 +360,7 @@ function SshKeys({
               >
                 <div className="notice">
                   <strong>Paste this prompt into your local coding agent</strong>
-                  <p className="muted">It creates a dedicated key, registers only the public half, and configures the short command <code>ssh codestation</code>.</p>
+                  <p className="muted">It creates a dedicated key, registers only the public half, and configures the short command <code>ssh workbench</code>.</p>
                 </div>
                 <div className="row">
                   <button type="button" className="btn" onClick={() => copy("prompt", prompt)}>{copied === "prompt" ? "Copied ✓" : "Copy prompt"}</button>

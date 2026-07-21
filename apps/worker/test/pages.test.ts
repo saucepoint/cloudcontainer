@@ -177,7 +177,7 @@ describe("onboarding wizard order", () => {
 
   it("uses workbench terminology for the immutable setup warning", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
-    expect(html).toContain("Configure your workbench with agents, models, and credentials.");
+    expect(html).toContain("Set up a workbench.");
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
   });
 });

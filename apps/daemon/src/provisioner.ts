@@ -7,7 +7,7 @@ import {
   type Agent,
   type JobRequest,
   type ProvisionResult,
-} from "@codestation/contract";
+} from "@workbench/contract";
 import { installScript } from "./agents.js";
 import type { DaemonConfig } from "./config.js";
 import { CredentialInstaller } from "./credential-installer.js";
@@ -144,7 +144,7 @@ export class Provisioner {
       await this.writeAuthorizedKeys(name, sshKeys);
       await this.credentialInstaller.write(name, credentials, spec.agents);
       await this.cloneGithubRepositories(name, request.githubRepos);
-      await this.incus.writeFile(name, "/etc/codestation-agents", spec.agents.join("\n") + "\n");
+      await this.incus.writeFile(name, "/etc/workbench-agents", spec.agents.join("\n") + "\n");
       await this.incus.writeFile(
         name,
         "/etc/motd",
@@ -233,8 +233,8 @@ export class Provisioner {
     try {
       const { stdout } = await this.incus.shell(
         name,
-        `if test -s /etc/codestation-agents; then
-           cat /etc/codestation-agents
+        `if test -s /etc/workbench-agents; then
+           cat /etc/workbench-agents
          else
            for a in ${AGENTS.join(" ")}; do command -v $a >/dev/null && echo $a; done
          fi

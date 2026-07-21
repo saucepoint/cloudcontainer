@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "codestation",
+  "name": "workbench",
   "main": "src/index.tsx",
   "assets": {
     "directory": "./public"
@@ -14,7 +14,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "codestation",
+      "database_name": "workbench",
       "database_id": "28516f87-bfbc-435b-a2b8-faf0fbc07757",
       "migrations_dir": "migrations"
     }
@@ -30,13 +30,13 @@
   },
   "vars": {
     // Public base URL of the deployed dashboard (no trailing slash).
-    "BASE_URL": "https://codestation.saucepoint.workers.dev",
+    "BASE_URL": "https://usebench.dev",
     // Set to "1" ONLY for local development: enables /auth/dev login bypass.
     "DEV_AUTH": "0",
     // GitHub App OAuth client id and public-page slug. GitHub setup is exposed
     // only when both values and GITHUB_APP_CLIENT_SECRET are configured.
     "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c",
-    "GITHUB_APP_SLUG": "codestationdemo"
+    "GITHUB_APP_SLUG": "workbenchdemo"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   CREDENTIAL_MASTER_KEY    — base64 32-byte key (npx tsx scripts/genkeys.ts)

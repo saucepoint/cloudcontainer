@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Read-only acceptance audit for a Codestation Incus host. Run as root after
+# Read-only acceptance audit for a Workbench Incus host. Run as root after
 # bootstrap and after every host-policy change; a non-zero exit blocks signup
 # traffic from being enabled for the host.
 set -euo pipefail
 
-PROJECT_NAME="${PROJECT_NAME:-codestation}"
+PROJECT_NAME="${PROJECT_NAME:-workbench}"
 POOL_NAME="${POOL_NAME:-default}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
@@ -65,10 +65,10 @@ if [[ -d /sys/module/br_netfilter ]]; then
 else
   fail "bridge netfilter is loaded"
 fi
-if systemctl is-active --quiet codestation-daemon; then
-  pass "Codestation daemon is active"
+if systemctl is-active --quiet workbench-daemon; then
+  pass "Workbench daemon is active"
 else
-  fail "Codestation daemon is active"
+  fail "Workbench daemon is active"
 fi
 
 STORAGE_DRIVER=$(incus storage show "$POOL_NAME" 2>/dev/null | awk '$1 == "driver:" { print $2; exit }' || true)
@@ -147,17 +147,17 @@ check_eq "profile east-west isolation" "true" \
 check_eq "profile network bandwidth cap" "$TENANT_NETWORK_LIMIT" \
   incus --project "$PROJECT_NAME" profile device get default eth0 limits.max
 
-if [[ -f /etc/codestation/daemon.json ]] && \
+if [[ -f /etc/workbench/daemon.json ]] && \
   jq -e --arg project "$PROJECT_NAME" '.project == $project' \
-    /etc/codestation/daemon.json >/dev/null; then
+    /etc/workbench/daemon.json >/dev/null; then
   pass "daemon is scoped to the tenant project"
 else
   fail "daemon is scoped to the tenant project"
 fi
-if nft list table inet codestation >/dev/null 2>&1; then
-  pass "Codestation nftables policy is loaded"
+if nft list table inet workbench >/dev/null 2>&1; then
+  pass "Workbench nftables policy is loaded"
 else
-  fail "Codestation nftables policy is loaded"
+  fail "Workbench nftables policy is loaded"
 fi
 if [[ ! -e /proc/sched_debug || "$(stat -c %a /proc/sched_debug)" == "400" ]]; then
   pass "scheduler debug data is root-only"
@@ -175,7 +175,7 @@ while IFS= read -r name; do
   [[ -n "$name" ]] || continue
   tenant_count=$(( tenant_count + 1 ))
   check_set "$name has a control-plane identity" \
-    incus --project "$PROJECT_NAME" config get "$name" user.codestation.id
+    incus --project "$PROJECT_NAME" config get "$name" user.workbench.id
   check_set "$name has a CPU reservation" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu
   check_set "$name has a CPU allowance" \

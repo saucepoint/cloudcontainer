@@ -19,7 +19,7 @@
  * Attempts are single-use rows in oauth_states, bound to the signing-in user.
  */
 import { Hono } from "hono";
-import { type WranglerOauth, WranglerOauthSchema } from "@codestation/contract";
+import { type WranglerOauth, WranglerOauthSchema } from "@workbench/contract";
 import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";

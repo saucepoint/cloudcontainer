@@ -56,24 +56,24 @@ describe("Incus.list", () => {
   it("parses names, status, and config; tolerates missing config", async () => {
     const exec: ExecFn = async () => ({
       stdout: JSON.stringify([
-        { name: "cs-a", status: "Running", config: { "user.codestation.id": "id-1" } },
+        { name: "cs-a", status: "Running", config: { "user.workbench.id": "id-1" } },
         { name: "plain", status: "Stopped" },
       ]),
       stderr: "",
     });
     const list = await new Incus(exec).list();
     expect(list).toEqual([
-      { name: "cs-a", status: "Running", config: { "user.codestation.id": "id-1" } },
+      { name: "cs-a", status: "Running", config: { "user.workbench.id": "id-1" } },
       { name: "plain", status: "Stopped", config: {} },
     ]);
   });
 
   it("scopes every operation to the configured tenant project", async () => {
     const { calls, exec } = capture();
-    await new Incus(exec, "incus", "codestation").exists("cs-x");
+    await new Incus(exec, "incus", "workbench").exists("cs-x");
     expect(calls[0]?.args).toEqual([
       "--project",
-      "codestation",
+      "workbench",
       "info",
       "cs-x",
     ]);
