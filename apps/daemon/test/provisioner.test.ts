@@ -6,7 +6,7 @@ import {
   type JobRequest,
 } from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
-import { containerName, homeVolumeName, Incus, type ExecFn } from "../src/incus.js";
+import { containerName, homeVolumeName, Incus, IncusNotFoundError, type ExecFn } from "../src/incus.js";
 import { JobConflictError, JobRunner } from "../src/jobs.js";
 import { Provisioner } from "../src/provisioner.js";
 
@@ -34,7 +34,7 @@ function fakeExec(calls: Call[], respond?: (args: string[]) => string): ExecFn {
     calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
     // Fresh provision: the container and volume don't exist yet.
     if (args[0] === "info" || (args[0] === "storage" && args[2] === "show")) {
-      throw new Error("not found");
+      throw new IncusNotFoundError();
     }
     const stdout = respond ? respond(args) : "";
     if (args[0] === "list" && !stdout) {
@@ -224,11 +224,11 @@ describe("provision command construction", () => {
     const exec: ExecFn = async (_cmd, args, stdin) => {
       calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
       if (args[0] === "info") {
-        if (!rootExists) throw new Error("not found");
+        if (!rootExists) throw new IncusNotFoundError();
         return { stdout: "", stderr: "" };
       }
       if (args[0] === "storage" && args[1] === "volume" && args[2] === "show") {
-        if (!homeExists) throw new Error("not found");
+        if (!homeExists) throw new IncusNotFoundError();
         return { stdout: "", stderr: "" };
       }
       if (args[0] === "storage" && args[1] === "volume" && args[2] === "create") {
@@ -660,7 +660,7 @@ describe("resize / destroy", () => {
 
   it("fails destroy when the volume probe fails operationally", async () => {
     const exec: ExecFn = async (_cmd, args) => {
-      if (args[0] === "info") throw new Error("not found");
+      if (args[0] === "info") throw new IncusNotFoundError();
       throw new Error("storage service unavailable");
     };
     const provisioner = new Provisioner(new Incus(exec), makeConfig());

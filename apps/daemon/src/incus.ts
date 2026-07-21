@@ -50,10 +50,22 @@ interface IncusContainer {
 
 const TENANT_PROCESS_LIMIT = 1024;
 
+/**
+ * Typed absence signal. Production failures arrive as wrapped incus stderr
+ * (matched by pattern below); tests inject this class so a generic
+ * `Error("not found")` is never mistaken for container absence.
+ */
+export class IncusNotFoundError extends Error {
+  constructor(message = "not found") {
+    super(message);
+    this.name = "IncusNotFoundError";
+  }
+}
+
 function isExplicitNotFound(error: unknown): boolean {
+  if (error instanceof IncusNotFoundError) return true;
   if (!(error instanceof Error)) return false;
-  return error.message === "not found" ||
-    /Error: (?:Instance|Storage volume).*not found/i.test(error.message);
+  return /Error: (?:Instance|Storage volume).*not found/i.test(error.message);
 }
 
 export class Incus {

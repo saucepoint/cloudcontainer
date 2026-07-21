@@ -75,6 +75,17 @@ describe("daemon HTTP API", () => {
     expect(await res.json()).toEqual({ error: "request body is too large" });
   });
 
+  it("rejects oversized POST bodies on any path before signature buffering", async () => {
+    const app = makeApp();
+    // Signed correctly, but the body limit runs before the signature
+    // middleware reads (and buffers) the body.
+    const body = "x".repeat(INPUT_LIMITS.jobRequestBytes + 1);
+    const res = await app.request("/stats", signedInit("POST", "/stats", body));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body is too large" });
+  });
+
   it("rejects requests signed by an unknown key", async () => {
     const app = makeApp();
     const rogue = generateEd25519Keypair();

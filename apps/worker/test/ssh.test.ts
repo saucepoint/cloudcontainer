@@ -25,6 +25,18 @@ describe("SSH key validation", () => {
     expect(validPubkey(key)).toBe(true);
     expect(validPubkey(`${key}A`)).toBe(false);
   });
+
+  it("counts multibyte comments in UTF-8 bytes, not code units", () => {
+    const prefix = "ssh-ed25519 AAAA ";
+    // At the code-unit limit but twice the byte limit: a code-unit count
+    // would accept it.
+    const over = prefix + "é".repeat(INPUT_LIMITS.sshKeyBytes - prefix.length);
+    expect(over.length).toBeLessThanOrEqual(INPUT_LIMITS.sshKeyBytes);
+    expect(validPubkey(over)).toBe(false);
+    // A comment that fits the byte budget is accepted.
+    const within = prefix + "é".repeat((INPUT_LIMITS.sshKeyBytes - prefix.length) / 2);
+    expect(validPubkey(within)).toBe(true);
+  });
 });
 
 describe("insertSshKey", () => {

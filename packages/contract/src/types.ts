@@ -132,6 +132,10 @@ function jsonUtf8Bytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
@@ -156,9 +160,29 @@ const base = {
   containerId: z.string().min(1).max(128),
 };
 
+// Key comments may contain multibyte characters, so the per-key limit is
+// enforced in UTF-8 bytes — the same unit as the aggregate job budget. A
+// code-unit count would let maximal multibyte keys plus credentials exceed
+// INPUT_LIMITS.jobRequestBytes and make otherwise valid `start` jobs fail.
 const SshKeysSchema = z
-  .array(z.string().min(1).max(INPUT_LIMITS.sshKeyBytes))
+  .array(
+    z
+      .string()
+      .min(1)
+      .refine(
+        (key) => utf8Bytes(key) <= INPUT_LIMITS.sshKeyBytes,
+        "ssh key exceeds the byte limit",
+      ),
+  )
   .max(INPUT_LIMITS.sshKeysPerAccount);
+
+/**
+ * Monotonic ordering token for desired-state snapshots (the control plane's
+ * job rowid). The daemon skips a snapshot whose revision it has already
+ * matched or beaten, so a delayed older job cannot overwrite newer state.
+ * Optional for rolling compatibility with older Workers.
+ */
+const SnapshotRevisionSchema = z.number().int().positive();
 const DashboardUrlSchema = z.string().url().max(2048);
 const SealedCredentialsSchema = z.string().min(1).max(INPUT_LIMITS.sealedCredentialBytes);
 export const AgentsSchema = z.array(z.enum(AGENTS)).min(1).max(AGENTS.length);
@@ -243,6 +267,7 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       ...base,
       dashboardUrl: DashboardUrlSchema,
       sealedCredentials: SealedCredentialsSchema,
+      revision: SnapshotRevisionSchema.optional(),
     })
     .strict(),
   z
@@ -251,6 +276,7 @@ export const JobRequestSchema = z.discriminatedUnion("op", [
       ...base,
       sshKeys: SshKeysSchema,
       dashboardUrl: DashboardUrlSchema,
+      revision: SnapshotRevisionSchema.optional(),
     })
     .strict(),
   z.object({ op: z.literal("export-window"), ...base }).strict(),

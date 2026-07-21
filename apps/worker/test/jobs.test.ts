@@ -206,6 +206,29 @@ describe("enqueueJob", () => {
     expect(fresh?.status).toBe("error");
   });
 
+  it("stamps desired-state sync jobs with their monotonic row revision", async () => {
+    const { env, host, container } = await setup();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await enqueueJob(env, "sync-keys", container, host);
+    await enqueueJob(env, "sync-keys", container, host);
+    await enqueueJob(env, "refresh-credentials", container, host);
+    await enqueueJob(env, "stop", container, host);
+
+    const revisions = daemon.submitted.map((request) =>
+      (request as { revision?: number }).revision,
+    );
+    expect(revisions[0]).toEqual(expect.any(Number));
+    // Later snapshots always carry a higher revision than earlier ones, so a
+    // delayed older job can be discarded on the host instead of overwriting
+    // newer desired state.
+    expect(revisions[1]!).toBeGreaterThan(revisions[0]!);
+    expect(revisions[2]!).toBeGreaterThan(revisions[1]!);
+    // Lifecycle ops are serialized by the job table and carry no revision.
+    expect(revisions[3]).toBeUndefined();
+  });
+
   it("leaves container state alone when a background op fails (sync-keys)", async () => {
     const { env, host, container } = await setup();
     stubFetch(() => {

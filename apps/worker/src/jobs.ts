@@ -99,6 +99,7 @@ export async function buildJobRequest(
   jobId: string,
   container: ContainerRow,
   host: HostRow,
+  revision?: number,
 ): Promise<JobRequest> {
   const base = { jobId, containerId: container.id };
   switch (op) {
@@ -126,6 +127,7 @@ export async function buildJobRequest(
         ...base,
         dashboardUrl: env.BASE_URL,
         sealedCredentials: sealJson(payload, host.daemon_pubkey),
+        ...(revision !== undefined ? { revision } : {}),
       };
     }
     case "sync-keys":
@@ -134,6 +136,7 @@ export async function buildJobRequest(
         ...base,
         sshKeys: await userSshKeys(env, container.user_id),
         dashboardUrl: env.BASE_URL,
+        ...(revision !== undefined ? { revision } : {}),
       };
     case "resize":
       return { op, ...base, spec: specOf(container) };
@@ -208,8 +211,18 @@ export async function enqueueJob(
   try {
     // Inside the try: a request-build failure (e.g. bad host key material)
     // must fail the job like a dispatch failure, not leave it stuck queued.
+    //
+    // Background snapshot ops carry their job rowid as a monotonic revision
+    // so the daemon can discard a delayed older snapshot instead of letting
+    // it overwrite newer desired state. Rows insert in commit order, so a
+    // higher rowid always holds a same-or-newer view of D1.
+    const revision = op !== "sync-keys" && op !== "refresh-credentials"
+      ? undefined
+      : ((await env.DB.prepare("SELECT rowid FROM jobs WHERE id = ?")
+          .bind(jobId)
+          .first<{ rowid: number }>())?.rowid ?? undefined);
     const request = JobRequestSchema.parse(
-      await buildJobRequest(env, op, jobId, container, host),
+      await buildJobRequest(env, op, jobId, container, host, revision),
     );
     await daemonSubmitJob(env, host, request);
     await env.DB.prepare(

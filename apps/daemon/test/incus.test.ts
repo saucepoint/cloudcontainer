@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Incus, shellQuote, type ExecFn } from "../src/incus.js";
+import { Incus, IncusNotFoundError, shellQuote, type ExecFn } from "../src/incus.js";
 
 function capture(): { calls: Array<{ args: string[]; stdin?: string }>; exec: ExecFn } {
   const calls: Array<{ args: string[]; stdin?: string }> = [];
@@ -110,12 +110,34 @@ describe("Incus disk limits", () => {
 });
 
 describe("Incus.exists / volumeExists", () => {
-  it("maps command failure to false", async () => {
+  it("maps a typed absence to false", async () => {
     const exec: ExecFn = async () => {
-      throw new Error("not found");
+      throw new IncusNotFoundError();
     };
     const incus = new Incus(exec);
     expect(await incus.exists("cs-x")).toBe(false);
     expect(await incus.volumeExists("default", "home-x")).toBe(false);
+  });
+
+  it("maps real incus absence diagnostics to false", async () => {
+    const exec: ExecFn = async (_cmd, args) => {
+      throw new Error(
+        args[0] === "info"
+          ? "incus info cs-x… failed: Error: Instance not found"
+          : "incus storage volume show… failed: Error: Storage volume not found",
+      );
+    };
+    const incus = new Incus(exec);
+    expect(await incus.exists("cs-x")).toBe(false);
+    expect(await incus.volumeExists("default", "home-x")).toBe(false);
+  });
+
+  it("does not treat a generic 'not found' error as container absence", async () => {
+    const exec: ExecFn = async () => {
+      throw new Error("not found");
+    };
+    const incus = new Incus(exec);
+    await expect(incus.exists("cs-x")).rejects.toThrow("not found");
+    await expect(incus.volumeExists("default", "home-x")).rejects.toThrow("not found");
   });
 });

@@ -80,6 +80,41 @@ describe("JobRequestSchema", () => {
     expect(JobRequestSchema.safeParse({ op: "start", ...base }).success).toBe(true);
   });
 
+  it("accepts an optional snapshot revision on desired-state sync ops", () => {
+    for (const request of [
+      { op: "sync-keys", sshKeys: [], dashboardUrl: "https://x" },
+      { op: "refresh-credentials", dashboardUrl: "https://x", sealedCredentials: "abc" },
+    ]) {
+      expect(JobRequestSchema.safeParse({ ...request, ...base, revision: 7 }).success).toBe(true);
+      expect(JobRequestSchema.safeParse({ ...request, ...base }).success).toBe(true);
+      for (const revision of [0, -1, 1.5, "7"]) {
+        expect(JobRequestSchema.safeParse({ ...request, ...base, revision }).success).toBe(false);
+      }
+    }
+  });
+
+  it("bounds ssh keys in UTF-8 bytes, matching the aggregate job budget", () => {
+    const syncKeys = (sshKeys: string[]) =>
+      JobRequestSchema.safeParse({ op: "sync-keys", ...base, sshKeys, dashboardUrl: "https://x" });
+    // 4096 ASCII bytes: at the limit.
+    expect(syncKeys(["x".repeat(INPUT_LIMITS.sshKeyBytes)]).success).toBe(true);
+    // 4096 code units but 8192 UTF-8 bytes: a code-unit count would accept it.
+    expect(syncKeys(["é".repeat(INPUT_LIMITS.sshKeyBytes)]).success).toBe(false);
+    // Maximal multibyte keys plus maximal sealed credentials stay inside the
+    // aggregate byte budget, so a valid start never fails schema validation.
+    const request = {
+      op: "start",
+      ...base,
+      sshKeys: Array.from(
+        { length: INPUT_LIMITS.sshKeysPerAccount },
+        (_, index) => `ssh-ed25519 AAAA key-${index} ${"é".repeat(100)}`,
+      ),
+      dashboardUrl: "https://x",
+      sealedCredentials: "y".repeat(INPUT_LIMITS.sealedCredentialBytes),
+    };
+    expect(JobRequestSchema.safeParse(request).success).toBe(true);
+  });
+
   it("requires at least one agent in a spec", () => {
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: [] }).success).toBe(false);
     expect(ContainerSpecSchema.safeParse({ ...spec, agents: ["vim"] }).success).toBe(false);
