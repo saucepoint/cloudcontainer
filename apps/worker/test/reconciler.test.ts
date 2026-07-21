@@ -58,6 +58,31 @@ describe("stuck-job timeout", () => {
     expect(container?.status_detail).toBe("operation timed out");
   });
 
+  it.each([
+    { op: "start" as const, initialStatus: "stopped" as const, incusStatus: "Stopped" },
+    { op: "stop" as const, initialStatus: "running" as const, incusStatus: "Running" },
+  ])("moves a steady-state container to error when its $op job times out", async ({
+    op,
+    initialStatus,
+    incusStatus,
+  }) => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { status: initialStatus });
+    const t0 = Date.now();
+    await insertJob(env, { op, updated_at: t0 - STUCK_JOB_MS - 1 });
+    stubFetch(statsRoute([{ containerId: "container-1", incusStatus }]));
+
+    await reconcile(env, () => t0);
+
+    const container = await env.DB.prepare("SELECT status, status_detail FROM containers").first<{
+      status: string;
+      status_detail: string;
+    }>();
+    expect(container).toEqual({ status: "error", status_detail: "operation timed out" });
+  });
+
   it("leaves recent running jobs alone (they get polled instead)", async () => {
     const { env } = makeEnv();
     await seedUser(env);
