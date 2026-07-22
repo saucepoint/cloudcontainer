@@ -25,7 +25,8 @@ apt-get update -qq
 apt-get install -y -qq \
   openssh-server sudo git gh build-essential cmake libssl-dev libsqlite3-dev \
   python3 python3-venv curl zsh tmux ripgrep fd-find bat jq unzip zip sqlite3 \
-  rsync nano tree less man-db manpages ca-certificates gnupg unattended-upgrades locales
+  rsync nano tree less man-db manpages ca-certificates gnupg unattended-upgrades locales \
+  ncurses-term
 
 # uv (python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
@@ -44,6 +45,18 @@ npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 # Debian names these commands fdfind and batcat.
 ln -sf "$(command -v fdfind)" /usr/local/bin/fd
 ln -sf "$(command -v batcat)" /usr/local/bin/bat
+
+# Add xterm-prefixed terminfo aliases for terminals that set TERM with the
+# xterm- prefix. ncurses-term ships the entries under their unprefixed names
+# (ghostty, kitty), but the actual terminals use xterm-ghostty / xterm-kitty
+# so that applications which string-match "xterm" in TERM still work.
+for pair in "ghostty:xterm-ghostty" "kitty:xterm-kitty"; do
+  base="${pair%%:*}"
+  alias="${pair##*:}"
+  if infocmp "$base" >/dev/null 2>&1 && ! infocmp "$alias" >/dev/null 2>&1; then
+    infocmp "$base" | sed "s/^${base}|/${base}|${alias}|/" | tic -
+  fi
+done
 
 # dev user: passwordless sudo, no password auth anywhere
 useradd -m -s /bin/zsh dev || true
