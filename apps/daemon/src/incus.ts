@@ -65,7 +65,7 @@ export class IncusNotFoundError extends Error {
 function isExplicitNotFound(error: unknown): boolean {
   if (error instanceof IncusNotFoundError) return true;
   if (!(error instanceof Error)) return false;
-  return /Error: (?:Instance|Storage volume).*not found/i.test(error.message);
+  return /(?:Instance|Storage.*volume).*not found/i.test(error.message);
 }
 
 export class Incus {
