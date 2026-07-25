@@ -161,23 +161,18 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .landing-title { max-width: 650px; }
 .landing-signin-content { max-width: 580px; }
 .landing-signin h2 { margin-bottom: 0.25rem; }
-.auth-tabs { margin-top: 1rem; }
-.auth-tab-list { display: flex; gap: 0.2rem; padding: 0.2rem; background: var(--surface); border-radius: 5px; }
-.auth-tab { position: relative; flex: 1 1 0; min-height: 2.4rem; padding: 0.4rem 0.55rem; border: 0; border-radius: 3px; background: transparent;
-  color: var(--muted); font-weight: 600; font-size: 0.84rem; cursor: pointer; }
-.auth-tab:hover { color: var(--accent); }
-.auth-tab[data-active] { color: var(--ink); }
-.auth-tab-label { position: relative; z-index: 1; }
-.auth-tab-indicator { position: absolute; inset: 0; z-index: 0; border-radius: 3px; background: var(--paper); box-shadow: 0 1px 2px rgb(32 32 29 / 0.1); }
-.auth-tab-panel { min-width: 0; }
-.auth-option { display: grid; gap: 0.5rem; padding: 1.1rem 0 0; }
-.auth-option-form { display: grid; gap: 0.5rem; }
-.auth-option p { margin: 0; }
-.auth-option-title { margin: 0; font-size: 1rem; }
-.auth-option > .btn { justify-self: start; }
+.auth-provider-list { display: grid; gap: 0.65rem; margin-top: 1rem; }
+.auth-provider { width: 100%; justify-content: center; }
+.auth-divider { display: flex; align-items: center; gap: 0.75rem; color: var(--muted); font-size: 0.85rem; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.auth-status { min-height: 1.3em; margin: 0; }
 .auth-dev-option { margin-top: 1rem; }
 .auth-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
 .auth-code-row input { letter-spacing: 0.18em; text-transform: uppercase; }
+.verification-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.verification-option { margin: 0; }
+.verification-option h2 { margin-top: 0; }
+.verification-status { min-height: 1.3em; }
 .spec-list li { justify-content: flex-start; }
 .spec-list .ok { margin-left: auto; font-family: var(--mono); font-size: 0.75rem; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; background: rgb(32 32 29 / 0.32);
@@ -204,7 +199,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .card-head { align-items: flex-start; flex-wrap: wrap; }
   .command-row, .device-flow-code { grid-template-columns: 1fr; }
   .command-row .btn, .device-flow-code .btn { justify-self: start; }
-  .auth-code-row { grid-template-columns: 1fr; gap: 0.35rem; }
+  .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
   .auth-code-row .btn { justify-self: start; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pollDelay, type ContainerView } from "../client/dashboard-model.js";
 import { HttpError, postJson, requestJson } from "../client/http.js";
-import { webAuthnErrorMessage } from "../client/webauthn-errors.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -68,15 +67,5 @@ describe("dashboard polling policy", () => {
   it("stops in steady state unless an immediate refresh is required", () => {
     expect(pollDelay(container())).toBeNull();
     expect(pollDelay(container(), true)).toBe(5_000);
-  });
-});
-
-describe("WebAuthn errors", () => {
-  it("maps user cancellation without hiding useful server errors", () => {
-    expect(webAuthnErrorMessage(
-      Object.assign(new Error("cancelled"), { name: "NotAllowedError" }),
-      "fallback",
-    )).toBe("The passkey prompt was cancelled or timed out.");
-    expect(webAuthnErrorMessage(new Error("server detail"), "fallback")).toBe("server detail");
   });
 });

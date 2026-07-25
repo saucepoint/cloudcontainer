@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { encryptJsonAtRest } from "@workbench/contract";
 import { githubConfigured, githubRoutes } from "../src/github.js";
-import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { makeEnv, seedContainer, seedUser, stubFetch } from "./helpers/env.js";
+import { createTestSession, makeEnv, seedContainer, seedUser, stubFetch } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,8 +18,7 @@ const githubConfig = {
 } satisfies Partial<Bindings>;
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
-  const sid = await createSession(env, user.id);
-  return { cookie: `cs_session=${sid}` };
+  return { cookie: await createTestSession(env, user.id) };
 }
 
 describe("GitHub App connection", () => {

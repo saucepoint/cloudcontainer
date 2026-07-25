@@ -1,14 +1,15 @@
 import { Hono } from "hono";
+import { accountRoutes } from "./account.js";
 import { apiRoutes } from "./api.js";
 import { adminRoutes } from "./admin.js";
 import { authRoutes, requireUser } from "./auth.js";
+import { createAuth, handleAuthRequest } from "./better-auth.js";
 import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { LandingPage, OnboardingPage, SecurityPage } from "./pages/views.js";
-import { passkeyRoutes } from "./passkeys.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
@@ -32,11 +33,11 @@ app.onError((err, c) => {
   return c.text("Something went wrong.", 500);
 });
 
-app.get("/", (c) =>
-  c.html(
-    <LandingPage devAuth={c.env.DEV_AUTH === "1"} />,
-  ),
-);
+app.get("/", async (c) => {
+  const session = await createAuth(c.env, c.req.url).api.getSession({ headers: c.req.raw.headers });
+  if (session) return c.redirect("/account/continue");
+  return c.html(<LandingPage devAuth={c.env.DEV_AUTH === "1"} />);
+});
 
 app.get("/onboarding", requireUser, async (c) => {
   const container = await getContainerForUser(c.env, c.get("user").id);
@@ -51,7 +52,7 @@ app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
 app.get("/security", requireUser, async (c) => {
   const user = c.get("user");
   const passkeys = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM passkeys WHERE user_id = ?",
+    "SELECT COUNT(*) AS count FROM passkey WHERE user_id = ?",
   )
     .bind(user.id)
     .first<{ count: number }>();
@@ -66,7 +67,8 @@ app.get("/security", requireUser, async (c) => {
 });
 
 app.route("/", authRoutes);
-app.route("/", passkeyRoutes);
+app.route("/", accountRoutes);
+app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c.env, c.req.raw));
 app.route("/", adminRoutes);
 app.route("/", githubRoutes);
 app.route("/", codexAuthRoutes);

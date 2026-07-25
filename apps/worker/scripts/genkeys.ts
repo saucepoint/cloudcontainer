@@ -7,6 +7,7 @@ import { generateEd25519Keypair, generateSymmetricKey } from "@workbench/contrac
 
 const rpc = generateEd25519Keypair();
 console.log("CREDENTIAL_MASTER_KEY=" + generateSymmetricKey());
+console.log("BETTER_AUTH_SECRET=" + generateSymmetricKey());
 console.log("INVITE_ADMIN_SECRET=" + generateSymmetricKey());
 console.log("WORKER_RPC_PRIVATE_KEY=" + rpc.privateKey);
 console.log("# public half — goes into /etc/workbench/daemon.json on every host:");

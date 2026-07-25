@@ -2,9 +2,9 @@
 
 **Status:** Normative current-release specification
 
-**Version:** 4.1
+**Version:** 5.0
 
-**Date:** 2026-07-18
+**Date:** 2026-07-24
 **Product:** Beginner-friendly, preconfigured remote environments for agentic coding
 
 This document describes the product that is intended to ship now. Anything
@@ -19,7 +19,8 @@ with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
 only two product decisions after authentication:
 
-1. sign in with a passkey or use an administrator invite to create one; and
+1. sign in with Google, Apple, GitHub, or a passkey, then verify a new account
+   with World ID or an administrator invite; and
 2. choose one or more coding agents.
 
 SSH keys, model credentials, GitHub, and Cloudflare credentials are optional
@@ -79,7 +80,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- Passwordless passkey login and single-use administrator invite signup.
+- Better Auth account management with Google, Apple, GitHub, and passkey sign-in.
+- World ID proof-of-human or single-use administrator-invite eligibility verification.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
   an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
@@ -125,25 +127,33 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ## 4. Beginner experience
 
-### 4.1 Sign in
+### 4.1 Sign in and verify
 
-The landing page explains the available authentication paths and key service facts:
+The landing page presents five account entry points: Sign in with Google, Sign
+in with Apple, Sign in with GitHub, Create passkey, and Use passkey. Better Auth
+owns provider callbacks, account linking, passkey ceremonies, and application
+sessions. Passkey-first registration uses a server-signed, ten-minute opaque
+context; it never accepts a caller-chosen user ID. Passkeys are discoverable and
+require both a resident key and user verification.
 
-- returning accounts with a passkey can sign in directly;
-- an administrator invite is single-use and requires creating a passkey;
-- the current service is free and needs no credit card; and
-- the environment is a shared-kernel cloud container.
+After authentication, the control plane applies this routing contract:
 
-An eight-character uppercase alphanumeric invite is generated only through the
-administrator script. Entering a valid unused code starts passkey registration.
-The code remains unused if registration is cancelled or fails. Successful
-WebAuthn verification atomically persists the user, initial passkey, and
-redemption before creating an application session. Invite-backed accounts have
-no reusable invite login and use a discoverable passkey to return.
+- a user without product eligibility verification goes to `/verify`;
+- a verified user without a configured workbench goes to `/onboarding`; and
+- a verified user with a configured workbench goes to `/dashboard`.
 
-The landing page supports usernameless passkey authentication. Account security
-remains available later to add additional passkeys, and accounts are advised to
-add a second passkey as a recovery option.
+The verification screen offers World ID Proof of Human and a single-use
+administrator invite. World ID 4.0 requests are signed by the Worker, bind the
+proof signal to the authenticated internal user ID, and are verified through
+the Developer Portal. The verified nullifier is stored permanently so the same
+person cannot verify another account. An invite is also verification evidence,
+not an authentication credential: the account must already have a valid Better
+Auth session before redeeming it. Unverified sessions cannot access onboarding,
+the dashboard, or workbench APIs.
+
+The current service is free and needs no credit card. The landing page also
+states that the environment is a shared-kernel cloud container. Account security
+allows authenticated users to add backup passkeys at any time.
 
 ### 4.2 Configure and launch
 
@@ -251,7 +261,21 @@ usable with keyboard alone. Specifically:
 
 ## 5. Identity and sessions
 
-### Invites and passkeys
+### Better Auth and passkeys
+
+- Better Auth is mounted at `/api/auth/*` and is the only production owner of
+  social OAuth identities, passkey records, and application sessions.
+- Google, Apple, and GitHub OAuth client IDs are public Worker variables; their
+  client secrets and `BETTER_AUTH_SECRET` are Worker secrets.
+- OAuth provider tokens are encrypted by Better Auth before D1 persistence.
+- Passkey credential IDs are unique. D1 stores the public key, monotonic
+  counter, transports, device type, backup state, AAGUID, and non-secret
+  timestamps. WebAuthn verifies the exact request origin and RP hostname.
+- Better Auth stores passkey ceremony values in its short-lived verification
+  table and consumes them during verification. Production ceremonies require
+  HTTPS; localhost development may use HTTP.
+
+### Eligibility verification
 
 - Invite codes contain exactly eight random uppercase alphanumeric characters.
 - `INVITE_ADMIN_SECRET` is a high-entropy Cloudflare Worker secret. The
@@ -262,24 +286,23 @@ usable with keyboard alone. Specifically:
   account deletion so the code cannot become reusable. Rotating the secret
   invalidates outstanding unused invites.
 - The raw code is returned once to the administrator script and is never logged.
-- Passkeys are discoverable credentials with resident keys and user
-  verification required. D1 stores credential ID, public key, counter,
-  transports, device type, backup state, and non-secret timestamps.
-- Registration and authentication challenges expire after five minutes. D1
-  stores only a hash of the HttpOnly ceremony cookie, and `DELETE ... RETURNING`
-  consumes each challenge before verification to prevent replay.
-- WebAuthn verifies the exact request origin and RP hostname. Production
-  ceremonies require HTTPS; HTTP is accepted only for localhost development.
+- Invite redemption and the user's `verified_at` update execute in one D1 batch.
+  A unique code hash and unique user link prevent concurrent or repeated use.
+- World ID uses an RP signing key held only by the Worker. The Worker checks the
+  configured action and the user-bound signal hash before forwarding a proof to
+  `POST /api/v4/verify/{rp_id}`. It persists the returned 256-bit nullifier as a
+  canonical decimal string with a unique `(action, nullifier)` key.
+- World ID nullifiers and invite redemptions remain after account deletion, with
+  their former user link cleared, so eligibility evidence cannot be recycled.
 
 ### Application sessions
 
-- A successful invite-registration, development, or passkey flow creates a
-  random 32-byte session ID.
-- Session data lives in KV with a seven-day TTL.
-- The cookie is HttpOnly, SameSite=Lax, Path=/, and Secure on HTTPS.
-- Logout deletes KV state and records the session-ID hash in D1.
-- Sensitive operations, including account deletion, check the D1 revocation
-  record because KV is eventually consistent.
+- Better Auth creates cryptographically random sessions after social OAuth or
+  passkey authentication and stores them in D1 for seven days.
+- The signed cookie is HttpOnly, SameSite=Lax, Path=/, and Secure on HTTPS.
+- Session lookup and logout use the D1 record, so revocation and destructive
+  account operations do not depend on an eventually consistent cache.
+- Expired session and ceremony rows are pruned by the reconciler.
 
 ### Local development login
 
@@ -445,7 +468,7 @@ tokens reduce but do not remove this inherent risk.
 |---|---|
 | Web/control plane | One Hono application on Cloudflare Workers, serving SSR HTML and JSON APIs |
 | Durable state | Cloudflare D1 |
-| Session cache | Cloudflare KV |
+| Identity and sessions | Better Auth with Cloudflare D1 and the passkey plugin |
 | Reconciler | Worker Cron Trigger every five minutes |
 | Shared contract | TypeScript package with Zod wire schemas, crypto, and signed-request helpers |
 | Host daemon | Hono on Node.js 22 under systemd |
@@ -536,11 +559,14 @@ operations synchronize keys and credentials.
 
 | Table | Important invariant |
 |---|---|
-| users | Internal UUID primary key; random WebAuthn user handle |
-| passkeys | Credential ID unique; public key and monotonic signature counter |
+| users | Better Auth identity plus product `verified_at` and verification method |
+| auth_accounts | Unique provider/account identity; encrypted OAuth token material |
+| auth_sessions | Unique session token, user binding, and seven-day expiry |
+| auth_verifications | Short-lived Better Auth OAuth/passkey ceremony state |
+| passkey | Credential ID unique; public key and monotonic signature counter |
 | invite_codes | Keyed HMAC-SHA-256 only; raw eight-character code is never stored |
 | invite_redemptions | One permanent redemption per invite; user link clears on account deletion |
-| auth_challenges | Hashed ceremony cookie; five-minute expiry; atomically consumed |
+| world_id_nullifiers | Canonical decimal nullifier unique per action; user link clears on deletion |
 | ssh_keys | Multiple public keys per user; never private keys |
 | containers | user_id unique; at most one environment per account; selected GitHub repositories are non-secret JSON metadata |
 | hosts | Capacity, status, SSH hostname, daemon endpoint, and X25519 public key |
@@ -550,7 +576,6 @@ operations synchronize keys and credentials.
 | oauth_states | Short-lived, user-bound authorization attempts |
 | waitlist | One row per user; requested_at ordering and admitted_at audit |
 | port_quarantine | Host/port composite identity; 30-day hold |
-| session_revocations | Hashes of revoked application sessions |
 
 ---
 
@@ -585,10 +610,10 @@ operations synchronize keys and credentials.
 
 The account-delete control is disabled while a real host environment exists.
 The user first destroys the environment, then confirms account deletion.
-Deletion purges credentials, SSH keys, passkeys, enrollment tokens, OAuth state,
-waitlist state, and the user row, and revokes the current session. A hostless
-waitlisted row can be removed as part of deletion. A used-invite redemption may
-remain.
+Deletion purges credentials, SSH keys, Better Auth accounts/sessions/passkeys,
+enrollment tokens, OAuth state, waitlist state, and the user row. A hostless
+waitlisted row can be removed as part of deletion. Used-invite redemptions and
+World ID nullifiers remain with a cleared user link so neither can be reused.
 
 ### Current operational limitations
 
@@ -645,7 +670,7 @@ The repository runs on Node.js 22 in CI:
     npm test
 
 Tests use Vitest. The Worker suite uses an in-memory node:sqlite database with
-the real migration files, a Map-backed KV double, and intercepted fetch calls.
+the real migration files, a D1-compatible adapter double, and intercepted fetch calls.
 It does not use a live D1 database, Miniflare, GitHub, Cloudflare, or
 an Incus host.
 
@@ -655,10 +680,12 @@ and soak acceptance is defined in infra/MULTITENANT_TESTING.md.
 Current automated coverage includes:
 
 - shared schema, signing, replay-window, encryption, sealing, and tamper tests;
-- gated development login, sessions, and revocation;
-- admin-secret invite generation, HMAC-only invite storage, mandatory initial
-  passkey persistence, one-time redemption races, passwordless login counters,
-  additional passkey attachment, and challenge replay rejection;
+- gated development login, Better Auth D1 sessions, logout, and eligibility routing;
+- all five landing-page account options, passkey-first signed contexts, backup
+  passkey attachment, and Better Auth schema migration;
+- admin-secret invite generation, HMAC-only invite storage, authenticated
+  one-time redemption races, World ID user-signal binding, remote verification,
+  and permanent nullifier uniqueness;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
   and reconciler logic;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -673,21 +700,22 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. invite generation, invite signup with its required passkey, attempted invite
-   reuse, and the all-optional-onboarding-fields-skipped path;
-2. subsequent passkey sign-in and attachment of a backup passkey;
-3. provision to SSH using a pasted key;
-4. provision to SSH using enrollment;
-5. command availability for all four agents and base tools;
-6. fingerprint agreement between dashboard and SSH;
-7. post-ready SSH key enrollment and terminal-based credential guidance;
-8. stop, start, rebuild with /home/dev preserved, and destroy;
-9. forced provision failure and retry;
-10. automatic FIFO waitlist admission;
-11. host reboot/autostart and daemon reconciliation;
-12. port-25 and connection-rate enforcement;
-13. keyboard-only and screen-reader status/error checks; and
-14. deployment and rollback using infra/RUNBOOK.md.
+1. Google, Apple, and GitHub sign-in callbacks in the production provider apps;
+2. passkey-first registration, subsequent passkey sign-in, and backup passkey attachment;
+3. World ID verification, invite verification, attempted nullifier/invite reuse,
+   and the all-optional-onboarding-fields-skipped path;
+4. provision to SSH using a pasted key;
+5. provision to SSH using enrollment;
+6. command availability for all four agents and base tools;
+7. fingerprint agreement between dashboard and SSH;
+8. post-ready SSH key enrollment and terminal-based credential guidance;
+9. stop, start, rebuild with /home/dev preserved, and destroy;
+10. forced provision failure and retry;
+11. automatic FIFO waitlist admission;
+12. host reboot/autostart and daemon reconciliation;
+13. port-25 and connection-rate enforcement;
+14. keyboard-only and screen-reader status/error checks; and
+15. deployment and rollback using infra/RUNBOOK.md.
 
 Manual results are release evidence; they must not be described as automated
 coverage.
@@ -699,9 +727,11 @@ coverage.
 A release is acceptable when all automated tests pass and the risk-proportionate
 manual checks above have been completed for affected areas.
 
-1. **Identity:** a valid invite is consumed exactly once only after its required
-   passkey is verified; a registered passkey can reaccess the appropriate
-   account; logout revokes the application session.
+1. **Identity:** every landing option authenticates through Better Auth; an
+   unverified account reaches only the World ID/invite gate; each invite or
+   World ID nullifier verifies at most one account; verified accounts route to
+   onboarding or dashboard according to workbench existence; logout revokes the
+   D1-backed application session.
 2. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.

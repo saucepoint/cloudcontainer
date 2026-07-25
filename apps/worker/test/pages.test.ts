@@ -2,9 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
-import { LandingPage, OnboardingPage, SecurityPage } from "../src/pages/views.js";
-import { createSession } from "../src/sessions.js";
-import { makeEnv, seedUser } from "./helpers/env.js";
+import { LandingPage, OnboardingPage, SecurityPage, VerificationPage } from "../src/pages/views.js";
+import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
 function inlineScriptsOf(html: string): string[] {
   return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
@@ -56,34 +55,29 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("offers returning passkey login and one-time invite signup", () => {
-    expect(landingClient).toContain("Sign in with a passkey");
-    expect(landingClient).toContain('id="invite-code"');
-    expect(landingClient).toContain("maxLength={8}");
-    expect(landingClient).toContain("startAuthentication({ optionsJSON })");
-    expect(landingClient).toContain("startRegistration({ optionsJSON })");
-  });
-
-  it("groups every auth path in Base UI tabs", () => {
+  it("offers all five Better Auth entry points", () => {
     const html = String(LandingPage({ devAuth: false }));
-
     expect(html).toContain('id="landing-auth-root"');
-    expect(landingClient).toContain('import { Tabs } from "@base-ui/react/tabs"');
-    expect(landingClient).toContain("<Tabs.Root");
-    expect(landingClient).toContain('defaultValue="passkey"');
-    expect(landingClient).toContain('<Tabs.List className="auth-tab-list"');
-    expect(landingClient).toContain('<Tabs.Tab value="passkey"');
-    expect(landingClient).toContain('<Tabs.Panel value="invite" keepMounted');
+    for (const label of [
+      "Sign in with Google",
+      "Sign in with Apple",
+      "Sign in with GitHub",
+      "Create passkey",
+      "Use passkey",
+    ]) expect(landingClient).toContain(label);
+    expect(landingClient).toContain("authClient.signIn.social");
+    expect(landingClient).toContain("authClient.passkey.addPasskey");
+    expect(landingClient).toContain("authClient.signIn.passkey");
   });
+});
 
-  it("animates the active auth tab and panel with reduced-motion support", () => {
-    expect(landingClient).toContain('from "motion/react"');
-    expect(landingClient).toContain("useReducedMotion()");
-    expect(landingClient).toContain('layoutId="auth-tab-indicator"');
-    expect(landingClient).toContain("<AnimatePresence");
-    expect(landingClient).toContain("key={value}");
-    expect(landingClient).toContain('value="passkey"');
-    expect(landingClient).toContain('value="invite"');
+describe("account eligibility verification", () => {
+  it("offers World ID and invite verification before onboarding", () => {
+    const html = String(VerificationPage({ worldIdAvailable: true }));
+    expect(html).toContain('id="account-verification-root"');
+    expect(html).toContain('src="/account.js"');
+    expect(html).toContain("World ID");
+    expect(html).toContain("invite");
   });
 });
 
@@ -95,7 +89,7 @@ describe("passkey security page", () => {
       welcome: false,
     }));
     expect(security).toContain('src="/security.js"');
-    expect(securityClient).toContain('"/auth/passkey/register/options"');
+    expect(securityClient).toContain("authClient.passkey.addPasskey");
     expect(security).toContain("This account uses passkeys to sign in");
     expect(security).toContain("Add another passkey");
   });
@@ -221,10 +215,10 @@ describe("GitHub repository onboarding", () => {
       GITHUB_APP_SLUG: "",
     });
     const user = await seedUser(env);
-    const sessionId = await createSession(env, user.id);
+    const sessionCookie = await createTestSession(env, user.id);
     const response = await workerApp.request(
       "/onboarding",
-      { headers: { cookie: `cs_session=${sessionId}` } },
+      { headers: { cookie: sessionCookie } },
       env,
     );
     const html = await response.text();

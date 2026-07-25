@@ -7,10 +7,8 @@ import {
 } from "@workbench/contract";
 import {
   requireCredentialSetup,
-  requireUnrevokedSession,
   requireUser,
 } from "./auth.js";
-import { revokeSession, sha256Hex } from "./sessions.js";
 import { upsertCredentials, validateCloudflareToken } from "./credentials.js";
 import { normalizeCredentialInput, type CredentialInput } from "./credential-input.js";
 import { containerView, credentialsView, currentContainerView } from "./container-view.js";
@@ -43,6 +41,11 @@ import type { AppContext } from "./types.js";
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
   "Wait for your workbench to finish building before changing SSH keys or creating an SSH setup prompt.";
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return toHex(new Uint8Array(digest));
+}
 
 export const apiRoutes = new Hono<AppContext>()
 
@@ -318,7 +321,7 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ account deletion (U8)
-  .post("/api/account/delete", requireUser, requireUnrevokedSession, async (c) => {
+  .post("/api/account/delete", requireUser, async (c) => {
     const user = c.get("user");
     const container = await getContainerForUser(c.env, user.id);
     if (container?.host_id) {
@@ -359,8 +362,8 @@ export const apiRoutes = new Hono<AppContext>()
     if (!results.at(-1)?.meta.changes) {
       return c.json({ error: "destroy your workbench before deleting your account" }, 409);
     }
-    // The user deletion cascades passkeys, external identities, and outstanding
-    // auth challenges. Banned identity HMACs and invite redemptions persist.
-    await revokeSession(c.env, c.get("sessionId"));
+    // The user deletion cascades Better Auth sessions, identities, passkeys,
+    // while World ID nullifiers and invite redemptions retain their proof/code
+    // so neither eligibility mechanism can be reused for another account.
     return c.json({ ok: true });
   });

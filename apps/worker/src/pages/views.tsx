@@ -55,6 +55,20 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   </Layout>
 );
 
+export const VerificationPage: FC<{ worldIdAvailable: boolean }> = ({ worldIdAvailable }) => (
+  <Layout title="Verify your account" loggedIn>
+    <h1>Verify your account.</h1>
+    <p class="lead">
+      The free tier is limited to one account per person. Verify with World ID or redeem a single-use invite before creating your workbench.
+    </p>
+    {!worldIdAvailable ? (
+      <p class="notice">World ID is not configured on this deployment. Use an invite code.</p>
+    ) : null}
+    <div id="account-verification-root" class="verification-grid"></div>
+    <script type="module" src="/account.js"></script>
+  </Layout>
+);
+
 export const SecurityPage: FC<{
   passkeyCount: number;
   continueHref: string;

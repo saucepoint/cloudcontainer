@@ -1,16 +1,15 @@
 /**
  * Subscription sign-in flows beyond ChatGPT: Claude paste-code PKCE, GitHub
  * Copilot device code, and Cloudflare wrangler paste-URL PKCE. Real Hono app,
- * fake D1/KV, provider endpoints stubbed. Covers start/finish happy paths,
+ * fake D1, provider endpoints stubbed. Covers start/finish happy paths,
  * user binding, single-use state, encryption at rest, and failure paths.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { decryptLlmKeys, decryptString, getCredentialsRow } from "../src/credentials.js";
-import { createSession } from "../src/sessions.js";
 import { subscriptionRoutes } from "../src/subscriptions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
+import { createTestSession, makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,8 +18,7 @@ function app() {
 }
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
-  const sid = await createSession(env, user.id);
-  return { cookie: `cs_session=${sid}` };
+  return { cookie: await createTestSession(env, user.id) };
 }
 
 function json(body: unknown, headers: Record<string, string> = {}): RequestInit {

@@ -706,7 +706,7 @@ describe("github token refresh loop", () => {
 });
 
 describe("expired-row cleanup", () => {
-  it("prunes oauth states, old enrollment tokens, and old session revocations", async () => {
+  it("prunes oauth states, old enrollment tokens, and expired Better Auth state", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     const t0 = Date.now();
@@ -721,19 +721,24 @@ describe("expired-row cleanup", () => {
       .bind(t0 - 2 * DAY_MS)
       .run();
     await env.DB.prepare(
-      "INSERT INTO session_revocations (sid_hash, revoked_at) VALUES ('old', ?), ('recent', ?)",
-    )
-      .bind(t0 - 31 * DAY_MS, t0 - DAY_MS)
-      .run();
+      `INSERT INTO auth_sessions
+         (id, user_id, token, expires_at, created_at, updated_at)
+       VALUES ('old', 'user-1', 'old-token', ?, ?, ?),
+              ('recent', 'user-1', 'recent-token', ?, ?, ?)`,
+    ).bind(t0 - 1, t0 - DAY_MS, t0 - DAY_MS, t0 + DAY_MS, t0, t0).run();
+    await env.DB.prepare(
+      `INSERT INTO auth_verifications
+         (id, identifier, value, expires_at, created_at, updated_at)
+       VALUES ('expired', 'challenge', '{}', ?, ?, ?)`,
+    ).bind(t0 - 1, t0 - DAY_MS, t0 - DAY_MS).run();
     stubFetch(statsRoute([]));
 
     await reconcile(env, () => t0);
 
     expect((await env.DB.prepare("SELECT * FROM oauth_states").all()).results).toHaveLength(0);
     expect((await env.DB.prepare("SELECT * FROM enrollment_tokens").all()).results).toHaveLength(0);
-    const revocations = await env.DB.prepare("SELECT sid_hash FROM session_revocations").all<{
-      sid_hash: string;
-    }>();
-    expect(revocations.results.map((r) => r.sid_hash)).toEqual(["recent"]);
+    const sessions = await env.DB.prepare("SELECT id FROM auth_sessions").all<{ id: string }>();
+    expect(sessions.results.map((session) => session.id)).toEqual(["recent"]);
+    expect((await env.DB.prepare("SELECT * FROM auth_verifications").all()).results).toHaveLength(0);
   });
 });

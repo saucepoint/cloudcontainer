@@ -5,8 +5,8 @@ Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
 
-The current release is a free, invite-only service: one Incus system container
-per account, reached over
+The current release is a free service with World ID or administrator-invite
+eligibility verification: one Incus system container per account, reached over
 public-key SSH. It is intentionally described as a cloud container rather than
 a hardware-isolated VM. Paid plans,
 Stripe, email, backups, and production redundancy are roadmap work, not current
@@ -17,7 +17,7 @@ features. See [SPEC.md](./SPEC.md) for the normative release contract.
     packages/contract   Shared Zod wire schemas, Ed25519 request signing,
                         X25519 sealed delivery, and at-rest crypto
     apps/worker         Hono SSR pages and JSON APIs on Cloudflare Workers;
-                        D1, KV sessions, and the Cron reconciler
+                        Better Auth, D1, and the Cron reconciler
     apps/daemon         Hono on Node.js; verifies signed RPC, opens sealed
                         payloads in memory, and drives local Incus
     infra               Host bootstrap, base-image build, and operations runbook
@@ -26,31 +26,32 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 
 ## User flow
 
-1. The user signs in with a passkey or creates an account with an eight-character,
-   single-use administrator invite. Invite signup creates a
-   discoverable passkey before consuming the code, because that passkey is the
-   account's required return path.
-2. Onboarding requires only one choice: one or more coding agents. SSH and all
+1. The user signs in with Google, Apple, GitHub, or an existing passkey, or
+   creates a new passkey-first account through Better Auth.
+2. A new or previously unverified account proves one-person eligibility with
+   World ID or redeems an eight-character, single-use administrator invite.
+   Existing verified accounts skip this step.
+3. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the server. Later credential
    changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
-3. The Worker reserves host capacity and an SSH port, stores state in D1, seals
+4. The Worker reserves host capacity and an SSH port, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
-4. The daemon clones workbench-base inside a restricted Incus project,
+5. The daemon clones workbench-base inside a restricted Incus project,
    applies hard CPU/memory/process limits, caps the disposable root disk,
    attaches the separately capped persistent /home/dev volume, configures SSH
    and credentials, and verifies the selected agents.
    All four agents are baked into the image; a missing-only fallback installer
    runs only for a selected binary that is unexpectedly absent. The selected
    set drives dashboard and MOTD guidance even though every binary is available.
-5. The dashboard displays clear waiting/building/ready/error states. It reveals
+6. The dashboard displays clear waiting/building/ready/error states. It reveals
    the SSH command and host-key fingerprints only after an SSH key is added. If
    capacity is full, the FIFO waitlist is admitted automatically by the
    reconciler.
-6. After the server is ready, a user without a key can copy an enrollment prompt
+7. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
 
@@ -92,11 +93,11 @@ acceptable only for development.
 The fast suite never contacts live external services or infrastructure:
 
 - Worker tests use Vitest, an in-memory node:sqlite database with the real
-  migrations, a Map-backed KV double, and intercepted fetch calls.
+  migrations, a D1-compatible adapter double, and intercepted fetch calls.
 - Daemon tests inject command execution and assert the generated Incus commands.
 - Contract tests exercise signing, replay rejection, encryption, sealing,
   cross-runtime-safe encodings, and tamper failures.
-- GitHub, Cloudflare, Codex auth endpoints, WebAuthn verification,
+- GitHub, Cloudflare, Codex, Better Auth, and World ID endpoints,
   and daemon HTTP are mocked.
 - CI installs dependencies, builds browser clients, type-checks, lints, and runs all tests on Node.js 22.
 
@@ -107,12 +108,13 @@ evidence listed in SPEC.md. The destructive multi-tenant staging gate is in
 
 ## Control-plane configuration
 
-apps/worker/wrangler.jsonc declares the deployed Worker, D1 binding, KV binding,
+apps/worker/wrangler.jsonc declares the deployed Worker, D1 binding,
 five-minute Cron trigger, and public base URL.
 
 Required Worker secrets:
 
 - CREDENTIAL_MASTER_KEY
+- BETTER_AUTH_SECRET
 - WORKER_RPC_PRIVATE_KEY
 - INVITE_ADMIN_SECRET
 
@@ -121,6 +123,10 @@ Optional secrets:
 - GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` and
   `GITHUB_APP_SLUG` Worker variables. GitHub setup is hidden unless all three
   values form a complete install-capable App configuration.
+- AUTH_GOOGLE_CLIENT_SECRET, AUTH_APPLE_CLIENT_SECRET, and
+  AUTH_GITHUB_CLIENT_SECRET, paired with their `AUTH_*_CLIENT_ID` variables.
+- WORLD_ID_SIGNING_KEY, paired with `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
+  `WORLD_ID_ACTION`. Invite verification remains available without World ID.
 
 Generate service keys with:
 
@@ -136,15 +142,36 @@ This is only for a new Cloudflare environment:
 
     cd apps/worker
     npx wrangler d1 create workbench
-    npx wrangler kv namespace create SESSIONS
 
-Copy the returned IDs into wrangler.jsonc, then:
+Copy the returned D1 ID into wrangler.jsonc, then:
 
     npm run db:migrate:remote
+    npx wrangler secret put BETTER_AUTH_SECRET
     npx wrangler secret put CREDENTIAL_MASTER_KEY
     npx wrangler secret put WORKER_RPC_PRIVATE_KEY
     npx wrangler secret put INVITE_ADMIN_SECRET
     npx wrangler deploy
+
+### Account providers and World ID
+
+Create OAuth applications for the three Better Auth providers and configure
+these callback URLs:
+
+    https://usebench.dev/api/auth/callback/google
+    https://usebench.dev/api/auth/callback/apple
+    https://usebench.dev/api/auth/callback/github
+
+Put each public client ID in the matching `AUTH_*_CLIENT_ID` Worker variable
+and each secret in `AUTH_*_CLIENT_SECRET`. These credentials are separate from
+the GitHub App used later for repository access.
+
+For World ID, create or migrate an application in the World Developer Portal,
+register its relying party, and set `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
+`WORLD_ID_ACTION`. Store the RP signing key only as `WORLD_ID_SIGNING_KEY`.
+Production uses World ID 4.0 Proof of Human with legacy proof fallback. The
+Worker signs each request, binds the proof signal to the authenticated account,
+verifies through the Developer Portal, and persists the returned nullifier so
+one person cannot verify multiple accounts.
 
 ### Administrator invites
 
@@ -164,9 +191,9 @@ shell history:
     unset INVITE_ADMIN_SECRET
 
 The script prints one eight-character uppercase alphanumeric code. Send it to
-its intended recipient through a private channel. The code is not consumed if
-the recipient cancels or fails the required passkey prompt; it is consumed
-atomically when the account and first passkey are persisted.
+its intended recipient through a private channel. The recipient first signs in
+or creates a passkey account, then redeems the code on the verification screen.
+The redemption and account eligibility update occur in one D1 batch.
 
 For optional GitHub repository access, register a public GitHub App and set all
 of `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `GITHUB_APP_SLUG`.
@@ -206,7 +233,7 @@ intersection of the user grant and each App installation.
 
 ## Repeat deployment
 
-Do not recreate D1 or KV for a normal release. From a clean checkout, the
+Do not recreate D1 for a normal release. From a clean checkout, the
 root deploy command runs the locked install, type checks, tests, remote D1
 migrations, Worker deployment, and a public-root smoke test:
 

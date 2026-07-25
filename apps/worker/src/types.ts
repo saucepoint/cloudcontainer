@@ -1,7 +1,7 @@
 import type { ContainerStatus, JobOp, JobStatus, Tier } from "@workbench/contract";
 
 /**
- * Bindings = generated Cloudflare.Env (vars + D1/KV bindings from wrangler.jsonc)
+ * Bindings = generated Cloudflare.Env (vars + D1 bindings from wrangler.jsonc)
  * plus secrets, which wrangler cannot know about at type-generation time.
  */
 export type Bindings = Omit<
@@ -10,15 +10,34 @@ export type Bindings = Omit<
   | "DEV_AUTH"
   | "GITHUB_APP_CLIENT_ID"
   | "GITHUB_APP_SLUG"
+  | "AUTH_GOOGLE_CLIENT_ID"
+  | "AUTH_APPLE_CLIENT_ID"
+  | "AUTH_GITHUB_CLIENT_ID"
+  | "WORLD_ID_APP_ID"
+  | "WORLD_ID_RP_ID"
+  | "WORLD_ID_ACTION"
+  | "WORLD_ID_ENVIRONMENT"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
   DEV_AUTH: string;
   GITHUB_APP_CLIENT_ID: string;
   GITHUB_APP_SLUG: string;
+  AUTH_GOOGLE_CLIENT_ID: string;
+  AUTH_APPLE_CLIENT_ID: string;
+  AUTH_GITHUB_CLIENT_ID: string;
+  WORLD_ID_APP_ID: string;
+  WORLD_ID_RP_ID: string;
+  WORLD_ID_ACTION: string;
+  WORLD_ID_ENVIRONMENT: "production" | "staging";
   // secrets
+  BETTER_AUTH_SECRET: string;
   CREDENTIAL_MASTER_KEY: string;
   WORKER_RPC_PRIVATE_KEY: string;
+  AUTH_GOOGLE_CLIENT_SECRET?: string;
+  AUTH_APPLE_CLIENT_SECRET?: string;
+  AUTH_GITHUB_CLIENT_SECRET?: string;
+  WORLD_ID_SIGNING_KEY?: string;
   GITHUB_APP_CLIENT_SECRET?: string;
   /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
   INVITE_ADMIN_SECRET?: string;
@@ -26,24 +45,16 @@ export type Bindings = Omit<
 
 export interface UserRow {
   id: string;
-  webauthn_user_id: string;
+  name: string;
+  email: string;
+  email_verified: 0 | 1;
+  image: string | null;
   status: "active" | "banned" | "deleted";
   subscription_status: string;
+  verified_at: number | null;
+  verification_method: "world_id" | "invite" | "development" | null;
   created_at: number;
-  last_authenticated_at: number | null;
-}
-
-export interface PasskeyRow {
-  credential_id: string;
-  user_id: string;
-  public_key: ArrayBuffer | Uint8Array;
-  counter: number;
-  transports: string;
-  device_type: "singleDevice" | "multiDevice";
-  backed_up: 0 | 1;
-  name: string;
-  created_at: number;
-  last_used_at: number | null;
+  updated_at: number;
 }
 
 export interface HostRow {
@@ -112,6 +123,5 @@ export interface AppContext {
   Bindings: Bindings;
   Variables: {
     user: UserRow;
-    sessionId: string;
   };
 }

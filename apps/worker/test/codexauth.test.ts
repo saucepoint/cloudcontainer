@@ -1,5 +1,5 @@
 /**
- * "Sign in with ChatGPT" device-code flow: real Hono app, fake D1/KV, OpenAI
+ * "Sign in with ChatGPT" device-code flow: real Hono app, fake D1, OpenAI
  * endpoints stubbed. Covers start, pending/approved polls, auth.json assembly,
  * user binding of the attempt, expiry, and upstream failure paths.
  */
@@ -7,9 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { buildCodexAuthJson, codexAuthRoutes } from "../src/codexauth.js";
 import { decryptLlmKeys, getCredentialsRow } from "../src/credentials.js";
-import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
+import { createTestSession, makeEnv, seedContainer, seedUser, stubFetch, type FetchRoute } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -18,8 +17,7 @@ function app() {
 }
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
-  const sid = await createSession(env, user.id);
-  return { cookie: `cs_session=${sid}` };
+  return { cookie: await createTestSession(env, user.id) };
 }
 
 function json(body: unknown, headers: Record<string, string> = {}): RequestInit {

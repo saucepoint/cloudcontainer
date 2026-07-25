@@ -1,16 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono";
-import {
-  clearSessionCookie,
-  createSession,
-  getSessionUserId,
-  isSessionRevoked,
-  readCookie,
-  revokeSession,
-  randomToken,
-  sha256Hex,
-  SESSION_COOKIE,
-  sessionCookie,
-} from "./sessions.js";
+import { createAuth, signedSessionCookie } from "./better-auth.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -27,110 +16,98 @@ export async function getUser(env: Bindings, userId: string): Promise<UserRow | 
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 
-async function findOrCreateDevUser(env: Bindings, subject: string): Promise<UserRow> {
-  const id = `dev-${await sha256Hex(subject)}`;
-  const existing = await getUser(env, id);
-  if (existing) return existing;
-
-  const now = Date.now();
-  try {
-    await env.DB.prepare(
-      `INSERT INTO users (id, webauthn_user_id, created_at, last_authenticated_at)
-       VALUES (?, ?, ?, ?)`,
-    ).bind(id, randomToken(), now, now).run();
-  } catch (error) {
-    const winner = await getUser(env, id);
-    if (!winner) throw error;
-    return winner;
-  }
-  const user = await getUser(env, id);
-  if (!user) throw new Error("created development user could not be loaded");
-  return user;
-}
-
-async function postLoginPath(env: Bindings, userId: string): Promise<string> {
+export async function postLoginPath(env: Bindings, userId: string): Promise<string> {
+  const user = await getUser(env, userId);
+  if (!user?.verified_at) return "/verify";
   const container = await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?")
     .bind(userId)
     .first();
   return container ? "/dashboard" : "/onboarding";
 }
 
-export async function loginAndRedirect(
-  env: Bindings,
-  user: UserRow,
-  secure: boolean,
-  location?: string,
-) {
-  const now = Date.now();
-  await env.DB.prepare("UPDATE users SET last_authenticated_at = ? WHERE id = ?")
-    .bind(now, user.id)
-    .run();
-  const sid = await createSession(env, user.id);
-  return {
-    location: location ?? await postLoginPath(env, user.id),
-    cookie: sessionCookie(sid, secure),
-  };
+async function loadAccount(c: Parameters<MiddlewareHandler<AppContext>>[0]) {
+  const auth = createAuth(c.env, c.req.url);
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return null;
+  const user = await getUser(c.env, session.user.id);
+  if (!user || user.status !== "active") return null;
+  c.set("user", user);
+  return user;
 }
 
-/** Load the session user; JSON 401 for /api paths, redirect to landing otherwise. */
-export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
-  const deny = () =>
-    c.req.path.startsWith("/api") || c.req.path.startsWith("/auth/passkey/register")
-      ? c.json({ error: "unauthenticated" }, 401)
-      : c.redirect("/");
-  const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);
-  if (!sid) return deny();
-  const userId = await getSessionUserId(c.env, sid);
-  if (!userId) return deny();
-  const user = await getUser(c.env, userId);
-  if (!user || user.status !== "active") return deny();
-  c.set("user", user);
-  c.set("sessionId", sid);
+function deny(c: Parameters<MiddlewareHandler<AppContext>>[0]) {
+  return c.req.path.startsWith("/api")
+    ? c.json({ error: "unauthenticated" }, 401)
+    : c.redirect("/");
+}
+
+/** Require a valid Better Auth session without enforcing product eligibility. */
+export const requireAccount: MiddlewareHandler<AppContext> = async (c, next) => {
+  if (!(await loadAccount(c))) return deny(c);
   return next();
 };
 
-export const authRoutes = new Hono<AppContext>()
-  // Local-only development login, exposed only when explicitly enabled.
-  .get("/auth/dev", async (c) => {
-    if (c.env.DEV_AUTH !== "1") return c.notFound();
-    const user = await findOrCreateDevUser(c.env, c.req.query("sub") ?? "dev-user");
-    const { location, cookie } = await loginAndRedirect(
-      c.env,
-      user,
-      c.req.url.startsWith("https://"),
-    );
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location,
-        "set-cookie": cookie,
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-      },
-    });
-  })
-  .post("/auth/logout", async (c) => {
-    const sid = readCookie(c.req.header("cookie"), SESSION_COOKIE);
-    if (sid) await revokeSession(c.env, sid);
-    return new Response(null, {
-      status: 302,
-      headers: { location: "/", "set-cookie": clearSessionCookie() },
-    });
-  });
-
-/** Credential changes are an onboarding-only action. Check again on OAuth
- * completion so a flow begun in another tab cannot update a new server. */
-export const requireCredentialSetup: MiddlewareHandler<AppContext> = async (c, next) => {
-  if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
-    return c.json({ error: CREDENTIALS_LOCKED_ERROR }, 409);
+/** Require both a valid Better Auth session and World ID/invite verification. */
+export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
+  const user = await loadAccount(c);
+  if (!user) return deny(c);
+  if (!user.verified_at) {
+    return c.req.path.startsWith("/api")
+      ? c.json({ error: "account verification required", redirect: "/verify" }, 403)
+      : c.redirect("/verify");
   }
   return next();
 };
 
-/** Extra strongly-consistent revocation check for destructive operations (§12). */
-export const requireUnrevokedSession: MiddlewareHandler<AppContext> = async (c, next) => {
-  if (await isSessionRevoked(c.env, c.get("sessionId"))) {
-    return c.json({ error: "session revoked" }, 401);
+async function findOrCreateDevelopmentUser(env: Bindings, subject: string): Promise<UserRow> {
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(subject),
+  ));
+  const suffix = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const id = `dev-${suffix}`;
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO users
+       (id, name, email, email_verified, verified_at, verification_method, created_at, updated_at)
+     VALUES (?, 'Development account', ?, 1, ?, 'development', ?, ?)`,
+  ).bind(id, `${id}@accounts.usebench.invalid`, now, now, now).run();
+  const user = await getUser(env, id);
+  if (!user) throw new Error("Development account could not be created.");
+  return user;
+}
+
+export const authRoutes = new Hono<AppContext>()
+  .get("/auth/dev", async (c) => {
+    if (c.env.DEV_AUTH !== "1") return c.notFound();
+    const user = await findOrCreateDevelopmentUser(c.env, c.req.query("sub") ?? "dev-user");
+    const auth = createAuth(c.env, c.req.url);
+    const context = await auth.$context;
+    const session = await context.internalAdapter.createSession(user.id);
+    if (!session) return c.text("Development login failed.", 500);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: await postLoginPath(c.env, user.id),
+        "set-cookie": await signedSessionCookie(c.env, session.token, c.req.url),
+        "cache-control": "no-store",
+      },
+    });
+  })
+  .post("/auth/logout", async (c) => {
+    const auth = createAuth(c.env, c.req.url);
+    const response = await auth.api.signOut({
+      headers: c.req.raw.headers,
+      asResponse: true,
+    });
+    const headers = new Headers({ location: "/" });
+    for (const cookie of response.headers.getSetCookie()) headers.append("set-cookie", cookie);
+    return new Response(null, { status: 302, headers });
+  });
+
+export const requireCredentialSetup: MiddlewareHandler<AppContext> = async (c, next) => {
+  if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
+    return c.json({ error: CREDENTIALS_LOCKED_ERROR }, 409);
   }
   return next();
 };

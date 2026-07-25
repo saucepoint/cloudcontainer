@@ -89,3 +89,52 @@ describe("0009 passkey and invite authentication migration", () => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
+
+describe("0010 Better Auth account migration", () => {
+  it("replaces legacy authentication while preserving workbench foreign keys", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users (id, webauthn_user_id, created_at)
+      VALUES ('user-1', lower(hex(randomblob(32))), 1);
+      INSERT INTO ssh_keys (user_id, label, pubkey, created_at)
+      VALUES ('user-1', 'laptop', 'ssh-ed25519 AAAA test', 2);
+    `);
+
+    db.exec(migration("0010_better_auth_accounts.sql"));
+
+    const columns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual([
+      "id",
+      "name",
+      "email",
+      "email_verified",
+      "image",
+      "status",
+      "subscription_status",
+      "verified_at",
+      "verification_method",
+      "created_at",
+      "updated_at",
+    ]);
+    expect(db.prepare("SELECT user_id, label FROM ssh_keys").get())
+      .toEqual({ user_id: "user-1", label: "laptop" });
+    for (const table of ["auth_sessions", "auth_accounts", "auth_verifications", "passkey", "world_id_nullifiers"]) {
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table))
+        .toEqual({ name: table });
+    }
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'auth_challenges'").get())
+      .toBeUndefined();
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});

@@ -1,5 +1,5 @@
 /**
- * HTTP-level tests for the API routes: real Hono app, fake D1/KV, stubbed
+ * HTTP-level tests for the API routes: real Hono app, fake D1, stubbed
  * daemon + external HTTP. Covers wizard submit, container actions, key
  * management, the no-key enrollment path (U4), and account deletion (U8).
  */
@@ -9,9 +9,8 @@ import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
 import { app as workerApp } from "../src/index.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
-import { createSession } from "../src/sessions.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
-import { fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
+import { createTestSession, fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -23,8 +22,7 @@ function app() {
 }
 
 async function login(env: Bindings, user: UserRow): Promise<Record<string, string>> {
-  const sid = await createSession(env, user.id);
-  return { cookie: `cs_session=${sid}` };
+  return { cookie: await createTestSession(env, user.id) };
 }
 
 function json(body: unknown, headers: Record<string, string> = {}): RequestInit {
@@ -892,7 +890,7 @@ describe("account deletion (U8)", () => {
       .first()).toMatchObject({ host_id: "host-1", status: "provisioning" });
   });
 
-  it("purges credentials, keys, and the user row; revokes the session", async () => {
+  it("purges credentials, keys, Better Auth state, and the user row", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     const headers = await login(env, user);
@@ -903,18 +901,19 @@ describe("account deletion (U8)", () => {
       .run();
     await env.DB.prepare("INSERT INTO credentials_encrypted (user_id) VALUES ('user-1')").run();
     await env.DB.prepare(
-      `INSERT INTO passkeys
-         (credential_id, user_id, public_key, device_type, backed_up, created_at)
-       VALUES ('passkey-1', 'user-1', ?, 'multiDevice', 1, ?)`,
+      `INSERT INTO passkey
+         (id, credential_id, user_id, public_key, counter, device_type, backed_up, created_at)
+       VALUES ('passkey-row-1', 'passkey-1', 'user-1', ?, 0, 'multiDevice', 1, ?)`,
     )
-      .bind(new Uint8Array([1, 2, 3]), Date.now())
+      .bind("public-key", Date.now())
       .run();
 
     const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
     expect(res.status).toBe(200);
     for (const table of [
       "users",
-      "passkeys",
+      "passkey",
+      "auth_sessions",
       "ssh_keys",
       "credentials_encrypted",
     ]) {

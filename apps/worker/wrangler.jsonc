@@ -19,12 +19,6 @@
       "migrations_dir": "migrations"
     }
   ],
-  "kv_namespaces": [
-    {
-      "binding": "SESSIONS",
-      "id": "8d9659fdccfa4c8f9497e65c0a17ee19"
-    }
-  ],
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
@@ -42,13 +36,28 @@
     // GitHub App OAuth client id and public-page slug. GitHub setup is exposed
     // only when both values and GITHUB_APP_CLIENT_SECRET are configured.
     "GITHUB_APP_CLIENT_ID": "Iv23lilUGXsyhgZSEO7c",
-    "GITHUB_APP_SLUG": "usebench-dev"
+    "GITHUB_APP_SLUG": "usebench-dev",
+    // Better Auth social-login provider IDs. Matching client secrets are
+    // Worker secrets; leave an ID empty to disable that provider.
+    "AUTH_GOOGLE_CLIENT_ID": "",
+    "AUTH_APPLE_CLIENT_ID": "",
+    "AUTH_GITHUB_CLIENT_ID": "",
+    // World ID 4.0 relying-party configuration from the Developer Portal.
+    "WORLD_ID_APP_ID": "",
+    "WORLD_ID_RP_ID": "",
+    "WORLD_ID_ACTION": "verify-account",
+    "WORLD_ID_ENVIRONMENT": "production"
   }
   // Secrets (set via `wrangler secret put <NAME>`):
+  //   BETTER_AUTH_SECRET       — high-entropy Better Auth cookie/token secret
   //   CREDENTIAL_MASTER_KEY    — base64 32-byte key (npx tsx scripts/genkeys.ts)
   //   WORKER_RPC_PRIVATE_KEY   — base64 Ed25519 private key for daemon RPC signing
   //   INVITE_ADMIN_SECRET      — high-entropy bearer secret used only by the
   //                              admin invite-generation script/endpoint
   //   GITHUB_APP_CLIENT_SECRET — GitHub App client secret (optional; requires
   //                              GITHUB_APP_CLIENT_ID and GITHUB_APP_SLUG)
+  //   AUTH_GOOGLE_CLIENT_SECRET — Google OAuth secret (paired with client ID)
+  //   AUTH_APPLE_CLIENT_SECRET  — Apple OAuth secret (paired with client ID)
+  //   AUTH_GITHUB_CLIENT_SECRET — GitHub OAuth secret (paired with client ID)
+  //   WORLD_ID_SIGNING_KEY      — World ID 4.0 RP signing key
 }

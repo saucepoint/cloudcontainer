@@ -456,8 +456,7 @@ async function cleanupExpiredRows(env: Bindings, now: () => number): Promise<voi
   await env.DB.batch([
     env.DB.prepare("DELETE FROM oauth_states WHERE expires_at < ?").bind(t),
     env.DB.prepare("DELETE FROM enrollment_tokens WHERE expires_at < ?").bind(t - 24 * 3600 * 1000),
-    env.DB.prepare("DELETE FROM session_revocations WHERE revoked_at < ?").bind(
-      t - 30 * 24 * 3600 * 1000,
-    ),
+    env.DB.prepare("DELETE FROM auth_sessions WHERE expires_at < ?").bind(t),
+    env.DB.prepare("DELETE FROM auth_verifications WHERE expires_at < ?").bind(t),
   ]);
 }

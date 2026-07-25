@@ -4,13 +4,13 @@
  * - D1 is faked over `node:sqlite` (both are SQLite, so the SQL — including
  *   `?N` params, ON CONFLICT upserts, and json_array — behaves identically)
  *   with the real migrations from ../migrations applied.
- * - KV is a Map (TTL ignored: "time never passes in tests", SPEC §18).
  * - Daemon/GitHub/Cloudflare HTTP is intercepted via `stubFetch`, never real.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import { generateEd25519Keypair, generateSymmetricKey } from "@workbench/contract";
+import { createAuth, signedSessionCookie } from "../../src/better-auth.js";
 import type { Bindings, ContainerRow, HostRow, UserRow } from "../../src/types.js";
 
 // -- fake D1 over node:sqlite -------------------------------------------------
@@ -36,6 +36,11 @@ class FakeD1Statement {
 
   async all<T>(): Promise<{ results: T[]; success: true }> {
     return { results: this.db.prepare(this.sql).all(...this.params) as T[], success: true };
+  }
+
+  async raw<T extends unknown[]>(): Promise<T[]> {
+    const rows = this.db.prepare(this.sql).all(...this.params) as Array<Record<string, unknown>>;
+    return rows.map((row) => Object.values(row) as T);
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {
@@ -69,30 +74,11 @@ export class FakeD1 {
   }
 }
 
-// -- fake KV -------------------------------------------------------------------
-
-export class FakeKV {
-  readonly store = new Map<string, string>();
-
-  async get(key: string): Promise<string | null> {
-    return this.store.get(key) ?? null;
-  }
-
-  async put(key: string, value: string, _opts?: { expirationTtl?: number }): Promise<void> {
-    this.store.set(key, value);
-  }
-
-  async delete(key: string): Promise<void> {
-    this.store.delete(key);
-  }
-}
-
 // -- env builder ----------------------------------------------------------------
 
 export interface TestEnv {
   env: Bindings;
   db: DatabaseSync;
-  kv: FakeKV;
   /** Ed25519 keypair whose private half signs Worker->daemon RPCs. */
   rpcKeys: { publicKey: string; privateKey: string };
 }
@@ -110,33 +96,47 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(migrationsSql());
-  const kv = new FakeKV();
   const rpcKeys = generateEd25519Keypair();
   const env = {
     DB: new FakeD1(db),
-    SESSIONS: kv,
     BASE_URL: "https://usebench.dev",
     DEV_AUTH: "0",
     GITHUB_APP_CLIENT_ID: "",
+    GITHUB_APP_SLUG: "",
+    AUTH_GOOGLE_CLIENT_ID: "",
+    AUTH_APPLE_CLIENT_ID: "",
+    AUTH_GITHUB_CLIENT_ID: "",
+    WORLD_ID_APP_ID: "",
+    WORLD_ID_RP_ID: "",
+    WORLD_ID_ACTION: "verify-account",
+    WORLD_ID_ENVIRONMENT: "production",
+    BETTER_AUTH_SECRET: "test-better-auth-secret-must-be-at-least-32-characters",
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),
     WORKER_RPC_PRIVATE_KEY: rpcKeys.privateKey,
     ...overrides,
   } as unknown as Bindings;
-  return { env, db, kv, rpcKeys };
+  return { env, db, rpcKeys };
 }
 
 // -- seed rows -------------------------------------------------------------------
 
 export async function seedUser(env: Bindings, id = "user-1"): Promise<UserRow> {
   const now = Date.now();
-  const webauthnUserId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
   await env.DB.prepare(
-    `INSERT INTO users (id, webauthn_user_id, created_at)
-     VALUES (?, ?, ?)`,
-  ).bind(id, webauthnUserId, now).run();
+    `INSERT INTO users
+       (id, name, email, email_verified, verified_at, verification_method, created_at, updated_at)
+     VALUES (?, 'Test user', ?, 1, ?, 'development', ?, ?)`,
+  ).bind(id, `${id}@example.test`, now, now, now).run();
   const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
   if (!row) throw new Error("seedUser failed");
   return row;
+}
+
+export async function createTestSession(env: Bindings, userId: string): Promise<string> {
+  const context = await createAuth(env).$context;
+  const session = await context.internalAdapter.createSession(userId);
+  if (!session) throw new Error("createTestSession failed");
+  return signedSessionCookie(env, session.token, "http://localhost");
 }
 
 export async function seedHost(
