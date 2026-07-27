@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { authRoutes, postLoginPath, requireUser } from "../src/auth.js";
+import { createAuth } from "../src/better-auth.js";
 import type { AppContext } from "../src/types.js";
 import { createTestSession, makeEnv, seedContainer, seedHost, seedUser } from "./helpers/env.js";
 
@@ -26,6 +27,25 @@ describe("Better Auth account sessions", () => {
     await app().request("/auth/dev?sub=alice", {}, env);
     await app().request("/auth/dev?sub=alice", {}, env);
     expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(1);
+  });
+
+  it.each([
+    ["google", "Google User", "google-user-1", "google-user@example.test"],
+    ["github", "GitHub User", "github-user-1", "github-user@example.test"],
+  ])("creates a %s user and provider account", async (providerId, name, accountId, email) => {
+    const { env } = makeEnv();
+    const context = await createAuth(env).$context;
+    const result = await context.internalAdapter.createOAuthUser(
+      { name, email, emailVerified: true },
+      { providerId, accountId, accessToken: "access-token" },
+    );
+
+    expect(result.user.email).toBe(email);
+    expect(result.account.providerId).toBe(providerId);
+    const user = await env.DB.prepare(
+      "SELECT status, subscription_status FROM users WHERE id = ?",
+    ).bind(result.user.id).first<{ status: string; subscription_status: string }>();
+    expect(user).toEqual({ status: "active", subscription_status: "free" });
   });
 
   it("routes unverified accounts to verification and configured accounts to the dashboard", async () => {
