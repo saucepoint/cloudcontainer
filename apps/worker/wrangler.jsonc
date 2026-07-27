@@ -39,9 +39,9 @@
     "GITHUB_APP_SLUG": "usebench-dev",
     // Better Auth social-login provider IDs. Matching client secrets are
     // Worker secrets; leave an ID empty to disable that provider.
-    "AUTH_GOOGLE_CLIENT_ID": "",
+    "AUTH_GOOGLE_CLIENT_ID": "954300387059-0v4nafpsmk23bn2fq5ofnhc1bvi16ipd.apps.googleusercontent.com",
     "AUTH_APPLE_CLIENT_ID": "",
-    "AUTH_GITHUB_CLIENT_ID": "",
+    "AUTH_GITHUB_CLIENT_ID": "Ov23liuitknuTQX0id1m",
     // World ID 4.0 relying-party configuration from the Developer Portal.
     "WORLD_ID_APP_ID": "",
     "WORLD_ID_RP_ID": "",
