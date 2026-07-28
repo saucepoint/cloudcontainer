@@ -53,7 +53,7 @@ class FakeD1Statement {
   }
 }
 
-export class FakeD1 {
+class FakeD1 {
   constructor(readonly db: DatabaseSync) {}
 
   prepare(sql: string): FakeD1Statement {
@@ -76,7 +76,7 @@ export class FakeD1 {
 
 // -- env builder ----------------------------------------------------------------
 
-export interface TestEnv {
+interface TestEnv {
   env: Bindings;
   db: DatabaseSync;
   /** Ed25519 keypair whose private half signs Worker->daemon RPCs. */

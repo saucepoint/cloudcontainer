@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-export const user = sqliteTable("users", {
+const user = sqliteTable("users", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
@@ -14,7 +14,7 @@ export const user = sqliteTable("users", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
-export const session = sqliteTable("auth_sessions", {
+const session = sqliteTable("auth_sessions", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   token: text("token").notNull().unique(),
@@ -25,7 +25,7 @@ export const session = sqliteTable("auth_sessions", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
-export const account = sqliteTable("auth_accounts", {
+const account = sqliteTable("auth_accounts", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   accountId: text("account_id").notNull(),
@@ -43,7 +43,7 @@ export const account = sqliteTable("auth_accounts", {
   uniqueIndex("idx_auth_accounts_provider").on(table.providerId, table.accountId),
 ]);
 
-export const verification = sqliteTable("auth_verifications", {
+const verification = sqliteTable("auth_verifications", {
   id: text("id").primaryKey(),
   identifier: text("identifier").notNull(),
   value: text("value").notNull(),
@@ -52,7 +52,7 @@ export const verification = sqliteTable("auth_verifications", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
-export const passkey = sqliteTable("passkey", {
+const passkey = sqliteTable("passkey", {
   id: text("id").primaryKey(),
   name: text("name"),
   publicKey: text("public_key").notNull(),
