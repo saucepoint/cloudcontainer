@@ -69,7 +69,7 @@ export function createWorldIdRequest(env: Bindings, signal: string): WorldIdRequ
     app_id: config.appId,
     action: config.action,
     environment: config.environment,
-    allow_legacy_proofs: true,
+    allow_legacy_proofs: false,
     signal,
     rp_context: {
       rp_id: config.rpId,
@@ -93,7 +93,7 @@ function validateProof(rawProof: string, config: WorldIdConfig, signal: string):
     rejectProof("World ID proof is invalid.", "malformed_proof");
   }
   if (!isRecord(proof)) rejectProof("World ID proof is invalid.", "malformed_proof");
-  if (proof.protocol_version !== "3.0" && proof.protocol_version !== "4.0") {
+  if (proof.protocol_version !== "4.0") {
     rejectProof("World ID proof has an unsupported version.", "invalid_version");
   }
   if (proof.action !== config.action) {

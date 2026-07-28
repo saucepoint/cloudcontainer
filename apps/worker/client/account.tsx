@@ -45,7 +45,6 @@ function worldIdErrorMessage(code: string): string {
   switch (code) {
     case "credential_unavailable":
     case "world_id_4_not_available":
-    case "world_id_3_not_available":
       return `This World ID does not have the required Proof of Human credential (${code}).`;
     case "max_verifications_reached":
     case "nullifier_replayed":
@@ -95,7 +94,7 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
         loadIdKit(),
       ]);
       const request = await idKit.requestWithInviteCode(config)
-        .preset(idKit.proofOfHuman({ signal }));
+        .constraints(idKit.CredentialRequest("proof_of_human", { signal }));
       if (controller.signal.aborted) return;
 
       setWorldUrl(request.connectorURI);

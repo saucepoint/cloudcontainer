@@ -167,8 +167,8 @@ the GitHub App used later for repository access.
 For World ID, create or migrate an application in the World Developer Portal,
 register its relying party, and set `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
 `WORLD_ID_ACTION`. Store the RP signing key only as `WORLD_ID_SIGNING_KEY`.
-Production uses IDKit 4.x signed Orb uniqueness requests with legacy proof
-support. The Worker binds each proof signal to the authenticated account,
+Production accepts only signed World ID 4 Proof of Human uniqueness requests.
+The Worker binds each proof signal to the authenticated account,
 forwards the unchanged result to the Developer Portal, and persists the
 returned nullifier so one person cannot verify multiple accounts.
 
