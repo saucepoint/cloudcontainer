@@ -74,10 +74,6 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
   const [code, setCode] = React.useState("");
   const worldAttempt = React.useRef<AbortController | null>(null);
 
-  const reportWorldIdFailure = (errorCode: string): void => {
-    void postJson("/api/account/world-id/failure", { code: errorCode }).catch(() => undefined);
-  };
-
   const cancelWorldId = (): void => {
     worldAttempt.current?.abort();
     worldAttempt.current = null;
@@ -113,7 +109,6 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
       });
       if (controller.signal.aborted) return;
       if (!completion.success) {
-        reportWorldIdFailure(completion.error);
         setWorldUrl("");
         setStatus(worldIdErrorMessage(completion.error));
         return;

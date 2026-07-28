@@ -65,14 +65,6 @@ export const accountRoutes = new Hono<AppContext>()
     c.header("cache-control", "no-store");
     return c.json(createWorldIdRequest(c.env, c.get("user").id));
   })
-  .post("/api/account/world-id/failure", requireAccount, async (c) => {
-    const body = await readJsonBody<{ code?: unknown }>(c);
-    const code = typeof body?.code === "string" && /^[a-z0-9_]{1,64}$/.test(body.code)
-      ? body.code
-      : "unknown";
-    console.warn(JSON.stringify({ event: "world_id_client_failed", code }));
-    return c.json({ ok: true });
-  })
   .post("/api/account/world-id/verify", requireAccount, async (c) => {
     if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
     const user = c.get("user");
