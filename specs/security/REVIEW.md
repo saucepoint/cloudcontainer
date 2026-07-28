@@ -1,6 +1,6 @@
 # Security review: authentication and World ID cleanup
 
-**Scope:** `main...refactor/auth-world-id-cleanup`  
+**Scope:** `main...refactor/auth-world-id-cleanup`
 **Result:** PASS — no findings at confidence ≥ 8/10
 
 ## Data-flow review
