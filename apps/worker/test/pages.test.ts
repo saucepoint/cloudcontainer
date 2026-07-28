@@ -104,9 +104,17 @@ describe("account eligibility verification", () => {
   it("offers World ID and invite verification before onboarding", () => {
     const html = String(VerificationPage({ worldIdAvailable: true }));
     expect(html).toContain('id="account-verification-root"');
+    expect(html).toContain('data-world-id-available="true"');
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
+  });
+
+  it("omits the World ID action when the deployment is not configured", () => {
+    const html = String(VerificationPage({ worldIdAvailable: false }));
+    expect(html).toContain('data-world-id-available="false"');
+    expect(accountClient).toContain('root.dataset.worldIdAvailable === "true"');
+    expect(accountClient).toContain("worldIdAvailable ? (");
   });
 
   it("requests current Proof of Human credentials with legacy fallback", () => {
