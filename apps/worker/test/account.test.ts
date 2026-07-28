@@ -80,7 +80,7 @@ describe("account verification", () => {
       app_id: "app_test",
       action: "verify-account",
       environment: "production",
-      allow_legacy_proofs: true,
+      allow_legacy_proofs: false,
       signal: user.id,
       rp_context: {
         rp_id: "rp_test",
@@ -156,6 +156,21 @@ describe("account verification", () => {
     expect(reused.status).toBe(409);
     expect(await env.DB.prepare("SELECT verified_at FROM users WHERE id = ?")
       .bind(second.user.id).first()).toEqual({ verified_at: null });
+  });
+
+  it("rejects legacy World ID proofs before contacting the verifier", async () => {
+    const { env } = makeEnv(WORLD_ID_CONFIG);
+    const { user, cookie } = await unverifiedAccount(env);
+    const fetchMock = stubFetch();
+    const response = await app().request(
+      "/api/account/world-id/verify",
+      json({ ...worldIdProof(user.id), protocol_version: "3.0" }, cookie),
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_version" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects a World ID proof bound to another account before contacting World ID", async () => {
