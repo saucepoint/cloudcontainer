@@ -56,16 +56,16 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("offers all five Better Auth entry points", () => {
+  it("offers Google, GitHub, and passkey entry points", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('id="landing-auth-root"');
     for (const label of [
       "Sign in with Google",
-      "Sign in with Apple",
       "Sign in with GitHub",
       "Create passkey",
       "Use passkey",
     ]) expect(landingClient).toContain(label);
+    expect(landingClient).not.toContain("Sign in with Apple");
     expect(landingClient).toContain("authClient.signIn.social");
     expect(landingClient).toContain("authClient.passkey.addPasskey");
     expect(landingClient).toContain("authClient.signIn.passkey");
@@ -78,7 +78,7 @@ describe("sign-in button icons", () => {
     expect(landingClient).toContain("GitHubLogoIcon");
     expect(landingClient).toContain("LockClosedIcon");
     expect(landingClient).toContain("GoogleIcon");
-    expect(landingClient).toContain("AppleIcon");
+    expect(landingClient).not.toContain("AppleIcon");
     expect(landingClient).toContain('from "./icons.js"');
   });
 
@@ -104,15 +104,25 @@ describe("account eligibility verification", () => {
   it("offers World ID and invite verification before onboarding", () => {
     const html = String(VerificationPage({ worldIdAvailable: true }));
     expect(html).toContain('id="account-verification-root"');
+    expect(html).toContain('data-world-id-available="true"');
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
   });
 
-  it("surfaces World ID error codes and verifies completed proofs", () => {
+  it("omits the World ID action when the deployment is not configured", () => {
+    const html = String(VerificationPage({ worldIdAvailable: false }));
+    expect(html).toContain('data-world-id-available="false"');
+    expect(accountClient).toContain('root.dataset.worldIdAvailable === "true"');
+    expect(accountClient).toContain("worldIdAvailable ? (");
+  });
+
+  it("requests only current World ID 4 Proof of Human credentials", () => {
     expect(accountClient).toContain("World ID verification failed (${code})");
     expect(accountClient).toContain("worldIdErrorMessage(completion.error)");
-    expect(accountClient).toContain("idKit.orbLegacy({ signal })");
+    expect(accountClient).toContain('idKit.CredentialRequest("proof_of_human", { signal })');
+    expect(accountClient).not.toContain("proofOfHuman");
+    expect(accountClient).not.toContain("orbLegacy");
     expect(accountClient).toContain('postJson("/api/account/world-id/verify", completion.result)');
   });
 

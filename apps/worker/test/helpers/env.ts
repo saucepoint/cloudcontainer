@@ -53,7 +53,7 @@ class FakeD1Statement {
   }
 }
 
-export class FakeD1 {
+class FakeD1 {
   constructor(readonly db: DatabaseSync) {}
 
   prepare(sql: string): FakeD1Statement {
@@ -76,7 +76,7 @@ export class FakeD1 {
 
 // -- env builder ----------------------------------------------------------------
 
-export interface TestEnv {
+interface TestEnv {
   env: Bindings;
   db: DatabaseSync;
   /** Ed25519 keypair whose private half signs Worker->daemon RPCs. */
@@ -104,7 +104,6 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     GITHUB_APP_CLIENT_ID: "",
     GITHUB_APP_SLUG: "",
     AUTH_GOOGLE_CLIENT_ID: "",
-    AUTH_APPLE_CLIENT_ID: "",
     AUTH_GITHUB_CLIENT_ID: "",
     WORLD_ID_APP_ID: "",
     WORLD_ID_RP_ID: "",

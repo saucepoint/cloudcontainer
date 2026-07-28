@@ -12,7 +12,7 @@ export async function credentialsCanBeChanged(env: Bindings, userId: string): Pr
   return !container;
 }
 
-export async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
+async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 

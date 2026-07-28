@@ -1,0 +1,63 @@
+change: auth-world-id-cleanup
+verified_at: "2026-07-28T22:23:57Z"
+verifier: verify-work
+risk: P1
+phases:
+  clean_install:
+    passed: true
+    command: npm ci
+    audit: 0 vulnerabilities
+  build:
+    passed: true
+    command: npm run build:client -w apps/worker
+    note: landing.js 6.0 KiB; account.js 5.2 KiB
+  typecheck:
+    passed: true
+    command: npm run typecheck
+  lint:
+    passed: true
+    command: npm run lint
+  tests:
+    passed: true
+    command: npm test
+    files: 24
+    tests: 345
+  terminal_verdict:
+    command: npm test
+    exit_code: 0
+    captured_at: "2026-07-28T22:19:15Z"
+    note: Single contiguous workspace run; 33 contract, 70 daemon, and 242 Worker tests passed.
+  dependency_audit:
+    passed: true
+    command: npm audit --audit-level=high
+    vulnerabilities: 0
+  deploy_dry_run:
+    passed: true
+    command: npm run deploy -- --dry-run --skip-install
+    note: Build, typecheck, lint, and tests passed; remote migration, deployment, and public smoke were not executed.
+  dead_code:
+    passed: true
+    checks:
+      - TypeScript no-unused checks
+      - ts-prune plus reference validation
+      - Depcheck
+      - focused symbol and obsolete-provider searches
+    note: Knip cannot allocate its parser transfer buffer on this ARM environment; the independent checks found no dead or missing dependency surface.
+  security:
+    passed: true
+    report: specs/security/REVIEW.md
+    high_confidence_findings: 0
+  inspection:
+    passed: true
+    steps:
+      - Google, GitHub, Create passkey, and Use passkey remain on the landing client; Apple is absent.
+      - Unconfigured deployments pass World ID availability to the client and show invite verification only.
+      - World ID requests use a v4-only proof_of_human constraint and legacy v3 proofs fail before external I/O.
+      - Duplicate nullifiers remain atomic conflicts; unrelated D1 failures and verifier outages preserve distinct errors.
+  external_release_checks:
+    required: true
+    completed: false
+    note: Live Google/GitHub OAuth, passkey ceremony, and World App verification require configured production providers and remain SPEC.md release checks.
+  gaps:
+    closed: true
+    note: No automated or code-review gap remains; external-provider checks are deployment evidence, not local test gaps.

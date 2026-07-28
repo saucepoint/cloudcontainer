@@ -1,90 +1,59 @@
-# Repository-wide architecture debt cleanup
+# Authentication and World ID cleanup impact
 
 ## Targets
 
-1. Worker request safety and deterministic binding type generation.
-2. Lifecycle timeout and placement orchestration correctness.
-3. Daemon provisioning failure semantics and repository clone destinations.
-4. Shared browser transport/presentation utilities and dashboard organization.
-5. Layout stylesheet organization.
-6. Dead exports/helpers and obsolete current-release protocol branches.
-7. Vulnerable `@hono/node-server` dependency.
+1. Remove Sign in with Apple from the Better Auth configuration, Worker bindings, landing client, icon module, tests, and release documentation.
+2. Simplify the recent World ID 4.x browser/server flow, remove unnecessary v3 migration compatibility, and preserve account-bound proofs, upstream verification, and permanent nullifier uniqueness.
+3. Remove dead auth exports and the nonessential World ID client-failure telemetry route.
+4. Close the current transitive dependency advisory if it can be resolved within the existing lockfile ranges.
 
 ## Dependents
 
-### Worker request seam
+### Better Auth provider seam
 
-- `apps/worker/src/index.tsx` installs global middleware and mounts all routes.
-- `apps/worker/src/http.ts` is used by `api.ts`, `codexauth.ts`, `passkeys.ts`, and `subscriptions.ts`.
-- All Worker route tests can cross this seam; focused oversized-body coverage belongs in `apps/worker/test/api.test.ts`.
+- `apps/worker/src/better-auth.ts` creates every Better Auth instance and owns configured social providers and trusted account-linking providers.
+- `apps/worker/src/types.ts`, `apps/worker/wrangler.jsonc`, and `apps/worker/test/helpers/env.ts` define the provider bindings used by runtime and tests.
+- `apps/worker/client/landing.tsx` and `apps/worker/client/icons.tsx` expose the sign-in choices.
+- `apps/worker/test/auth.test.ts` and `apps/worker/test/pages.test.ts` cover provider configuration and landing behavior.
+- `README.md` and `SPEC.md` define setup and release expectations.
 
-### Lifecycle/job seam
+### World ID seam
 
-- `apps/worker/src/jobs.ts` is called by API lifecycle actions, placement, dashboard polling, GitHub credential refresh, SSH key sync, and reconciliation.
-- `apps/worker/src/reconciler.ts` owns timeout and drift convergence.
-- `apps/worker/src/state.ts` owns lifecycle classifications and status mappings.
-- Coverage: `jobs.test.ts`, `reconciler.test.ts`, `state.test.ts`, and portions of `api.test.ts`.
-
-### Placement seam
-
-- `apps/worker/src/placement.ts` is called by provisioning API submission.
-- It depends on `capacity.ts`, `ports.ts`, and `jobs.ts`, and mutates `containers`, `hosts`, and `waitlist` together.
-- Coverage: `jobs.test.ts`, `api.test.ts`, `ports.test.ts`, and `reconciler.test.ts`.
-
-### Daemon provisioning seam
-
-- `apps/daemon/src/provisioner.ts` is called only through `JobRunner` in production.
-- It depends on `CredentialInstaller`, `Incus`, agent metadata, MOTD rendering, and the shared job contract.
-- Coverage: `provisioner.test.ts`, plus HTTP submission behavior in `server.test.ts`.
-
-### Browser transport/dashboard seam
-
-- Shared request/error/clipboard behavior is duplicated by `client/dashboard.tsx`, `landing.tsx`, `auth-flows.tsx`, `security.ts`, and `onboarding.ts`.
-- The esbuild entry graph and all public page script references depend on these modules bundling correctly.
-- Coverage: client TypeScript compilation, `npm run build:client`, and SSR/script smoke assertions in `pages.test.ts`; browser interaction coverage remains a gap.
-
-### Layout seam
-
-- Every SSR page imports `pages/layout.tsx`.
-- Moving CSS without changing output affects landing, onboarding, security, and dashboard presentation.
-- Coverage: `pages.test.ts` SSR assertions and client build; visual layout remains a manual gap.
-
-### Shared contract seam
-
-- `packages/contract/src/types.ts` is consumed by both Worker and daemon and is covered by all three workspaces.
-- Removing `resize`, `export-window`, or paid-tier branches affects `worker/src/jobs.ts`, `worker/src/state.ts`, `daemon/src/provisioner.ts`, `daemon/src/incus.ts`, and their tests.
-- This is a high-risk rolling-release change even though there is no current caller.
+- `apps/worker/src/account.ts` owns authenticated eligibility routes and atomic persistence of verification evidence.
+- `apps/worker/src/world-id.ts` validates configuration and user-bound proofs, calls the Developer Portal, and canonicalizes the returned nullifier.
+- `apps/worker/client/account.tsx` loads pinned IDKit 4.x assets and drives invite-code-mode verification.
+- `apps/worker/src/pages/views.tsx` decides whether World ID is available on the deployment.
+- `apps/worker/test/account.test.ts` and `apps/worker/test/pages.test.ts` cover request signing, signal binding, upstream verification, nullifier reuse, and page wiring.
+- `apps/worker/migrations/0010_better_auth_accounts.sql` stores verification evidence; no schema change is needed.
 
 ### Dependency seam
 
-- `@hono/node-server` is used only by `apps/daemon/src/index.ts`.
-- The daemon relies on `serve`, HTTPS `createServer`, and `serverOptions`; v2 retains these interfaces and requires Node 20+, while the project requires Node 22.
-- Coverage: daemon typecheck and `server.test.ts`; a live TLS bind remains a manual operational check.
+- `postcss` is a transitive Vitest/Vite dependency. The audit fix is lockfile-only and remains within Vite's declared `^8.5.6` range.
 
 ## Affected release contract
 
-No intended product behavior changes. The cleanup enforces existing `SPEC.md` requirements for visible lifecycle failure, bounded and safe Worker operation, selected-agent credential behavior, deterministic provisioning, and current-release-only scope.
+- Authentication narrows from Google, Apple, GitHub, and passkeys to Google, GitHub, and passkeys.
+- World ID remains optional per deployment and interchangeable with administrator invites at the eligibility gate. This new integration accepts v4 proofs only, avoiding a mixed-protocol nullifier migration surface.
+- Existing generic `auth_accounts` rows are not migrated or deleted. The deployed Apple client ID is already empty, so this removes an advertised but unavailable path rather than a configured production provider.
+- No shared Worker/daemon wire protocol or D1 schema changes.
 
-The paid-tier/resize/export-window removal candidate changes a shared wire contract and should be treated as a separate coordinated release decision despite being unreachable from the current UI.
+## Test coverage
 
-## Test coverage and gaps
+- Add a provider-configuration assertion for exactly Google and GitHub.
+- Change the landing regression to require Google, GitHub, Create passkey, and Use passkey, and explicitly reject Apple.
+- Require a World ID 4 Proof of Human credential and reject legacy v3 proofs before contacting the verifier.
+- Verify unavailable deployments do not render an actionable World ID control.
+- Preserve HTTP tests for signed request shape, account signal binding, unchanged proof forwarding, upstream error codes, and nullifier reuse.
+- Run the Worker focused suites, browser build, all workspace tests, typecheck, lint, `npm audit`, dead-export scans, and deploy dry-run.
 
-- Existing automated baseline: 23 files / 284 passing tests.
-- Add regression coverage for oversized request rejection, every lifecycle timeout class, background-job timeout isolation, duplicate GitHub repository basenames, metadata-read failure propagation, and any narrowed placement catch.
-- Run `npm run typecheck`, `npm test`, `npm run build:client -w apps/worker`, `npm audit`, and `npm run deploy -- --dry-run --skip-install`.
-- Manual gaps: actual Incus commands, daemon TLS startup, Cloudflare runtime body streaming, and desktop/narrow browser presentation.
+## Risk: Medium
 
-## Risk: High
-
-The overall batch crosses the shared protocol, control-plane state convergence, host orchestration, browser bundles, and release tooling. Individual slices are mostly low-to-medium risk, but they must remain independently testable and the shared-contract deletion must not be mixed into safe internal refactors without an explicit decision.
+The auth removal is localized and Apple is not configured in the checked-in deployment. World ID is security-sensitive and recently changed, but its external seam already has focused HTTP tests and no persistence migration is required.
 
 ## Recommended action
 
-Proceed as vertical slices with a green full suite after each:
+Proceed in vertical slices:
 
-1. Safety/correctness regressions first.
-2. Daemon failure semantics and repository validation.
-3. Client duplication and file organization with unchanged rendered behavior.
-4. Dependency/config hygiene.
-5. Dead internal exports/helpers.
-6. Handle roadmap protocol deletion separately or retain it with a documented reason.
+1. RED/GREEN: narrow Better Auth and landing behavior to Google, GitHub, and passkeys; remove all Apple-only code and documentation.
+2. RED/GREEN: make the new World ID action v4-only, pass deployment availability into the client, then simplify duplicated SDK types, telemetry, configuration parsing, and nullifier handling without weakening proof binding.
+3. Remove confirmed dead exports, apply the lockfile-only advisory fix, and run repository-wide verification and audit.

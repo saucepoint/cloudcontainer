@@ -19,7 +19,7 @@ with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
 only two product decisions after authentication:
 
-1. sign in with Google, Apple, GitHub, or a passkey, then verify a new account
+1. sign in with Google, GitHub, or a passkey, then verify a new account
    with World ID or an administrator invite; and
 2. choose one or more coding agents.
 
@@ -80,7 +80,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- Better Auth account management with Google, Apple, GitHub, and passkey sign-in.
+- Better Auth account management with Google, GitHub, and passkey sign-in.
 - World ID proof-of-human or single-use administrator-invite eligibility verification.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
@@ -129,8 +129,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### 4.1 Sign in and verify
 
-The landing page presents five account entry points: Sign in with Google, Sign
-in with Apple, Sign in with GitHub, Create passkey, and Use passkey. Better Auth
+The landing page presents four account entry points: Sign in with Google, Sign
+in with GitHub, Create passkey, and Use passkey. Better Auth
 owns provider callbacks, account linking, passkey ceremonies, and application
 sessions. Passkey-first registration uses a server-signed, ten-minute opaque
 context; it never accepts a caller-chosen user ID. Passkeys are discoverable and
@@ -143,9 +143,9 @@ After authentication, the control plane applies this routing contract:
 - a verified user with a configured workbench goes to `/dashboard`.
 
 The verification screen offers World ID Proof of Human and a single-use
-administrator invite. World ID 4.0 requests are signed by the Worker, bind the
-proof signal to the authenticated internal user ID, and are verified through
-the Developer Portal. The verified nullifier is stored permanently so the same
+administrator invite. World ID 4.0-only requests are signed by the Worker, bind
+the proof signal to the authenticated internal user ID, and are verified
+through the Developer Portal. The verified nullifier is stored permanently so the same
 person cannot verify another account. An invite is also verification evidence,
 not an authentication credential: the account must already have a valid Better
 Auth session before redeeming it. Unverified sessions cannot access onboarding,
@@ -265,8 +265,8 @@ usable with keyboard alone. Specifically:
 
 - Better Auth is mounted at `/api/auth/*` and is the only production owner of
   social OAuth identities, passkey records, and application sessions.
-- Google, Apple, and GitHub OAuth client IDs are public Worker variables; their
-  client secrets and `BETTER_AUTH_SECRET` are Worker secrets.
+- Google and GitHub OAuth client IDs are public Worker variables; their client
+  secrets and `BETTER_AUTH_SECRET` are Worker secrets.
 - OAuth provider tokens are encrypted by Better Auth before D1 persistence.
 - Passkey credential IDs are unique. D1 stores the public key, monotonic
   counter, transports, device type, backup state, AAGUID, and non-secret
@@ -288,10 +288,11 @@ usable with keyboard alone. Specifically:
 - The raw code is returned once to the administrator script and is never logged.
 - Invite redemption and the user's `verified_at` update execute in one D1 batch.
   A unique code hash and unique user link prevent concurrent or repeated use.
-- World ID uses an RP signing key held only by the Worker. The Worker checks the
-  configured action and the user-bound signal hash before forwarding a proof to
-  `POST /api/v4/verify/{rp_id}`. It persists the returned 256-bit nullifier as a
-  canonical decimal string with a unique `(action, nullifier)` key.
+- World ID uses an RP signing key held only by the Worker. The Worker rejects
+  legacy v3 proofs, then checks the configured action and the user-bound signal
+  hash before forwarding a proof to `POST /api/v4/verify/{rp_id}`. It persists
+  the returned 256-bit nullifier as a canonical decimal string with a unique
+  `(action, nullifier)` key.
 - World ID nullifiers and invite redemptions remain after account deletion, with
   their former user link cleared, so eligibility evidence cannot be recycled.
 
@@ -681,11 +682,11 @@ Current automated coverage includes:
 
 - shared schema, signing, replay-window, encryption, sealing, and tamper tests;
 - gated development login, Better Auth D1 sessions, logout, and eligibility routing;
-- all five landing-page account options, passkey-first signed contexts, backup
+- all four landing-page account options, passkey-first signed contexts, backup
   passkey attachment, and Better Auth schema migration;
 - admin-secret invite generation, HMAC-only invite storage, authenticated
-  one-time redemption races, World ID user-signal binding, remote verification,
-  and permanent nullifier uniqueness;
+  one-time redemption races, v4-only World ID user-signal binding, remote
+  verification, and permanent nullifier uniqueness;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
   and reconciler logic;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -700,7 +701,7 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. Google, Apple, and GitHub sign-in callbacks in the production provider apps;
+1. Google and GitHub sign-in callbacks in the production provider apps;
 2. passkey-first registration, subsequent passkey sign-in, and backup passkey attachment;
 3. World ID verification, invite verification, attempted nullifier/invite reuse,
    and the all-optional-onboarding-fields-skipped path;

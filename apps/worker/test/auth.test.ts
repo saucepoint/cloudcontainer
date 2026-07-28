@@ -29,6 +29,19 @@ describe("Better Auth account sessions", () => {
     expect((await env.DB.prepare("SELECT * FROM users").all()).results).toHaveLength(1);
   });
 
+  it("configures only Google and GitHub as trusted social providers", async () => {
+    const { env } = makeEnv({
+      AUTH_GOOGLE_CLIENT_ID: "google-client",
+      AUTH_GOOGLE_CLIENT_SECRET: "google-secret",
+      AUTH_GITHUB_CLIENT_ID: "github-client",
+      AUTH_GITHUB_CLIENT_SECRET: "github-secret",
+    });
+    const context = await createAuth(env).$context;
+
+    expect(context.socialProviders.map((provider) => provider.id)).toEqual(["google", "github"]);
+    expect(context.trustedProviders).toEqual(["google", "github"]);
+  });
+
   it.each([
     ["google", "Google User", "google-user-1", "google-user@example.test"],
     ["github", "GitHub User", "github-user-1", "github-user@example.test"],

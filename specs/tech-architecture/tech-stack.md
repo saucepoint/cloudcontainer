@@ -4,22 +4,22 @@
 
 - Node.js 22 TypeScript npm workspace with strict ESM and three workspaces.
 - `packages/contract`: Zod wire schemas plus Noble-based Ed25519, X25519, HKDF, and XChaCha20-Poly1305 cryptography shared by both runtimes.
-- `apps/worker`: Hono SSR and JSON control plane on Cloudflare Workers, with D1, KV sessions, Cron reconciliation, static client bundles built by esbuild, and React/Hono JSX views.
+- `apps/worker`: Hono SSR and JSON control plane on Cloudflare Workers, with D1-backed Better Auth, Cron reconciliation, static client bundles built by esbuild, and React/Hono JSX views.
 - `apps/daemon`: Hono on Node.js under systemd, exposing signed host RPC and operating Incus through an injectable command runner.
 - `infra`: Bash host bootstrap, image build, multi-tenant policy, audit, deployment, and operations documentation.
-- Vitest tests run in Node. Worker persistence tests use in-memory `node:sqlite`, real D1 migrations, Map-backed KV, and intercepted `fetch`; daemon tests inject command execution.
+- Vitest tests run in Node. Worker persistence tests use in-memory `node:sqlite`, real D1 migrations, and intercepted `fetch`; daemon tests inject command execution.
 
 ## Architecture
 
 ### Control plane
 
-HTTP routes in `apps/worker/src/index.tsx` mount identity, onboarding, lifecycle, credential, GitHub, and subscription route modules. Route handlers read and validate user input, write D1/KV, and delegate provisioning or lifecycle work to the job module.
+HTTP routes in `apps/worker/src/index.tsx` mount identity, onboarding, lifecycle, credential, GitHub, and subscription route modules. Route handlers read and validate user input, write D1, and delegate provisioning or lifecycle work to the job module.
 
 Primary lifecycle flow:
 
 `Hono route -> placement/job module -> signed daemon adapter -> daemon job runner -> provisioner -> Incus adapter`
 
-D1 is the durable source of truth for users, environments, placement, jobs, and encrypted credentials. KV is only the application-session cache. The Cron reconciler polls recent daemon jobs, enforces timeouts, refreshes host health and GitHub tokens, admits the FIFO waitlist, expires suspended environments, and corrects D1/Incus drift.
+D1 is the durable source of truth for users, sessions, environments, placement, jobs, and encrypted credentials. The Cron reconciler polls recent daemon jobs, enforces timeouts, refreshes host health and GitHub tokens, admits the FIFO waitlist, expires suspended environments, and corrects D1/Incus drift.
 
 ### Host daemon
 
@@ -47,7 +47,7 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Strong foundations
 
-- Build verification is green: 24 test files / 332 tests, all workspace type checks, lint, the browser build, and the release dry-run pass. Release approval is blocked by review-round-5 findings and three newly published inherited `sharp`/libvips audit findings.
+- Build verification is green: 24 test files / 345 tests, all workspace type checks, lint, the browser build, dependency audit, and the release dry-run pass.
 - No `any`, TypeScript suppression, TODO, FIXME, or HACK markers were found in production TypeScript.
 - Security-sensitive random values use Web Crypto, admin-secret comparison uses fixed-size hashes, and Worker observability is enabled.
 
@@ -62,6 +62,8 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 - The page stylesheet is isolated from the 46-line document layout module with byte-identical rendered CSS.
 - Wrangler type generation ignores local secret files, preventing workstation-specific stale binding names.
 - The production-dead `quarantinePort` helper and unnecessary internal exports/assertions were removed.
+- Better Auth exposes only Google, GitHub, and passkeys; Apple-specific UI, bindings, provider configuration, icons, and release claims are absent.
+- World ID accepts v4 Proof of Human proofs only, binds every response to the authenticated account, distinguishes verifier/storage failures from proof reuse, hides unavailable controls, and uses upstream SDK types without client telemetry or migration-era v3 branches.
 - Failure events use warning/error severity while successful drift correction and startup remain informational.
 - `@hono/node-server` is on patched v2, Wrangler/workerd and compatible minor dependencies are current, and the compatibility date is current.
 
@@ -72,7 +74,7 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Remaining considerations
 
-- `passkeys.ts`, `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` exceed 300 lines, but each presents a small cohesive interface and substantial hidden behavior. Split only when a concrete forcing function appears; file length alone is not sufficient.
+- `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` exceed 300 lines, but each presents a small cohesive interface and substantial hidden behavior. Split only when a concrete forcing function appears; file length alone is not sufficient.
 - `CredentialInstaller` remains close to 300 lines because it owns validation and installation for several external credential formats. New formats should prompt extracting format-specific renderers behind its existing interface.
-- Oxlint is enforced locally, in CI, and by the release gate with warnings denied and `typescript/no-floating-promises` elevated to an error. Knip could not run in this ARM environment because its parser failed allocating its transfer buffer; `ts-prune`, reference search, typecheck, tests, and focused manual inspection were used instead.
+- Oxlint is enforced locally, in CI, and by the release gate with warnings denied and `typescript/no-floating-promises` elevated to an error. Knip cannot run in this ARM environment because its parser fails allocating its transfer buffer; `ts-prune`, Depcheck, reference search, typecheck, tests, and focused manual inspection are used instead.
 - Shell syntax validation is part of `npm run lint`; ShellCheck is not installed in the environment.

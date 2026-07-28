@@ -26,8 +26,8 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 
 ## User flow
 
-1. The user signs in with Google, Apple, GitHub, or an existing passkey, or
-   creates a new passkey-first account through Better Auth.
+1. The user signs in with Google, GitHub, or an existing passkey, or creates a
+   new passkey-first account through Better Auth.
 2. A new or previously unverified account proves one-person eligibility with
    World ID or redeems an eight-character, single-use administrator invite.
    Existing verified accounts skip this step.
@@ -123,8 +123,8 @@ Optional secrets:
 - GITHUB_APP_CLIENT_SECRET, paired with the public `GITHUB_APP_CLIENT_ID` and
   `GITHUB_APP_SLUG` Worker variables. GitHub setup is hidden unless all three
   values form a complete install-capable App configuration.
-- AUTH_GOOGLE_CLIENT_SECRET, AUTH_APPLE_CLIENT_SECRET, and
-  AUTH_GITHUB_CLIENT_SECRET, paired with their `AUTH_*_CLIENT_ID` variables.
+- AUTH_GOOGLE_CLIENT_SECRET and AUTH_GITHUB_CLIENT_SECRET, paired with their
+  `AUTH_*_CLIENT_ID` variables.
 - WORLD_ID_SIGNING_KEY, paired with `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
   `WORLD_ID_ACTION`. Invite verification remains available without World ID.
 
@@ -154,11 +154,10 @@ Copy the returned D1 ID into wrangler.jsonc, then:
 
 ### Account providers and World ID
 
-Create OAuth applications for the three Better Auth providers and configure
+Create OAuth applications for the two Better Auth providers and configure
 these callback URLs:
 
     https://usebench.dev/api/auth/callback/google
-    https://usebench.dev/api/auth/callback/apple
     https://usebench.dev/api/auth/callback/github
 
 Put each public client ID in the matching `AUTH_*_CLIENT_ID` Worker variable
@@ -168,8 +167,8 @@ the GitHub App used later for repository access.
 For World ID, create or migrate an application in the World Developer Portal,
 register its relying party, and set `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
 `WORLD_ID_ACTION`. Store the RP signing key only as `WORLD_ID_SIGNING_KEY`.
-Production uses IDKit 4.x signed Orb uniqueness requests with legacy proof
-support. The Worker binds each proof signal to the authenticated account,
+Production accepts only signed World ID 4 Proof of Human uniqueness requests.
+The Worker binds each proof signal to the authenticated account,
 forwards the unchanged result to the Developer Portal, and persists the
 returned nullifier so one person cannot verify multiple accounts.
 

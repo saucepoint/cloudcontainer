@@ -88,12 +88,6 @@ function socialProviders(env: Bindings): NonNullable<BetterAuthOptions["socialPr
       clientSecret: env.AUTH_GOOGLE_CLIENT_SECRET,
     };
   }
-  if (env.AUTH_APPLE_CLIENT_ID && env.AUTH_APPLE_CLIENT_SECRET) {
-    providers.apple = {
-      clientId: env.AUTH_APPLE_CLIENT_ID,
-      clientSecret: env.AUTH_APPLE_CLIENT_SECRET,
-    };
-  }
   if (env.AUTH_GITHUB_CLIENT_ID && env.AUTH_GITHUB_CLIENT_SECRET) {
     providers.github = {
       clientId: env.AUTH_GITHUB_CLIENT_ID,
@@ -122,7 +116,7 @@ export function createAuth(env: Bindings, requestUrl = env.BASE_URL) {
     }),
     socialProviders: socialProviders(env),
     account: {
-      accountLinking: { enabled: true, trustedProviders: ["google", "apple", "github"] },
+      accountLinking: { enabled: true, trustedProviders: ["google", "github"] },
       encryptOAuthTokens: true,
     },
     session: {
@@ -166,8 +160,6 @@ export function createAuth(env: Bindings, requestUrl = env.BASE_URL) {
     ],
   });
 }
-
-export type Auth = ReturnType<typeof createAuth>;
 
 export async function signedSessionCookie(
   env: Bindings,

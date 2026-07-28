@@ -11,7 +11,6 @@ export type Bindings = Omit<
   | "GITHUB_APP_CLIENT_ID"
   | "GITHUB_APP_SLUG"
   | "AUTH_GOOGLE_CLIENT_ID"
-  | "AUTH_APPLE_CLIENT_ID"
   | "AUTH_GITHUB_CLIENT_ID"
   | "WORLD_ID_APP_ID"
   | "WORLD_ID_RP_ID"
@@ -24,7 +23,6 @@ export type Bindings = Omit<
   GITHUB_APP_CLIENT_ID: string;
   GITHUB_APP_SLUG: string;
   AUTH_GOOGLE_CLIENT_ID: string;
-  AUTH_APPLE_CLIENT_ID: string;
   AUTH_GITHUB_CLIENT_ID: string;
   WORLD_ID_APP_ID: string;
   WORLD_ID_RP_ID: string;
@@ -35,7 +33,6 @@ export type Bindings = Omit<
   CREDENTIAL_MASTER_KEY: string;
   WORKER_RPC_PRIVATE_KEY: string;
   AUTH_GOOGLE_CLIENT_SECRET?: string;
-  AUTH_APPLE_CLIENT_SECRET?: string;
   AUTH_GITHUB_CLIENT_SECRET?: string;
   WORLD_ID_SIGNING_KEY?: string;
   GITHUB_APP_CLIENT_SECRET?: string;

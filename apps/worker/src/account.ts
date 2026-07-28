@@ -61,23 +61,15 @@ export const accountRoutes = new Hono<AppContext>()
     return c.json({ redirect: "/onboarding" });
   })
   .post("/api/account/world-id/request", requireAccount, async (c) => {
-    if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
+    const request = createWorldIdRequest(c.env, c.get("user").id);
+    if (!request) return c.json({ error: "World ID verification is unavailable." }, 503);
     c.header("cache-control", "no-store");
-    return c.json(createWorldIdRequest(c.env, c.get("user").id));
-  })
-  .post("/api/account/world-id/failure", requireAccount, async (c) => {
-    const body = await readJsonBody<{ code?: unknown }>(c);
-    const code = typeof body?.code === "string" && /^[a-z0-9_]{1,64}$/.test(body.code)
-      ? body.code
-      : "unknown";
-    console.warn(JSON.stringify({ event: "world_id_client_failed", code }));
-    return c.json({ ok: true });
+    return c.json(request);
   })
   .post("/api/account/world-id/verify", requireAccount, async (c) => {
-    if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
     const user = c.get("user");
     if (user.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
-    const rawProof = await c.req.text().catch(() => "");
+    const rawProof = await c.req.text();
     let nullifier: string;
     try {
       nullifier = await verifyWorldIdProof(c.env, user.id, rawProof);
@@ -89,26 +81,28 @@ export const accountRoutes = new Hono<AppContext>()
     }
 
     const now = Date.now();
-    try {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare(
-          `INSERT INTO world_id_nullifiers
-             (action, nullifier_decimal, user_id, verified_at)
-           SELECT ?, ?, ?, ?
-           WHERE EXISTS (
-             SELECT 1 FROM users WHERE id = ? AND verified_at IS NULL
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO world_id_nullifiers
+           (action, nullifier_decimal, user_id, verified_at)
+         SELECT ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM users WHERE id = ? AND verified_at IS NULL
+         )
+         ON CONFLICT(action, nullifier_decimal) DO NOTHING`,
+      ).bind(c.env.WORLD_ID_ACTION, nullifier, user.id, now, user.id),
+      c.env.DB.prepare(
+        `UPDATE users SET verified_at = ?, verification_method = 'world_id', updated_at = ?
+         WHERE id = ? AND verified_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM world_id_nullifiers
+             WHERE action = ? AND nullifier_decimal = ? AND user_id = ?
            )`,
-        ).bind(c.env.WORLD_ID_ACTION, nullifier, user.id, now, user.id),
-        c.env.DB.prepare(
-          `UPDATE users SET verified_at = ?, verification_method = 'world_id', updated_at = ?
-           WHERE id = ? AND verified_at IS NULL`,
-        ).bind(now, now, user.id),
-      ]) as Array<{ meta: { changes?: number } }>;
-      if (!results[0]?.meta.changes) {
-        return c.json({ redirect: await postLoginPath(c.env, user.id) });
-      }
-    } catch {
-      return c.json({ error: "This World ID has already verified an account." }, 409);
-    }
-    return c.json({ redirect: "/onboarding" });
+      ).bind(now, now, user.id, c.env.WORLD_ID_ACTION, nullifier, user.id),
+    ]) as Array<{ meta: { changes?: number } }>;
+    if (results[1]?.meta.changes) return c.json({ redirect: "/onboarding" });
+
+    const redirect = await postLoginPath(c.env, user.id);
+    if (redirect !== "/verify") return c.json({ redirect });
+    return c.json({ error: "This World ID has already verified an account." }, 409);
   });
