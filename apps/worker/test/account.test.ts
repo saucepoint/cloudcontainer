@@ -219,6 +219,36 @@ describe("account verification", () => {
     });
   });
 
+  it("maps a World ID verifier outage to a gateway error", async () => {
+    const { env } = makeEnv({
+      WORLD_ID_APP_ID: "app_test",
+      WORLD_ID_RP_ID: "rp_test",
+      WORLD_ID_ACTION: "verify-account",
+      WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
+    });
+    const user = await seedUser(env);
+    await env.DB.prepare("UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = ?")
+      .bind(user.id).run();
+    const { hashSignal } = await import("@worldcoin/idkit-core");
+    stubFetch((url) => url.pathname === "/api/v4/verify/rp_test"
+      ? Response.json({ success: false }, { status: 503 })
+      : null);
+
+    const response = await app().request(
+      "/api/account/world-id/verify",
+      json({
+        protocol_version: "4.0",
+        nonce: crypto.randomUUID(),
+        action: "verify-account",
+        responses: [{ signal_hash: hashSignal(user.id) }],
+      }, await createTestSession(env, user.id)),
+      env,
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ code: "verifier_http_503" });
+  });
+
   it("does not disguise database failures as reused World ID nullifiers", async () => {
     const { env } = makeEnv({
       WORLD_ID_APP_ID: "app_test",
