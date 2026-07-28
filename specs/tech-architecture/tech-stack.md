@@ -47,7 +47,7 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 ### Strong foundations
 
-- Build verification is green: 24 test files / 332 tests, all workspace type checks, lint, the browser build, and the release dry-run pass. Release approval is blocked by review-round-5 findings and three newly published inherited `sharp`/libvips audit findings.
+- Build verification is green: 24 test files / 345 tests, all workspace type checks, lint, the browser build, dependency audit, and the release dry-run pass.
 - No `any`, TypeScript suppression, TODO, FIXME, or HACK markers were found in production TypeScript.
 - Security-sensitive random values use Web Crypto, admin-secret comparison uses fixed-size hashes, and Worker observability is enabled.
 
@@ -62,6 +62,8 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 - The page stylesheet is isolated from the 46-line document layout module with byte-identical rendered CSS.
 - Wrangler type generation ignores local secret files, preventing workstation-specific stale binding names.
 - The production-dead `quarantinePort` helper and unnecessary internal exports/assertions were removed.
+- Better Auth exposes only Google, GitHub, and passkeys; Apple-specific UI, bindings, provider configuration, icons, and release claims are absent.
+- World ID accepts v4 Proof of Human proofs only, binds every response to the authenticated account, distinguishes verifier/storage failures from proof reuse, hides unavailable controls, and uses upstream SDK types without client telemetry or migration-era v3 branches.
 - Failure events use warning/error severity while successful drift correction and startup remain informational.
 - `@hono/node-server` is on patched v2, Wrangler/workerd and compatible minor dependencies are current, and the compatibility date is current.
 
@@ -74,5 +76,5 @@ Hono JSX renders the initial pages. Independent esbuild entry points progressive
 
 - `passkeys.ts`, `subscriptions.ts`, `jobs.ts`, and `reconciler.ts` exceed 300 lines, but each presents a small cohesive interface and substantial hidden behavior. Split only when a concrete forcing function appears; file length alone is not sufficient.
 - `CredentialInstaller` remains close to 300 lines because it owns validation and installation for several external credential formats. New formats should prompt extracting format-specific renderers behind its existing interface.
-- Oxlint is enforced locally, in CI, and by the release gate with warnings denied and `typescript/no-floating-promises` elevated to an error. Knip could not run in this ARM environment because its parser failed allocating its transfer buffer; `ts-prune`, reference search, typecheck, tests, and focused manual inspection were used instead.
+- Oxlint is enforced locally, in CI, and by the release gate with warnings denied and `typescript/no-floating-promises` elevated to an error. Knip cannot run in this ARM environment because its parser fails allocating its transfer buffer; `ts-prune`, Depcheck, reference search, typecheck, tests, and focused manual inspection are used instead.
 - Shell syntax validation is part of `npm run lint`; ShellCheck is not installed in the environment.
