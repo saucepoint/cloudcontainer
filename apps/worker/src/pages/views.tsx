@@ -1,10 +1,11 @@
-import type { FC } from "hono/jsx";
+import type { Child, FC } from "hono/jsx";
 import {
   AGENT_LABELS,
   AGENTS,
   type Agent,
   type LlmProvider,
 } from "@workbench/contract";
+import { ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
 const AGENT_DESCRIPTIONS: Record<Agent, string> = {
@@ -109,7 +110,8 @@ const SigninProvider: FC<{
   hint: string;
   button: string;
   connected: string;
-}> = ({ id, title, hint, button, connected }) => (
+  icon?: Child;
+}> = ({ id, title, hint, button, connected, icon }) => (
   <div class="provider">
     <div class="provider-head">
       <div>
@@ -117,7 +119,7 @@ const SigninProvider: FC<{
         <small>{hint}</small>
       </div>
       <button type="button" id={`${id}-signin`} class="btn secondary">
-        {button}
+        {icon}{button}
       </button>
       <span id={`${id}-connected`} class="ok" style="display:none" role="status" aria-live="polite">
         ✓ {connected}
@@ -139,7 +141,7 @@ const ApiKeyProvider: FC<{
     <div class="provider-head">
       <strong>{title}</strong>
       <a class="btn secondary" href={keyUrl} target="_blank" rel="noreferrer">
-        {linkLabel}
+        {linkLabel}<ExternalLinkIcon />
       </a>
     </div>
     <label for={id} class="sr-only">{title}</label>
@@ -207,6 +209,7 @@ export const OnboardingPage: FC<{
             hint="For OpenCode."
             button="Sign in with GitHub"
             connected="GitHub Copilot connected"
+            icon={<GitHubLogoIcon />}
           />
           <ApiKeyProvider
             id="llm-opencode-go"
@@ -255,7 +258,7 @@ export const OnboardingPage: FC<{
               class="btn secondary"
               href="/auth/github?return_to=/onboarding"
             >
-              Connect or update GitHub
+              <GitHubLogoIcon />Connect or update GitHub
             </a>
           </div>
           <p id="github-status" class="muted" role="status" aria-live="polite">

@@ -1,7 +1,9 @@
+import { EnterIcon, GitHubLogoIcon, LockClosedIcon } from "@radix-ui/react-icons";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { authClient } from "./auth-client.js";
 import { requestJson } from "./http.js";
+import { AppleIcon, GoogleIcon } from "./icons.js";
 
 type SocialProvider = "google" | "apple" | "github";
 
@@ -57,12 +59,12 @@ function LandingAuth(): React.JSX.Element {
 
   return (
     <div className="auth-provider-list">
-      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("google")}>Sign in with Google</button>
-      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("apple")}>Sign in with Apple</button>
-      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("github")}>Sign in with GitHub</button>
+      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("google")}><GoogleIcon />Sign in with Google</button>
+      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("apple")}><AppleIcon />Sign in with Apple</button>
+      <button className="btn auth-provider" type="button" disabled={pending !== null} onClick={() => void socialSignIn("github")}><GitHubLogoIcon aria-hidden="true" />Sign in with GitHub</button>
       <div className="auth-divider"><span>or use a passkey</span></div>
-      <button className="btn secondary auth-provider" type="button" disabled={pending !== null} onClick={() => void createPasskey()}>Create passkey</button>
-      <button className="btn secondary auth-provider" type="button" disabled={pending !== null} onClick={() => void usePasskey()}>Use passkey</button>
+      <button className="btn secondary auth-provider" type="button" disabled={pending !== null} onClick={() => void createPasskey()}><LockClosedIcon aria-hidden="true" />Create passkey</button>
+      <button className="btn secondary auth-provider" type="button" disabled={pending !== null} onClick={() => void usePasskey()}><EnterIcon aria-hidden="true" />Use passkey</button>
       <p className="muted auth-status" role="status" aria-live="polite">{status}</p>
     </div>
   );

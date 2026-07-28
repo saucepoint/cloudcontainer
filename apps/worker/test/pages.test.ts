@@ -72,6 +72,34 @@ describe("landing page call to action", () => {
   });
 });
 
+describe("sign-in button icons", () => {
+  it("pairs landing SSO buttons with Radix and brand icons", () => {
+    expect(landingClient).toContain('from "@radix-ui/react-icons"');
+    expect(landingClient).toContain("GitHubLogoIcon");
+    expect(landingClient).toContain("LockClosedIcon");
+    expect(landingClient).toContain("GoogleIcon");
+    expect(landingClient).toContain("AppleIcon");
+    expect(landingClient).toContain('from "./icons.js"');
+  });
+
+  it("inlines Radix icons into the GitHub onboarding actions", () => {
+    const html = String(OnboardingPage({ githubAvailable: true }));
+    const copilot = html.slice(
+      html.indexOf('id="copilot-signin"'),
+      html.indexOf('id="copilot-signin"') + 2000,
+    );
+    expect(copilot).toContain('viewBox="0 0 15 15"');
+    expect(copilot).toContain("Sign in with GitHub");
+    const connect = html.slice(
+      html.indexOf('id="github-connect"'),
+      html.indexOf('id="github-connect"') + 2000,
+    );
+    expect(connect).toContain('viewBox="0 0 15 15"');
+    expect(connect).toContain("Connect or update GitHub");
+    expect(html).toContain(".btn svg, .link-btn svg { width: 1em; height: 1em;");
+  });
+});
+
 describe("account eligibility verification", () => {
   it("offers World ID and invite verification before onboarding", () => {
     const html = String(VerificationPage({ worldIdAvailable: true }));
@@ -79,6 +107,13 @@ describe("account eligibility verification", () => {
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
+  });
+
+  it("surfaces World ID error codes and verifies completed proofs", () => {
+    expect(accountClient).toContain("World ID verification failed (${code})");
+    expect(accountClient).toContain("worldIdErrorMessage(completion.error)");
+    expect(accountClient).toContain("idKit.orbLegacy({ signal })");
+    expect(accountClient).toContain('postJson("/api/account/world-id/verify", completion.result)');
   });
 
   it("loads pinned IDKit assets externally instead of shipping WebAssembly", () => {

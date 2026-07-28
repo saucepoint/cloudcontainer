@@ -59,6 +59,7 @@ code, pre { font-family: var(--mono); }
   text-decoration: none; }
 .btn:hover, .link-btn:hover { background: var(--accent-soft); text-decoration: underline;
   text-underline-offset: 0.16em; }
+.btn svg, .link-btn svg { width: 1em; height: 1em; flex: 0 0 auto; }
 .btn.secondary, .btn.danger { border: 0; background: transparent; color: var(--accent); }
 .btn[data-active="true"] { background: var(--accent); color: #fff; }
 .btn[data-active="true"]:hover { background: #123f87; color: #fff; text-decoration: none; }
