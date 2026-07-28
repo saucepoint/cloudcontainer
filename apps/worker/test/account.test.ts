@@ -219,19 +219,15 @@ describe("account verification", () => {
     });
   });
 
-  it("records only a sanitized IDKit client failure code", async () => {
+  it("does not expose a client-failure telemetry route", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const response = await app().request(
       "/api/account/world-id/failure",
       json({ code: "invalid_rp_signature" }, await createTestSession(env, user.id)),
       env,
     );
-    expect(response.status).toBe(200);
-    expect(warn).toHaveBeenCalledWith(JSON.stringify({
-      event: "world_id_client_failed",
-      code: "invalid_rp_signature",
-    }));
+
+    expect(response.status).toBe(404);
   });
 });
