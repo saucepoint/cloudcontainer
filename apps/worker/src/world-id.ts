@@ -185,7 +185,14 @@ export async function verifyWorldIdProof(
   ) {
     const code = verifierCode(verified, response.status);
     console.warn(JSON.stringify({ event: "world_id_verifier_rejected", status: response.status, code }));
-    throw new WorldIdVerificationError("World ID could not verify this proof.", 400, code);
+    const upstreamFailure = !verified || response.status >= 500;
+    throw new WorldIdVerificationError(
+      upstreamFailure
+        ? "World ID verification is temporarily unavailable. Try again."
+        : "World ID could not verify this proof.",
+      upstreamFailure ? 502 : 400,
+      code,
+    );
   }
 
   const resultNullifier = verified.results
