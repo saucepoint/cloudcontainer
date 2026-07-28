@@ -1,4 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
+import type { IDKitNamespace, IDKitRequestConfig } from "@worldcoin/idkit-core";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { HttpError, postJson } from "./http.js";
@@ -6,49 +7,17 @@ import { HttpError, postJson } from "./http.js";
 const IDKIT_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.2/dist/idkit.global.js";
 const IDKIT_SCRIPT_INTEGRITY = "sha384-wtTjSVoogvsjcb8jv/IHW/gmWmkOhvCWFu6lUUqFX2jSOIWlCMczwjd0YtMy8+so";
 
-interface WorldIdRequest {
-  app_id: `app_${string}`;
-  action: string;
-  environment: "production" | "staging";
-  signal: string;
-  rp_context: {
-    rp_id: string;
-    nonce: string;
-    created_at: number;
-    expires_at: number;
-    signature: string;
-  };
-}
-
-type IDKitResult = Record<string, unknown>;
-
-interface IDKitInviteRequest {
-  connectorURI: string;
-  pollUntilCompletion(options: {
-    pollInterval: number;
-    timeout: number;
-    signal: AbortSignal;
-  }): Promise<{ success: true; result: IDKitResult } | { success: false; error: string }>;
-}
-
-interface IDKitBrowserSdk {
-  orbLegacy(options: { signal: string }): unknown;
-  requestWithInviteCode(config: Omit<WorldIdRequest, "signal"> & {
-    allow_legacy_proofs: boolean;
-  }): {
-    preset(value: unknown): Promise<IDKitInviteRequest>;
-  };
-}
+type WorldIdRequest = IDKitRequestConfig & { signal: string };
 
 declare global {
   interface Window {
-    IDKit?: IDKitBrowserSdk;
+    IDKit?: IDKitNamespace;
   }
 }
 
-let idKitScriptPromise: Promise<IDKitBrowserSdk> | undefined;
+let idKitScriptPromise: Promise<IDKitNamespace> | undefined;
 
-function loadIdKit(): Promise<IDKitBrowserSdk> {
+function loadIdKit(): Promise<IDKitNamespace> {
   if (window.IDKit) return Promise.resolve(window.IDKit);
   if (idKitScriptPromise) return idKitScriptPromise;
 
@@ -131,10 +100,8 @@ function AccountVerification(): React.JSX.Element {
         postJson<WorldIdRequest>("/api/account/world-id/request"),
         loadIdKit(),
       ]);
-      const request = await idKit.requestWithInviteCode({
-        ...config,
-        allow_legacy_proofs: true,
-      }).preset(idKit.orbLegacy({ signal }));
+      const request = await idKit.requestWithInviteCode(config)
+        .preset(idKit.proofOfHuman({ signal }));
       if (controller.signal.aborted) return;
 
       setWorldUrl(request.connectorURI);

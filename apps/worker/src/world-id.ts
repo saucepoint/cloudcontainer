@@ -1,3 +1,4 @@
+import type { IDKitRequestConfig } from "@worldcoin/idkit-core";
 import { hashSignal } from "@worldcoin/idkit-core/hashing";
 import { signRequest } from "@worldcoin/idkit-core/signing";
 import type { Bindings } from "./types.js";
@@ -27,19 +28,7 @@ interface WorldIdVerifyResponse {
   }>;
 }
 
-export interface WorldIdRequest {
-  app_id: `app_${string}`;
-  action: string;
-  environment: "production" | "staging";
-  signal: string;
-  rp_context: {
-    rp_id: `rp_${string}`;
-    nonce: string;
-    created_at: number;
-    expires_at: number;
-    signature: string;
-  };
-}
+type WorldIdRequest = IDKitRequestConfig & { signal: string };
 
 export class WorldIdVerificationError extends Error {
   constructor(
@@ -94,6 +83,7 @@ export function createWorldIdRequest(env: Bindings, signal: string): WorldIdRequ
     app_id: config.appId,
     action: config.action,
     environment: config.environment,
+    allow_legacy_proofs: true,
     signal,
     rp_context: {
       rp_id: config.rpId,
