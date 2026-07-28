@@ -56,16 +56,16 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("offers all five Better Auth entry points", () => {
+  it("offers Google, GitHub, and passkey entry points", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('id="landing-auth-root"');
     for (const label of [
       "Sign in with Google",
-      "Sign in with Apple",
       "Sign in with GitHub",
       "Create passkey",
       "Use passkey",
     ]) expect(landingClient).toContain(label);
+    expect(landingClient).not.toContain("Sign in with Apple");
     expect(landingClient).toContain("authClient.signIn.social");
     expect(landingClient).toContain("authClient.passkey.addPasskey");
     expect(landingClient).toContain("authClient.signIn.passkey");
@@ -78,7 +78,7 @@ describe("sign-in button icons", () => {
     expect(landingClient).toContain("GitHubLogoIcon");
     expect(landingClient).toContain("LockClosedIcon");
     expect(landingClient).toContain("GoogleIcon");
-    expect(landingClient).toContain("AppleIcon");
+    expect(landingClient).not.toContain("AppleIcon");
     expect(landingClient).toContain('from "./icons.js"');
   });
 
