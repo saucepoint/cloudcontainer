@@ -21,7 +21,6 @@
     "@better-auth/drizzle-adapter": "^1.6.25",
     "@better-auth/passkey": "^1.6.25",
     "@workbench/contract": "*",
-    "@worldcoin/idkit": "^4.2.1",
     "@worldcoin/idkit-core": "^4.2.2",
     "better-auth": "^1.6.25",
     "drizzle-orm": "^0.45.2",

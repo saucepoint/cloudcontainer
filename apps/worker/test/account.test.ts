@@ -27,7 +27,10 @@ async function issueInvite(env: Bindings): Promise<string> {
   return ((await response.json()) as { code: string }).code;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("account verification", () => {
   it("issues only signed, short-lived passkey registration contexts", async () => {
@@ -35,6 +38,38 @@ describe("account verification", () => {
     const response = await app().request("/account/passkey/context", {}, env);
     expect(response.status).toBe(200);
     expect(((await response.json()) as { context: string }).context).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  });
+
+  it("returns the canonical IDKit request shape from the configured signing key", async () => {
+    const { env } = makeEnv({
+      WORLD_ID_APP_ID: "app_test",
+      WORLD_ID_RP_ID: "rp_test",
+      WORLD_ID_ACTION: "verify-account",
+      WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
+    });
+    const user = await seedUser(env);
+    await env.DB.prepare("UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = ?")
+      .bind(user.id).run();
+
+    const response = await app().request(
+      "/api/account/world-id/request",
+      { method: "POST", headers: { cookie: await createTestSession(env, user.id) } },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      app_id: "app_test",
+      action: "verify-account",
+      environment: "production",
+      signal: user.id,
+      rp_context: {
+        rp_id: "rp_test",
+        nonce: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+        signature: expect.stringMatching(/^0x[0-9a-f]{130}$/),
+      },
+    });
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("redeems an invite for the authenticated account without making the invite a login credential", async () => {
@@ -84,19 +119,26 @@ describe("account verification", () => {
       action: "verify-account",
       responses: [{ signal_hash: hashSignal(user.id) }],
     };
-    const fetchMock = stubFetch((url) => url.pathname === "/api/v4/verify/rp_test"
-      ? Response.json({
+    const rawProof = JSON.stringify(proof);
+    const forwardedProofs: string[] = [];
+    const verifierUserAgents: Array<string | null> = [];
+    const fetchMock = stubFetch((url, init) => {
+      if (url.pathname !== "/api/v4/verify/rp_test") return null;
+      forwardedProofs.push(String(init.body));
+      verifierUserAgents.push(new Headers(init.headers).get("user-agent"));
+      return Response.json({
         success: true,
-        action: "verify-account",
         results: [{ success: true, nullifier: "0x01" }],
-      })
-      : null);
+      });
+    });
     const response = await app().request(
       "/api/account/world-id/verify",
-      json({ proof }, cookie),
+      json(proof, cookie),
       env,
     );
     expect(response.status).toBe(200);
+    expect(forwardedProofs[0]).toBe(rawProof);
+    expect(verifierUserAgents).toEqual(["usebench.dev/1.0"]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(await env.DB.prepare("SELECT nullifier_decimal, user_id FROM world_id_nullifiers").first())
       .toEqual({ nullifier_decimal: "1", user_id: user.id });
@@ -107,10 +149,8 @@ describe("account verification", () => {
     const reused = await app().request(
       "/api/account/world-id/verify",
       json({
-        proof: {
-          ...proof,
-          responses: [{ signal_hash: hashSignal(second.id) }],
-        },
+        ...proof,
+        responses: [{ signal_hash: hashSignal(second.id) }],
       }, await createTestSession(env, second.id)),
       env,
     );
@@ -133,14 +173,64 @@ describe("account verification", () => {
     const response = await app().request(
       "/api/account/world-id/verify",
       json({
-        proof: {
-          action: "verify-account",
-          responses: [{ signal_hash: "0x0" }],
-        },
+        protocol_version: "4.0",
+        action: "verify-account",
+        environment: "production",
+        responses: [{ signal_hash: "0x0" }],
       }, await createTestSession(env, user.id)),
       env,
     );
     expect(response.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a status-specific code when the verifier rejects without one", async () => {
+    const { env } = makeEnv({
+      WORLD_ID_APP_ID: "app_test",
+      WORLD_ID_RP_ID: "rp_test",
+      WORLD_ID_ACTION: "verify-account",
+      WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
+    });
+    const user = await seedUser(env);
+    await env.DB.prepare("UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = ?")
+      .bind(user.id).run();
+    const { hashSignal } = await import("@worldcoin/idkit-core");
+    stubFetch((url) => url.pathname === "/api/v4/verify/rp_test"
+      ? Response.json({ success: false, detail: "rejected" }, { status: 400 })
+      : null);
+
+    const response = await app().request(
+      "/api/account/world-id/verify",
+      json({
+        protocol_version: "4.0",
+        nonce: crypto.randomUUID(),
+        action: "verify-account",
+        environment: "production",
+        responses: [{ signal_hash: hashSignal(user.id) }],
+      }, await createTestSession(env, user.id)),
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "World ID could not verify this proof.",
+      code: "verifier_http_400",
+    });
+  });
+
+  it("records only a sanitized IDKit client failure code", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const response = await app().request(
+      "/api/account/world-id/failure",
+      json({ code: "invalid_rp_signature" }, await createTestSession(env, user.id)),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(warn).toHaveBeenCalledWith(JSON.stringify({
+      event: "world_id_client_failed",
+      code: "invalid_rp_signature",
+    }));
   });
 });

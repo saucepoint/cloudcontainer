@@ -29,12 +29,15 @@ describe("browser JSON transport", () => {
     await expect(requestJson<{ ok: boolean }>("/api/example")).resolves.toEqual({ ok: true });
   });
 
-  it("preserves an API error message and HTTP status", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "sign in" }, { status: 401 })));
+  it("preserves an API error message, status, and safe machine code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: "sign in",
+      code: "session_expired",
+    }, { status: 401 })));
 
     const error = await requestJson("/api/example").catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HttpError);
-    expect(error).toMatchObject({ message: "sign in", status: 401 });
+    expect(error).toMatchObject({ message: "sign in", status: 401, code: "session_expired" });
   });
 
   it("uses the caller fallback when an error response is not JSON", async () => {

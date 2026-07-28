@@ -2,6 +2,7 @@ export class HttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "HttpError";
@@ -18,6 +19,12 @@ function responseError(value: unknown): string | null {
   return isRecord(value) && typeof value.error === "string" ? value.error : null;
 }
 
+function responseCode(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.code === "string" && /^[a-z0-9_]{1,64}$/.test(value.code)
+    ? value.code
+    : undefined;
+}
+
 export async function requestJson<T>(
   path: string,
   init?: RequestInit,
@@ -27,7 +34,7 @@ export async function requestJson<T>(
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const fallbackMessage = typeof fallback === "function" ? fallback(response.status) : fallback;
-    throw new HttpError(responseError(payload) ?? fallbackMessage, response.status);
+    throw new HttpError(responseError(payload) ?? fallbackMessage, response.status, responseCode(payload));
   }
   return payload as T;
 }

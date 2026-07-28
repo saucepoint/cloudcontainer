@@ -1,35 +1,170 @@
-import { IDKitRequestWidget, proofOfHuman, type IDKitResult, type RpContext } from "@worldcoin/idkit";
+import { Dialog } from "@base-ui/react/dialog";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { postJson } from "./http.js";
+import { HttpError, postJson } from "./http.js";
+
+const IDKIT_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.2/dist/idkit.global.js";
+const IDKIT_SCRIPT_INTEGRITY = "sha384-wtTjSVoogvsjcb8jv/IHW/gmWmkOhvCWFu6lUUqFX2jSOIWlCMczwjd0YtMy8+so";
 
 interface WorldIdRequest {
-  appId: `app_${string}`;
+  app_id: `app_${string}`;
   action: string;
   environment: "production" | "staging";
   signal: string;
-  rpContext: RpContext;
+  rp_context: {
+    rp_id: string;
+    nonce: string;
+    created_at: number;
+    expires_at: number;
+    signature: string;
+  };
+}
+
+type IDKitResult = Record<string, unknown>;
+
+interface IDKitInviteRequest {
+  connectorURI: string;
+  pollUntilCompletion(options: {
+    pollInterval: number;
+    timeout: number;
+    signal: AbortSignal;
+  }): Promise<{ success: true; result: IDKitResult } | { success: false; error: string }>;
+}
+
+interface IDKitBrowserSdk {
+  orbLegacy(options: { signal: string }): unknown;
+  requestWithInviteCode(config: Omit<WorldIdRequest, "signal"> & {
+    allow_legacy_proofs: boolean;
+  }): {
+    preset(value: unknown): Promise<IDKitInviteRequest>;
+  };
+}
+
+declare global {
+  interface Window {
+    IDKit?: IDKitBrowserSdk;
+  }
+}
+
+let idKitScriptPromise: Promise<IDKitBrowserSdk> | undefined;
+
+function loadIdKit(): Promise<IDKitBrowserSdk> {
+  if (window.IDKit) return Promise.resolve(window.IDKit);
+  if (idKitScriptPromise) return idKitScriptPromise;
+
+  idKitScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = IDKIT_SCRIPT_URL;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.integrity = IDKIT_SCRIPT_INTEGRITY;
+    script.addEventListener("load", () => {
+      if (window.IDKit) resolve(window.IDKit);
+      else reject(new Error("World ID SDK did not initialize (sdk_init_failed)."));
+    }, { once: true });
+    script.addEventListener("error", () => {
+      idKitScriptPromise = undefined;
+      reject(new Error("World ID SDK could not be loaded (sdk_load_failed)."));
+    }, { once: true });
+    document.head.append(script);
+  });
+
+  return idKitScriptPromise;
+}
+
+function worldIdErrorMessage(code: string): string {
+  switch (code) {
+    case "credential_unavailable":
+    case "world_id_4_not_available":
+    case "world_id_3_not_available":
+      return `This World ID does not have the required Proof of Human credential (${code}).`;
+    case "max_verifications_reached":
+    case "nullifier_replayed":
+      return `This World ID has already been used for this verification (${code}).`;
+    case "connection_failed":
+    case "timeout":
+      return `World ID could not complete the connection. Try again (${code}).`;
+    case "user_rejected":
+    case "verification_rejected":
+    case "cancelled":
+      return `World ID verification was cancelled (${code}).`;
+    default:
+      return `World ID verification failed (${code}). Refresh the page and try again.`;
+  }
+}
+
+function worldIdServerError(error: unknown): string {
+  if (error instanceof HttpError && error.code) return `${error.message} (${error.code})`;
+  return error instanceof Error ? error.message : "World ID is unavailable (unexpected_error).";
 }
 
 function AccountVerification(): React.JSX.Element {
-  const [worldRequest, setWorldRequest] = React.useState<WorldIdRequest | null>(null);
-  const [worldOpen, setWorldOpen] = React.useState(false);
+  const [worldUrl, setWorldUrl] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [code, setCode] = React.useState("");
+  const worldAttempt = React.useRef<AbortController | null>(null);
+
+  const reportWorldIdFailure = (errorCode: string): void => {
+    void postJson("/api/account/world-id/failure", { code: errorCode }).catch(() => undefined);
+  };
+
+  const cancelWorldId = (): void => {
+    worldAttempt.current?.abort();
+    worldAttempt.current = null;
+    setWorldUrl("");
+    setPending(false);
+    setStatus("World ID verification was cancelled (cancelled).");
+  };
+
+  React.useEffect(() => () => worldAttempt.current?.abort(), []);
 
   const startWorldId = async (): Promise<void> => {
+    worldAttempt.current?.abort();
+    const controller = new AbortController();
+    worldAttempt.current = controller;
+    setWorldUrl("");
     setPending(true);
     setStatus("Preparing World ID…");
     try {
-      const request = await postJson<WorldIdRequest>("/api/account/world-id/request");
-      setWorldRequest(request);
-      setWorldOpen(true);
-      setStatus("");
+      const [{ signal, ...config }, idKit] = await Promise.all([
+        postJson<WorldIdRequest>("/api/account/world-id/request"),
+        loadIdKit(),
+      ]);
+      const request = await idKit.requestWithInviteCode({
+        ...config,
+        allow_legacy_proofs: true,
+      }).preset(idKit.orbLegacy({ signal }));
+      if (controller.signal.aborted) return;
+
+      setWorldUrl(request.connectorURI);
+      setStatus("Open World ID and approve the request. This page will update automatically.");
+      const completion = await request.pollUntilCompletion({
+        pollInterval: 1_000,
+        timeout: 15 * 60_000,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (!completion.success) {
+        reportWorldIdFailure(completion.error);
+        setWorldUrl("");
+        setStatus(worldIdErrorMessage(completion.error));
+        return;
+      }
+
+      setStatus("Confirming World ID proof…");
+      await postJson("/api/account/world-id/verify", completion.result);
+      window.location.assign("/account/continue");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "World ID is unavailable.");
+      if (!controller.signal.aborted) {
+        setWorldUrl("");
+        setStatus(worldIdServerError(error));
+      }
     } finally {
-      setPending(false);
+      if (worldAttempt.current === controller) {
+        worldAttempt.current = null;
+        setPending(false);
+      }
     }
   };
 
@@ -57,7 +192,7 @@ function AccountVerification(): React.JSX.Element {
       <section className="card verification-option" aria-labelledby="world-id-heading">
         <h2 id="world-id-heading">Verify with World ID</h2>
         <p>Prove you are a unique person without sharing your identity.</p>
-        <button className="btn" type="button" disabled={pending} onClick={() => void startWorldId()}>Continue with World ID →</button>
+        <button className="btn" type="button" disabled={pending || Boolean(worldUrl)} onClick={() => void startWorldId()}>Continue with World ID →</button>
       </section>
       <section className="card verification-option" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Use an invite code</h2>
@@ -68,21 +203,23 @@ function AccountVerification(): React.JSX.Element {
         </form>
       </section>
       <p className="muted verification-status" role="status" aria-live="polite">{status}</p>
-      {worldRequest ? (
-        <IDKitRequestWidget
-          open={worldOpen}
-          onOpenChange={setWorldOpen}
-          app_id={worldRequest.appId}
-          action={worldRequest.action}
-          environment={worldRequest.environment}
-          rp_context={worldRequest.rpContext}
-          allow_legacy_proofs
-          preset={proofOfHuman({ signal: worldRequest.signal })}
-          handleVerify={async (proof: IDKitResult) => { await postJson("/api/account/world-id/verify", { proof }); }}
-          onSuccess={() => window.location.assign("/account/continue")}
-          onError={() => setStatus("World ID verification was not completed.")}
-        />
-      ) : null}
+      <Dialog.Root open={Boolean(worldUrl)} onOpenChange={(open) => { if (!open) cancelWorldId(); }}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="dialog-backdrop" />
+          <Dialog.Viewport className="dialog-viewport">
+            <Dialog.Popup className="dialog-popup">
+              <Dialog.Title className="dialog-title">Continue with World ID</Dialog.Title>
+              <Dialog.Description className="dialog-description">
+                Open the secure World verification page, then follow its instructions in World App.
+              </Dialog.Description>
+              <div className="dialog-actions">
+                <Dialog.Close className="btn secondary">Cancel</Dialog.Close>
+                <a className="btn" href={worldUrl} rel="noopener noreferrer" target="_blank">Open World ID →</a>
+              </div>
+            </Dialog.Popup>
+          </Dialog.Viewport>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }

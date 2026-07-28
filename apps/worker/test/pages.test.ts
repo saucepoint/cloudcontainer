@@ -12,6 +12,7 @@ function inlineScriptsOf(html: string): string[] {
 }
 
 const landingClient = readFileSync(new URL("../client/landing.tsx", import.meta.url), "utf8");
+const accountClient = readFileSync(new URL("../client/account.tsx", import.meta.url), "utf8");
 const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
 const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
@@ -78,6 +79,12 @@ describe("account eligibility verification", () => {
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
+  });
+
+  it("loads pinned IDKit assets externally instead of shipping WebAssembly", () => {
+    expect(accountClient).toContain("cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.2");
+    expect(accountClient).toContain("IDKIT_SCRIPT_INTEGRITY");
+    expect(accountClient).not.toContain('from "@worldcoin/idkit"');
   });
 });
 

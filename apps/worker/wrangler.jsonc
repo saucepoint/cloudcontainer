@@ -43,8 +43,8 @@
     "AUTH_APPLE_CLIENT_ID": "",
     "AUTH_GITHUB_CLIENT_ID": "Ov23liuitknuTQX0id1m",
     // World ID 4.0 relying-party configuration from the Developer Portal.
-    "WORLD_ID_APP_ID": "",
-    "WORLD_ID_RP_ID": "",
+    "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
+    "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
     "WORLD_ID_ACTION": "verify-account",
     "WORLD_ID_ENVIRONMENT": "production"
   }

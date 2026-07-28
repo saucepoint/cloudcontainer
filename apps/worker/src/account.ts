@@ -1,4 +1,3 @@
-import { hashSignal, signRequest } from "@worldcoin/idkit-core";
 import { Hono } from "hono";
 import { requireAccount, postLoginPath } from "./auth.js";
 import { issuePasskeyRegistrationContext } from "./better-auth.js";
@@ -6,47 +5,12 @@ import { readJsonBody } from "./http.js";
 import { hashInviteCode, normalizeInviteCode } from "./invites.js";
 import { VerificationPage } from "./pages/views.js";
 import type { AppContext } from "./types.js";
-
-interface WorldIdVerifyResponse {
-  success?: unknown;
-  action?: unknown;
-  results?: Array<{
-    success?: unknown;
-    nullifier?: unknown;
-  }>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function worldIdConfigured(env: AppContext["Bindings"]): boolean {
-  return Boolean(
-    env.WORLD_ID_APP_ID
-    && env.WORLD_ID_RP_ID
-    && env.WORLD_ID_ACTION
-    && env.WORLD_ID_SIGNING_KEY,
-  );
-}
-
-function worldIdSignalMatches(proof: Record<string, unknown>, userId: string): boolean {
-  if (!Array.isArray(proof.responses) || proof.responses.length === 0) return false;
-  const expected = hashSignal(userId).toLowerCase();
-  return proof.responses.every((response) =>
-    isRecord(response)
-    && typeof response.signal_hash === "string"
-    && response.signal_hash.toLowerCase() === expected,
-  );
-}
-
-function nullifierDecimal(value: string): string | null {
-  if (!/^0x[0-9a-f]{1,64}$/i.test(value)) return null;
-  try {
-    return BigInt(value).toString(10);
-  } catch {
-    return null;
-  }
-}
+import {
+  createWorldIdRequest,
+  verifyWorldIdProof,
+  worldIdConfigured,
+  WorldIdVerificationError,
+} from "./world-id.js";
 
 export const accountRoutes = new Hono<AppContext>()
   .get("/account/passkey/context", async (c) => {
@@ -98,62 +62,31 @@ export const accountRoutes = new Hono<AppContext>()
   })
   .post("/api/account/world-id/request", requireAccount, async (c) => {
     if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
-    const signed = signRequest({
-      signingKeyHex: c.env.WORLD_ID_SIGNING_KEY!,
-      action: c.env.WORLD_ID_ACTION!,
-    });
     c.header("cache-control", "no-store");
-    return c.json({
-      appId: c.env.WORLD_ID_APP_ID,
-      action: c.env.WORLD_ID_ACTION,
-      environment: c.env.WORLD_ID_ENVIRONMENT === "staging" ? "staging" : "production",
-      signal: c.get("user").id,
-      rpContext: {
-        rp_id: c.env.WORLD_ID_RP_ID,
-        nonce: signed.nonce,
-        created_at: signed.createdAt,
-        expires_at: signed.expiresAt,
-        signature: signed.sig,
-      },
-    });
+    return c.json(createWorldIdRequest(c.env, c.get("user").id));
+  })
+  .post("/api/account/world-id/failure", requireAccount, async (c) => {
+    const body = await readJsonBody<{ code?: unknown }>(c);
+    const code = typeof body?.code === "string" && /^[a-z0-9_]{1,64}$/.test(body.code)
+      ? body.code
+      : "unknown";
+    console.warn(JSON.stringify({ event: "world_id_client_failed", code }));
+    return c.json({ ok: true });
   })
   .post("/api/account/world-id/verify", requireAccount, async (c) => {
     if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
     const user = c.get("user");
     if (user.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
-    const body = await readJsonBody<{ proof?: unknown }>(c);
-    if (!body || !isRecord(body.proof)) return c.json({ error: "World ID proof is missing." }, 400);
-    if (body.proof.action !== c.env.WORLD_ID_ACTION || !worldIdSignalMatches(body.proof, user.id)) {
-      return c.json({ error: "World ID proof does not match this account." }, 400);
-    }
-
-    let response: Response;
+    const rawProof = await c.req.text().catch(() => "");
+    let nullifier: string;
     try {
-      response = await fetch(
-        `https://developer.world.org/api/v4/verify/${encodeURIComponent(c.env.WORLD_ID_RP_ID!)}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body.proof),
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-    } catch {
-      return c.json({ error: "World ID verification could not be reached. Try again." }, 502);
+      nullifier = await verifyWorldIdProof(c.env, user.id, rawProof);
+    } catch (error) {
+      if (error instanceof WorldIdVerificationError) {
+        return c.json({ error: error.message, code: error.code }, error.status);
+      }
+      throw error;
     }
-    const verified = await response.json().catch(() => null) as WorldIdVerifyResponse | null;
-    if (
-      !response.ok
-      || verified?.success !== true
-      || (typeof verified.action === "string" && verified.action !== c.env.WORLD_ID_ACTION)
-    ) {
-      return c.json({ error: "World ID could not verify this proof." }, 400);
-    }
-    const nullifier = verified.results
-      ?.filter((result) => result.success === true && typeof result.nullifier === "string")
-      .map((result) => nullifierDecimal(result.nullifier as string))
-      .find((value): value is string => value !== null);
-    if (!nullifier) return c.json({ error: "World ID returned no uniqueness proof." }, 400);
 
     const now = Date.now();
     try {
