@@ -104,7 +104,6 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     GITHUB_APP_CLIENT_ID: "",
     GITHUB_APP_SLUG: "",
     AUTH_GOOGLE_CLIENT_ID: "",
-    AUTH_APPLE_CLIENT_ID: "",
     AUTH_GITHUB_CLIENT_ID: "",
     WORLD_ID_APP_ID: "",
     WORLD_ID_RP_ID: "",
