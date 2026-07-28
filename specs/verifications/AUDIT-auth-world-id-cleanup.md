@@ -4,7 +4,7 @@
 
 ## Churn-first review
 
-Highest-churn changed files were reviewed first: `pages.test.ts`, `views.tsx`, `README.md`, `SPEC.md`, `wrangler.jsonc`, and the auth modules. The final change is 57 net lines smaller than `main` before verification artifacts.
+Highest-churn changed files were reviewed first: `pages.test.ts`, `views.tsx`, `README.md`, `SPEC.md`, `wrangler.jsonc`, and the auth modules. Production TypeScript is 60 net lines smaller than `main`.
 
 ## Checklist
 
