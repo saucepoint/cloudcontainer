@@ -143,9 +143,9 @@ After authentication, the control plane applies this routing contract:
 - a verified user with a configured workbench goes to `/dashboard`.
 
 The verification screen offers World ID Proof of Human and a single-use
-administrator invite. World ID 4.0 requests are signed by the Worker, bind the
-proof signal to the authenticated internal user ID, and are verified through
-the Developer Portal. The verified nullifier is stored permanently so the same
+administrator invite. World ID 4.0-only requests are signed by the Worker, bind
+the proof signal to the authenticated internal user ID, and are verified
+through the Developer Portal. The verified nullifier is stored permanently so the same
 person cannot verify another account. An invite is also verification evidence,
 not an authentication credential: the account must already have a valid Better
 Auth session before redeeming it. Unverified sessions cannot access onboarding,
@@ -288,10 +288,11 @@ usable with keyboard alone. Specifically:
 - The raw code is returned once to the administrator script and is never logged.
 - Invite redemption and the user's `verified_at` update execute in one D1 batch.
   A unique code hash and unique user link prevent concurrent or repeated use.
-- World ID uses an RP signing key held only by the Worker. The Worker checks the
-  configured action and the user-bound signal hash before forwarding a proof to
-  `POST /api/v4/verify/{rp_id}`. It persists the returned 256-bit nullifier as a
-  canonical decimal string with a unique `(action, nullifier)` key.
+- World ID uses an RP signing key held only by the Worker. The Worker rejects
+  legacy v3 proofs, then checks the configured action and the user-bound signal
+  hash before forwarding a proof to `POST /api/v4/verify/{rp_id}`. It persists
+  the returned 256-bit nullifier as a canonical decimal string with a unique
+  `(action, nullifier)` key.
 - World ID nullifiers and invite redemptions remain after account deletion, with
   their former user link cleared, so eligibility evidence cannot be recycled.
 
@@ -684,8 +685,8 @@ Current automated coverage includes:
 - all four landing-page account options, passkey-first signed contexts, backup
   passkey attachment, and Better Auth schema migration;
 - admin-secret invite generation, HMAC-only invite storage, authenticated
-  one-time redemption races, World ID user-signal binding, remote verification,
-  and permanent nullifier uniqueness;
+  one-time redemption races, v4-only World ID user-signal binding, remote
+  verification, and permanent nullifier uniqueness;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
   and reconciler logic;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
