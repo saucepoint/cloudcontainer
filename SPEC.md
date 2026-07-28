@@ -19,7 +19,7 @@ with the tools and coding agents needed for agentic development already
 installed. A beginner should be able to go from sign-in to provisioning after
 only two product decisions after authentication:
 
-1. sign in with Google, Apple, GitHub, or a passkey, then verify a new account
+1. sign in with Google, GitHub, or a passkey, then verify a new account
    with World ID or an administrator invite; and
 2. choose one or more coding agents.
 
@@ -80,7 +80,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Current release
 
-- Better Auth account management with Google, Apple, GitHub, and passkey sign-in.
+- Better Auth account management with Google, GitHub, and passkey sign-in.
 - World ID proof-of-human or single-use administrator-invite eligibility verification.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
@@ -129,8 +129,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### 4.1 Sign in and verify
 
-The landing page presents five account entry points: Sign in with Google, Sign
-in with Apple, Sign in with GitHub, Create passkey, and Use passkey. Better Auth
+The landing page presents four account entry points: Sign in with Google, Sign
+in with GitHub, Create passkey, and Use passkey. Better Auth
 owns provider callbacks, account linking, passkey ceremonies, and application
 sessions. Passkey-first registration uses a server-signed, ten-minute opaque
 context; it never accepts a caller-chosen user ID. Passkeys are discoverable and
@@ -265,8 +265,8 @@ usable with keyboard alone. Specifically:
 
 - Better Auth is mounted at `/api/auth/*` and is the only production owner of
   social OAuth identities, passkey records, and application sessions.
-- Google, Apple, and GitHub OAuth client IDs are public Worker variables; their
-  client secrets and `BETTER_AUTH_SECRET` are Worker secrets.
+- Google and GitHub OAuth client IDs are public Worker variables; their client
+  secrets and `BETTER_AUTH_SECRET` are Worker secrets.
 - OAuth provider tokens are encrypted by Better Auth before D1 persistence.
 - Passkey credential IDs are unique. D1 stores the public key, monotonic
   counter, transports, device type, backup state, AAGUID, and non-secret
@@ -681,7 +681,7 @@ Current automated coverage includes:
 
 - shared schema, signing, replay-window, encryption, sealing, and tamper tests;
 - gated development login, Better Auth D1 sessions, logout, and eligibility routing;
-- all five landing-page account options, passkey-first signed contexts, backup
+- all four landing-page account options, passkey-first signed contexts, backup
   passkey attachment, and Better Auth schema migration;
 - admin-secret invite generation, HMAC-only invite storage, authenticated
   one-time redemption races, World ID user-signal binding, remote verification,
@@ -700,7 +700,7 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. Google, Apple, and GitHub sign-in callbacks in the production provider apps;
+1. Google and GitHub sign-in callbacks in the production provider apps;
 2. passkey-first registration, subsequent passkey sign-in, and backup passkey attachment;
 3. World ID verification, invite verification, attempted nullifier/invite reuse,
    and the all-optional-onboarding-fields-skipped path;
