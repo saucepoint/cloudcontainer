@@ -62,6 +62,7 @@ describe("account verification", () => {
       app_id: "app_test",
       action: "verify-account",
       environment: "production",
+      allow_legacy_proofs: true,
       signal: user.id,
       rp_context: {
         rp_id: "rp_test",

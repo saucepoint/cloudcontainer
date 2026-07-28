@@ -109,10 +109,11 @@ describe("account eligibility verification", () => {
     expect(html).toContain("invite");
   });
 
-  it("surfaces World ID error codes and verifies completed proofs", () => {
+  it("requests current Proof of Human credentials with legacy fallback", () => {
     expect(accountClient).toContain("World ID verification failed (${code})");
     expect(accountClient).toContain("worldIdErrorMessage(completion.error)");
-    expect(accountClient).toContain("idKit.orbLegacy({ signal })");
+    expect(accountClient).toContain("idKit.proofOfHuman({ signal })");
+    expect(accountClient).not.toContain("orbLegacy");
     expect(accountClient).toContain('postJson("/api/account/world-id/verify", completion.result)');
   });
 
