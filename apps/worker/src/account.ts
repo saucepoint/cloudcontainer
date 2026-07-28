@@ -81,26 +81,35 @@ export const accountRoutes = new Hono<AppContext>()
     }
 
     const now = Date.now();
-    try {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare(
-          `INSERT INTO world_id_nullifiers
-             (action, nullifier_decimal, user_id, verified_at)
-           SELECT ?, ?, ?, ?
-           WHERE EXISTS (
-             SELECT 1 FROM users WHERE id = ? AND verified_at IS NULL
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO world_id_nullifiers
+           (action, nullifier_decimal, user_id, verified_at)
+         SELECT ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM users WHERE id = ? AND verified_at IS NULL
+         )
+         ON CONFLICT(action, nullifier_decimal) DO NOTHING`,
+      ).bind(c.env.WORLD_ID_ACTION, nullifier, user.id, now, user.id),
+      c.env.DB.prepare(
+        `UPDATE users SET verified_at = ?, verification_method = 'world_id', updated_at = ?
+         WHERE id = ? AND verified_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM world_id_nullifiers
+             WHERE action = ? AND nullifier_decimal = ? AND user_id = ?
            )`,
-        ).bind(c.env.WORLD_ID_ACTION, nullifier, user.id, now, user.id),
-        c.env.DB.prepare(
-          `UPDATE users SET verified_at = ?, verification_method = 'world_id', updated_at = ?
-           WHERE id = ? AND verified_at IS NULL`,
-        ).bind(now, now, user.id),
-      ]) as Array<{ meta: { changes?: number } }>;
-      if (!results[0]?.meta.changes) {
-        return c.json({ redirect: await postLoginPath(c.env, user.id) });
-      }
-    } catch {
-      return c.json({ error: "This World ID has already verified an account." }, 409);
-    }
-    return c.json({ redirect: "/onboarding" });
+      ).bind(
+        now,
+        now,
+        user.id,
+        c.env.WORLD_ID_ACTION,
+        nullifier,
+        user.id,
+      ),
+    ]) as Array<{ meta: { changes?: number } }>;
+    if (results[1]?.meta.changes) return c.json({ redirect: "/onboarding" });
+
+    const redirect = await postLoginPath(c.env, user.id);
+    if (redirect !== "/verify") return c.json({ redirect });
+    return c.json({ error: "This World ID has already verified an account." }, 409);
   });
