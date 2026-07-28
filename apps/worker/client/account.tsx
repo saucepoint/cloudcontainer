@@ -67,7 +67,7 @@ function worldIdServerError(error: unknown): string {
   return error instanceof Error ? error.message : "World ID is unavailable (unexpected_error).";
 }
 
-function AccountVerification(): React.JSX.Element {
+function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }): React.JSX.Element {
   const [worldUrl, setWorldUrl] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [status, setStatus] = React.useState("");
@@ -156,11 +156,13 @@ function AccountVerification(): React.JSX.Element {
 
   return (
     <>
-      <section className="card verification-option" aria-labelledby="world-id-heading">
-        <h2 id="world-id-heading">Verify with World ID</h2>
-        <p>Prove you are a unique person without sharing your identity.</p>
-        <button className="btn" type="button" disabled={pending || Boolean(worldUrl)} onClick={() => void startWorldId()}>Continue with World ID →</button>
-      </section>
+      {worldIdAvailable ? (
+        <section className="card verification-option" aria-labelledby="world-id-heading">
+          <h2 id="world-id-heading">Verify with World ID</h2>
+          <p>Prove you are a unique person without sharing your identity.</p>
+          <button className="btn" type="button" disabled={pending} onClick={() => void startWorldId()}>Continue with World ID →</button>
+        </section>
+      ) : null}
       <section className="card verification-option" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Use an invite code</h2>
         <p>Enter a single-use invite from the usebench.dev administrator.</p>
@@ -170,26 +172,31 @@ function AccountVerification(): React.JSX.Element {
         </form>
       </section>
       <p className="muted verification-status" role="status" aria-live="polite">{status}</p>
-      <Dialog.Root open={Boolean(worldUrl)} onOpenChange={(open) => { if (!open) cancelWorldId(); }}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="dialog-backdrop" />
-          <Dialog.Viewport className="dialog-viewport">
-            <Dialog.Popup className="dialog-popup">
-              <Dialog.Title className="dialog-title">Continue with World ID</Dialog.Title>
-              <Dialog.Description className="dialog-description">
-                Open the secure World verification page, then follow its instructions in World App.
-              </Dialog.Description>
-              <div className="dialog-actions">
-                <Dialog.Close className="btn secondary">Cancel</Dialog.Close>
-                <a className="btn" href={worldUrl} rel="noopener noreferrer" target="_blank">Open World ID →</a>
-              </div>
-            </Dialog.Popup>
-          </Dialog.Viewport>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {worldIdAvailable ? (
+        <Dialog.Root open={Boolean(worldUrl)} onOpenChange={(open) => { if (!open) cancelWorldId(); }}>
+          <Dialog.Portal>
+            <Dialog.Backdrop className="dialog-backdrop" />
+            <Dialog.Viewport className="dialog-viewport">
+              <Dialog.Popup className="dialog-popup">
+                <Dialog.Title className="dialog-title">Continue with World ID</Dialog.Title>
+                <Dialog.Description className="dialog-description">
+                  Open the secure World verification page, then follow its instructions in World App.
+                </Dialog.Description>
+                <div className="dialog-actions">
+                  <Dialog.Close className="btn secondary">Cancel</Dialog.Close>
+                  <a className="btn" href={worldUrl} rel="noopener noreferrer" target="_blank">Open World ID →</a>
+                </div>
+              </Dialog.Popup>
+            </Dialog.Viewport>
+          </Dialog.Portal>
+        </Dialog.Root>
+      ) : null}
     </>
   );
 }
 
 const root = document.getElementById("account-verification-root");
-if (root) createRoot(root).render(<AccountVerification />);
+if (root) {
+  const worldIdAvailable = root.dataset.worldIdAvailable === "true";
+  createRoot(root).render(<AccountVerification worldIdAvailable={worldIdAvailable} />);
+}
