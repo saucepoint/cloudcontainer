@@ -161,8 +161,6 @@ export function createAuth(env: Bindings, requestUrl = env.BASE_URL) {
   });
 }
 
-export type Auth = ReturnType<typeof createAuth>;
-
 export async function signedSessionCookie(
   env: Bindings,
   token: string,

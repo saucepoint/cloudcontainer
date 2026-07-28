@@ -61,15 +61,15 @@ export const accountRoutes = new Hono<AppContext>()
     return c.json({ redirect: "/onboarding" });
   })
   .post("/api/account/world-id/request", requireAccount, async (c) => {
-    if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
+    const request = createWorldIdRequest(c.env, c.get("user").id);
+    if (!request) return c.json({ error: "World ID verification is unavailable." }, 503);
     c.header("cache-control", "no-store");
-    return c.json(createWorldIdRequest(c.env, c.get("user").id));
+    return c.json(request);
   })
   .post("/api/account/world-id/verify", requireAccount, async (c) => {
-    if (!worldIdConfigured(c.env)) return c.json({ error: "World ID verification is unavailable." }, 503);
     const user = c.get("user");
     if (user.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
-    const rawProof = await c.req.text().catch(() => "");
+    const rawProof = await c.req.text();
     let nullifier: string;
     try {
       nullifier = await verifyWorldIdProof(c.env, user.id, rawProof);
@@ -98,14 +98,7 @@ export const accountRoutes = new Hono<AppContext>()
              SELECT 1 FROM world_id_nullifiers
              WHERE action = ? AND nullifier_decimal = ? AND user_id = ?
            )`,
-      ).bind(
-        now,
-        now,
-        user.id,
-        c.env.WORLD_ID_ACTION,
-        nullifier,
-        user.id,
-      ),
+      ).bind(now, now, user.id, c.env.WORLD_ID_ACTION, nullifier, user.id),
     ]) as Array<{ meta: { changes?: number } }>;
     if (results[1]?.meta.changes) return c.json({ redirect: "/onboarding" });
 

@@ -2,7 +2,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import type { IDKitNamespace, IDKitRequestConfig } from "@worldcoin/idkit-core";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { HttpError, postJson } from "./http.js";
+import { errorMessage, HttpError, postJson } from "./http.js";
 
 const IDKIT_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/@worldcoin/idkit-core@4.2.2/dist/idkit.global.js";
 const IDKIT_SCRIPT_INTEGRITY = "sha384-wtTjSVoogvsjcb8jv/IHW/gmWmkOhvCWFu6lUUqFX2jSOIWlCMczwjd0YtMy8+so";
@@ -64,7 +64,7 @@ function worldIdErrorMessage(code: string): string {
 
 function worldIdServerError(error: unknown): string {
   if (error instanceof HttpError && error.code) return `${error.message} (${error.code})`;
-  return error instanceof Error ? error.message : "World ID is unavailable (unexpected_error).";
+  return errorMessage(error, "World ID is unavailable (unexpected_error).");
 }
 
 function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }): React.JSX.Element {
@@ -85,10 +85,8 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
   React.useEffect(() => () => worldAttempt.current?.abort(), []);
 
   const startWorldId = async (): Promise<void> => {
-    worldAttempt.current?.abort();
     const controller = new AbortController();
     worldAttempt.current = controller;
-    setWorldUrl("");
     setPending(true);
     setStatus("Preparing World ID…");
     try {
@@ -132,19 +130,13 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
 
   const useInvite = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    const normalized = code.replace(/[^a-z0-9]/gi, "").toUpperCase();
-    setCode(normalized);
-    if (!/^[A-Z0-9]{8}$/.test(normalized)) {
-      setStatus("Enter the eight letters and numbers from your invite.");
-      return;
-    }
     setPending(true);
     setStatus("Checking invite…");
     try {
-      const result = await postJson<{ redirect: string }>("/api/account/invite/verify", { code: normalized });
+      const result = await postJson<{ redirect: string }>("/api/account/invite/verify", { code });
       window.location.assign(result.redirect);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "The invite could not be verified.");
+      setStatus(errorMessage(error, "The invite could not be verified."));
       setPending(false);
     }
   };

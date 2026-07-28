@@ -17,23 +17,12 @@ interface WorldIdConfig {
   signingKey: string;
 }
 
-interface WorldIdVerifyResponse {
-  success?: unknown;
-  nullifier?: unknown;
-  code?: unknown;
-  results?: Array<{
-    success?: unknown;
-    nullifier?: unknown;
-    code?: unknown;
-  }>;
-}
-
 type WorldIdRequest = IDKitRequestConfig & { signal: string };
 
 export class WorldIdVerificationError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 502,
+    readonly status: 400 | 502 | 503,
     readonly code: string,
   ) {
     super(message);
@@ -45,36 +34,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function worldIdConfig(env: Bindings): WorldIdConfig {
-  if (!APP_ID_PATTERN.test(env.WORLD_ID_APP_ID)) throw new Error("invalid app id");
-  if (!RP_ID_PATTERN.test(env.WORLD_ID_RP_ID)) throw new Error("invalid RP id");
-  if (!ACTION_PATTERN.test(env.WORLD_ID_ACTION)) throw new Error("invalid action");
-  if (env.WORLD_ID_ENVIRONMENT !== "production" && env.WORLD_ID_ENVIRONMENT !== "staging") {
-    throw new Error("invalid environment");
-  }
-  if (!env.WORLD_ID_SIGNING_KEY || !SIGNING_KEY_PATTERN.test(env.WORLD_ID_SIGNING_KEY)) {
-    throw new Error("invalid signing key");
-  }
+function worldIdConfig(env: Bindings): WorldIdConfig | null {
+  const signingKey = env.WORLD_ID_SIGNING_KEY;
+  if (
+    !APP_ID_PATTERN.test(env.WORLD_ID_APP_ID)
+    || !RP_ID_PATTERN.test(env.WORLD_ID_RP_ID)
+    || !ACTION_PATTERN.test(env.WORLD_ID_ACTION)
+    || (env.WORLD_ID_ENVIRONMENT !== "production" && env.WORLD_ID_ENVIRONMENT !== "staging")
+    || !signingKey
+    || !SIGNING_KEY_PATTERN.test(signingKey)
+  ) return null;
+
   return {
     appId: env.WORLD_ID_APP_ID as `app_${string}`,
     rpId: env.WORLD_ID_RP_ID as `rp_${string}`,
     action: env.WORLD_ID_ACTION,
     environment: env.WORLD_ID_ENVIRONMENT,
-    signingKey: env.WORLD_ID_SIGNING_KEY,
+    signingKey,
   };
 }
 
 export function worldIdConfigured(env: Bindings): boolean {
-  try {
-    worldIdConfig(env);
-    return true;
-  } catch {
-    return false;
-  }
+  return worldIdConfig(env) !== null;
 }
 
-export function createWorldIdRequest(env: Bindings, signal: string): WorldIdRequest {
+export function createWorldIdRequest(env: Bindings, signal: string): WorldIdRequest | null {
   const config = worldIdConfig(env);
+  if (!config) return null;
   const signed = signRequest({
     signingKeyHex: config.signingKey,
     action: config.action,
@@ -95,56 +81,68 @@ export function createWorldIdRequest(env: Bindings, signal: string): WorldIdRequ
   };
 }
 
-function parseProof(rawProof: string, config: WorldIdConfig, signal: string): Record<string, unknown> {
-  let parsed: unknown;
+function rejectProof(message: string, code: string): never {
+  throw new WorldIdVerificationError(message, 400, code);
+}
+
+function validateProof(rawProof: string, config: WorldIdConfig, signal: string): void {
+  let proof: unknown;
   try {
-    parsed = JSON.parse(rawProof);
+    proof = JSON.parse(rawProof);
   } catch {
-    throw new WorldIdVerificationError("World ID proof is invalid.", 400, "malformed_proof");
+    rejectProof("World ID proof is invalid.", "malformed_proof");
   }
-  if (!isRecord(parsed)) {
-    throw new WorldIdVerificationError("World ID proof is invalid.", 400, "malformed_proof");
+  if (!isRecord(proof)) rejectProof("World ID proof is invalid.", "malformed_proof");
+  if (proof.protocol_version !== "3.0" && proof.protocol_version !== "4.0") {
+    rejectProof("World ID proof has an unsupported version.", "invalid_version");
   }
-  if (parsed.protocol_version !== "3.0" && parsed.protocol_version !== "4.0") {
-    throw new WorldIdVerificationError("World ID proof has an unsupported version.", 400, "invalid_version");
+  if (proof.action !== config.action) {
+    rejectProof("World ID proof does not match this action.", "action_mismatch");
   }
-  if (parsed.action !== config.action) {
-    throw new WorldIdVerificationError("World ID proof does not match this action.", 400, "action_mismatch");
+  if ("environment" in proof && proof.environment !== config.environment) {
+    rejectProof("World ID proof has the wrong environment.", "environment_mismatch");
   }
-  if ("environment" in parsed && parsed.environment !== config.environment) {
-    throw new WorldIdVerificationError("World ID proof has the wrong environment.", 400, "environment_mismatch");
+  if (!Array.isArray(proof.responses) || proof.responses.length === 0) {
+    rejectProof("World ID proof has no credential response.", "missing_response");
   }
-  if (!Array.isArray(parsed.responses) || parsed.responses.length === 0) {
-    throw new WorldIdVerificationError("World ID proof has no credential response.", 400, "missing_response");
-  }
+
   const expectedSignal = hashSignal(signal).toLowerCase();
-  if (!parsed.responses.every((response) =>
+  const signalMatches = proof.responses.every((response) =>
     isRecord(response)
     && typeof response.signal_hash === "string"
     && response.signal_hash.toLowerCase() === expectedSignal
-  )) {
-    throw new WorldIdVerificationError("World ID proof does not match this account.", 400, "signal_mismatch");
+  );
+  if (!signalMatches) {
+    rejectProof("World ID proof does not match this account.", "signal_mismatch");
   }
-  return parsed;
 }
 
-function verifierCode(value: WorldIdVerifyResponse | null, status: number): string {
-  const candidate = typeof value?.code === "string"
-    ? value.code
-    : value?.results?.find((result) => typeof result.code === "string")?.code;
+function verifierResults(value: Record<string, unknown> | null): Array<Record<string, unknown>> {
+  return Array.isArray(value?.results) ? value.results.filter(isRecord) : [];
+}
+
+function verifierCode(value: Record<string, unknown> | null, status: number): string {
+  const result = verifierResults(value).find(({ code }) => typeof code === "string");
+  const candidate = typeof value?.code === "string" ? value.code : result?.code;
   if (typeof candidate === "string" && /^[a-z0-9_]{1,64}$/.test(candidate)) return candidate;
   return status >= 400 && status <= 599
     ? `verifier_http_${status}`
     : "invalid_verifier_response";
 }
 
-function nullifierDecimal(value: string): string | null {
-  if (!NULLIFIER_PATTERN.test(value)) return null;
-  try {
-    return BigInt(value).toString(10);
-  } catch {
-    return null;
+function nullifierDecimal(value: unknown): string | null {
+  return typeof value === "string" && NULLIFIER_PATTERN.test(value)
+    ? BigInt(value).toString(10)
+    : null;
+}
+
+function verifiedNullifier(value: Record<string, unknown>): string | null {
+  for (const result of verifierResults(value)) {
+    if (result.success !== true) continue;
+    const nullifier = nullifierDecimal(result.nullifier);
+    if (nullifier) return nullifier;
   }
+  return nullifierDecimal(value.nullifier);
 }
 
 export async function verifyWorldIdProof(
@@ -153,12 +151,19 @@ export async function verifyWorldIdProof(
   rawProof: string,
 ): Promise<string> {
   const config = worldIdConfig(env);
-  parseProof(rawProof, config, signal);
+  if (!config) {
+    throw new WorldIdVerificationError(
+      "World ID verification is unavailable.",
+      503,
+      "not_configured",
+    );
+  }
+  validateProof(rawProof, config, signal);
 
   let response: Response;
   try {
     response = await fetch(
-      `https://developer.world.org/api/v4/verify/${encodeURIComponent(config.rpId)}`,
+      `https://developer.world.org/api/v4/verify/${config.rpId}`,
       {
         method: "POST",
         headers: {
@@ -178,11 +183,9 @@ export async function verifyWorldIdProof(
     );
   }
 
-  const verified = await response.json().catch(() => null) as WorldIdVerifyResponse | null;
-  if (
-    !response.ok
-    || verified?.success !== true
-  ) {
+  const payload: unknown = await response.json().catch(() => null);
+  const verified = isRecord(payload) ? payload : null;
+  if (!response.ok || verified?.success !== true) {
     const code = verifierCode(verified, response.status);
     console.warn(JSON.stringify({ event: "world_id_verifier_rejected", status: response.status, code }));
     const upstreamFailure = !verified || response.status >= 500;
@@ -195,13 +198,7 @@ export async function verifyWorldIdProof(
     );
   }
 
-  const resultNullifier = verified.results
-    ?.filter((result) => result.success === true && typeof result.nullifier === "string")
-    .map((result) => nullifierDecimal(result.nullifier as string))
-    .find((value): value is string => value !== null);
-  const nullifier = resultNullifier ?? (
-    typeof verified.nullifier === "string" ? nullifierDecimal(verified.nullifier) : null
-  );
+  const nullifier = verifiedNullifier(verified);
   if (!nullifier) {
     throw new WorldIdVerificationError(
       "World ID returned no uniqueness proof.",
