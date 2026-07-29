@@ -160,6 +160,70 @@ const ApiKeyProvider: FC<{
   </div>
 );
 
+type PasteableLlmProvider = Exclude<
+  LlmProvider,
+  "claude_subscription_token" | "codex_subscription_token" | "github_copilot"
+>;
+
+const API_KEY_PROVIDERS: ReadonlyArray<{
+  provider: PasteableLlmProvider;
+  title: string;
+  keyUrl: string;
+  linkLabel?: string;
+}> = [
+  {
+    provider: "opencode_go",
+    title: "OpenCode Go API key",
+    keyUrl: "https://opencode.ai/auth",
+    linkLabel: "Get key from OpenCode",
+  },
+  {
+    provider: "anthropic",
+    title: "Anthropic API key",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+  },
+  {
+    provider: "openai",
+    title: "OpenAI API key",
+    keyUrl: "https://platform.openai.com/api-keys",
+  },
+  {
+    provider: "gemini",
+    title: "Google (Gemini) API key",
+    keyUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    provider: "openrouter",
+    title: "OpenRouter API key",
+    keyUrl: "https://openrouter.ai/keys",
+  },
+  {
+    provider: "deepseek",
+    title: "DeepSeek API key",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+  },
+  {
+    provider: "kimi",
+    title: "Kimi API key",
+    keyUrl: "https://platform.kimi.com/",
+  },
+  {
+    provider: "minimax",
+    title: "MiniMax API key",
+    keyUrl: "https://platform.minimax.io/account/api-keys",
+  },
+  {
+    provider: "zai",
+    title: "Z.AI API key",
+    keyUrl: "https://z.ai/manage-apikey",
+  },
+  {
+    provider: "vercel_ai_gateway",
+    title: "Vercel AI Gateway API key",
+    keyUrl: "https://vercel.com/ai-gateway",
+  },
+];
+
 const AgentSignin: FC<{
   id: "claude" | "codex";
   button: string;
@@ -232,37 +296,15 @@ export const OnboardingPage: FC<{
             connected="GitHub Copilot connected"
             icon={<GitHubLogoIcon />}
           />
-          <ApiKeyProvider
-            id="llm-opencode-go"
-            name="llm_opencode_go"
-            title="OpenCode Go API key"
-            keyUrl="https://opencode.ai/auth"
-            linkLabel="Get key from OpenCode"
-          />
-          <ApiKeyProvider
-            id="llm-anthropic"
-            name="llm_anthropic"
-            title="Anthropic API key"
-            keyUrl="https://console.anthropic.com/settings/keys"
-          />
-          <ApiKeyProvider
-            id="llm-openai"
-            name="llm_openai"
-            title="OpenAI API key"
-            keyUrl="https://platform.openai.com/api-keys"
-          />
-          <ApiKeyProvider
-            id="llm-gemini"
-            name="llm_gemini"
-            title="Google (Gemini) API key"
-            keyUrl="https://aistudio.google.com/apikey"
-          />
-          <ApiKeyProvider
-            id="llm-openrouter"
-            name="llm_openrouter"
-            title="OpenRouter API key"
-            keyUrl="https://openrouter.ai/keys"
-          />
+          {API_KEY_PROVIDERS.map(({ provider, title, keyUrl, linkLabel }) => (
+            <ApiKeyProvider
+              id={`llm-${provider}`}
+              name={`llm_${provider}`}
+              title={title}
+              keyUrl={keyUrl}
+              {...(linkLabel ? { linkLabel } : {})}
+            />
+          ))}
         </details>
       </div>
 

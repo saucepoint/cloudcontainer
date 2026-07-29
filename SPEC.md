@@ -161,7 +161,8 @@ The onboarding screen has one required field: at least one agent from Pi,
 Claude Code, Codex, and OpenCode. All other fields are visibly optional:
 
 - SSH public key;
-- OpenAI, Anthropic, Gemini, or OpenRouter API key;
+- OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Kimi, MiniMax, Z.AI,
+  or Vercel AI Gateway API key;
 - Claude subscription token;
 - Codex ChatGPT-plan sign-in or auth.json paste;
 - Cloudflare API token; and
@@ -404,7 +405,8 @@ add a Host workbench entry to the local SSH config, and verify the connection.
 
 ### Supported model access
 
-- OpenAI, Anthropic, Gemini, and OpenRouter API keys.
+- OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Kimi, MiniMax, Z.AI,
+  and Vercel AI Gateway API keys.
 - Claude Code subscription token.
 - Codex ChatGPT-plan device-code sign-in.
 - Advanced Codex auth.json paste fallback.

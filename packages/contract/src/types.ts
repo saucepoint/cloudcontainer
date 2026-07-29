@@ -23,6 +23,11 @@ export const LLM_PROVIDERS = [
   "claude_subscription_token",
   "codex_subscription_token",
   "github_copilot",
+  "deepseek",
+  "kimi",
+  "minimax",
+  "zai",
+  "vercel_ai_gateway",
 ] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
@@ -35,6 +40,11 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
   claude_subscription_token: "Claude subscription",
   codex_subscription_token: "ChatGPT (Codex)",
   github_copilot: "GitHub Copilot",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  minimax: "MiniMax",
+  zai: "Z.AI",
+  vercel_ai_gateway: "Vercel AI Gateway",
 };
 
 /**
@@ -108,6 +118,11 @@ export const LlmKeysSchema = z
     claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
     github_copilot: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    deepseek: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    kimi: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    minimax: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    zai: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    vercel_ai_gateway: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
   })
   .strict();
 export type LlmKeys = z.infer<typeof LlmKeysSchema>;
