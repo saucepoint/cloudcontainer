@@ -17,19 +17,25 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
 
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
-    <h1 class="landing-title">A cloud workbench <br/>for agents</h1>
-    <p class="lead">
-      free for each unique person
-      <br />
-      an always-on container for long running coding agents
-      <br />
-      access from any terminal client on any device      
-    </p>
+    <div class="landing-hero">
+      <h1 class="landing-title">A cloud workbench <br/>for agents</h1>
+      <p class="lead">
+        free for each unique person
+        <br />
+        an always-on container for long running coding agents
+        <br />
+        access from any terminal client on any device
+      </p>
+    </div>
     <div class="card">
       <ul class="check spec-list">
         <li>
-          Debian 13 · 1 vCPU · 2 GB RAM · 8 GB persistent disk
+          1 vCPU · 2 GB RAM · 8 GB persistent disk · Debian 13
           <span class="ok">free tier</span>
+        </li>
+        <li>
+          2 vCPU · 4 GB RAM · 8 GB persistent disk · Debian 13
+          <span class="muted tier-label">coming soon</span>
         </li>
         <li>
           Pi, Claude Code, Codex, and/or OpenCode
@@ -40,8 +46,7 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
       </ul>
     </div>
     <div class="card landing-signin">
-      <div class="landing-signin-content" aria-labelledby="signin-heading">
-        <h2 id="signin-heading">Sign in or create an account</h2>
+      <div class="landing-signin-content" role="region" aria-label="Sign in or create an account">
         <div id="landing-auth-root"></div>
         {devAuth ? (
           <div class="auth-dev-option">
@@ -93,13 +98,13 @@ export const SecurityPage: FC<{
       <p class="muted">
         Your fingerprint, face, or device PIN stays on your device. usebench.dev stores only the public credential needed to verify sign-in.
       </p>
-      <button id="add-passkey-btn" class="btn" type="button">
+      <button id="add-passkey-btn" class="btn primary" type="button">
         {passkeyCount > 0 ? "Add another passkey" : "Add a passkey"} →
       </button>
       <p id="passkey-setup-status" class="muted" role="status" aria-live="polite"></p>
     </section>
     <div class="row">
-      <a id="security-continue" class="btn secondary" href={continueHref}>
+      <a id="security-continue" class="btn primary" href={continueHref}>
         {welcome && passkeyCount === 0 ? "Skip for now" : "Continue"} →
       </a>
     </div>
@@ -168,6 +173,16 @@ const AgentSignin: FC<{
     </div>
     <div id={`${id}-flow`} role="status" aria-live="polite"></div>
   </>
+);
+
+export const NotFoundPage: FC = () => (
+  <Layout title="Page not found">
+    <h1>Page not found.</h1>
+    <p class="lead">That page does not exist. It may have moved, or the link is wrong.</p>
+    <a class="btn secondary" href="/">
+      Back to usebench.dev →
+    </a>
+  </Layout>
 );
 
 export const OnboardingPage: FC<{
@@ -294,7 +309,7 @@ export const OnboardingPage: FC<{
         </details>
         <details>
           <summary>Connect Cloudflare</summary>
-          <div class="provider" style="border-bottom:0">
+          <div class="provider">
             <div class="provider-head">
               <div>
                 <strong>Wrangler sign-in</strong>
@@ -325,7 +340,7 @@ export const OnboardingPage: FC<{
         </details>
       </div>
 
-      <button id="go" class="btn create-workbench-btn" type="submit">
+      <button id="go" class="btn primary create-workbench-btn" type="submit">
         Create workbench →
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>

@@ -1,5 +1,5 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { IDKitNamespace, IDKitRequestConfig } from "@worldcoin/idkit-core";
+import { toDataURL } from "qrcode";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage, HttpError, postJson } from "./http.js";
@@ -66,28 +66,31 @@ function worldIdServerError(error: unknown): string {
   return errorMessage(error, "World ID is unavailable (unexpected_error).");
 }
 
+function usesMobileWorldAppFlow(): boolean {
+  return window.matchMedia("(max-width: 700px)").matches;
+}
+
 function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }): React.JSX.Element {
-  const [worldUrl, setWorldUrl] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [status, setStatus] = React.useState("");
+  const [worldStatus, setWorldStatus] = React.useState("");
+  const [worldError, setWorldError] = React.useState(false);
+  const [worldQr, setWorldQr] = React.useState("");
+  const [inviteStatus, setInviteStatus] = React.useState("");
   const [code, setCode] = React.useState("");
   const worldAttempt = React.useRef<AbortController | null>(null);
-
-  const cancelWorldId = (): void => {
-    worldAttempt.current?.abort();
-    worldAttempt.current = null;
-    setWorldUrl("");
-    setPending(false);
-    setStatus("World ID verification was cancelled (cancelled).");
-  };
 
   React.useEffect(() => () => worldAttempt.current?.abort(), []);
 
   const startWorldId = async (): Promise<void> => {
+    const mobile = usesMobileWorldAppFlow();
+    const mobileTarget = mobile ? window.open("", "_blank") : null;
+    if (mobileTarget) mobileTarget.opener = null;
     const controller = new AbortController();
     worldAttempt.current = controller;
     setPending(true);
-    setStatus("Preparing World ID…");
+    setWorldError(false);
+    setWorldQr("");
+    setWorldStatus("Preparing World ID…");
     try {
       const [{ signal, ...config }, idKit] = await Promise.all([
         postJson<WorldIdRequest>("/api/account/world-id/request"),
@@ -97,8 +100,18 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
         .constraints(idKit.CredentialRequest("proof_of_human", { signal }));
       if (controller.signal.aborted) return;
 
-      setWorldUrl(request.connectorURI);
-      setStatus("Open World ID and approve the request. This page will update automatically.");
+      if (mobile) {
+        setWorldStatus("Opening World App… Return here after approving the request.");
+        if (mobileTarget) mobileTarget.location.replace(request.connectorURI);
+        else window.location.assign(request.connectorURI);
+      } else {
+        setWorldQr(await toDataURL(request.connectorURI, {
+          width: 240,
+          margin: 1,
+          color: { dark: "#20201d", light: "#ffffff" },
+        }));
+        setWorldStatus("Scan the code with World App and approve the request.");
+      }
       const completion = await request.pollUntilCompletion({
         pollInterval: 1_000,
         timeout: 15 * 60_000,
@@ -106,18 +119,21 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
       });
       if (controller.signal.aborted) return;
       if (!completion.success) {
-        setWorldUrl("");
-        setStatus(worldIdErrorMessage(completion.error));
+        setWorldQr("");
+        setWorldError(true);
+        setWorldStatus(worldIdErrorMessage(completion.error));
         return;
       }
 
-      setStatus("Confirming World ID proof…");
+      setWorldStatus("Confirming World ID proof…");
       await postJson("/api/account/world-id/verify", completion.result);
       window.location.assign("/account/continue");
     } catch (error) {
       if (!controller.signal.aborted) {
-        setWorldUrl("");
-        setStatus(worldIdServerError(error));
+        mobileTarget?.close();
+        setWorldQr("");
+        setWorldError(true);
+        setWorldStatus(worldIdServerError(error));
       }
     } finally {
       if (worldAttempt.current === controller) {
@@ -130,12 +146,12 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
   const useInvite = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     setPending(true);
-    setStatus("Checking invite…");
+    setInviteStatus("Checking invite…");
     try {
       const result = await postJson<{ redirect: string }>("/api/account/invite/verify", { code });
       window.location.assign(result.redirect);
     } catch (error) {
-      setStatus(errorMessage(error, "The invite could not be verified."));
+      setInviteStatus(errorMessage(error, "The invite could not be verified."));
       setPending(false);
     }
   };
@@ -146,7 +162,14 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
         <section className="card verification-option" aria-labelledby="world-id-heading">
           <h2 id="world-id-heading">Verify with World ID</h2>
           <p>Prove you are a unique person without sharing your identity.</p>
-          <button className="btn" type="button" disabled={pending} onClick={() => void startWorldId()}>Continue with World ID →</button>
+          <button className="btn primary" type="button" disabled={pending} onClick={() => void startWorldId()}>Continue with World ID →</button>
+          <p className={`verification-status ${worldError ? "error" : "muted"}`} role={worldError ? "alert" : "status"} aria-live="polite">{worldStatus}</p>
+          {worldQr ? (
+            <div className="world-id-qr">
+              <img src={worldQr} alt="QR code to continue verification in World App" />
+              <p className="muted">Keep this page open while you scan.</p>
+            </div>
+          ) : null}
         </section>
       ) : null}
       <section className="card verification-option" aria-labelledby="invite-heading">
@@ -156,27 +179,8 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
           <input aria-label="Invite code" autoComplete="one-time-code" disabled={pending} maxLength={8} minLength={8} pattern="[A-Za-z0-9]{8}" required value={code} onChange={(event) => setCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())} />
           <button className="btn secondary" type="submit" disabled={pending}>Verify invite →</button>
         </form>
+        <p className="muted verification-status" role="status" aria-live="polite">{inviteStatus}</p>
       </section>
-      <p className="muted verification-status" role="status" aria-live="polite">{status}</p>
-      {worldIdAvailable ? (
-        <Dialog.Root open={Boolean(worldUrl)} onOpenChange={(open) => { if (!open) cancelWorldId(); }}>
-          <Dialog.Portal>
-            <Dialog.Backdrop className="dialog-backdrop" />
-            <Dialog.Viewport className="dialog-viewport">
-              <Dialog.Popup className="dialog-popup">
-                <Dialog.Title className="dialog-title">Continue with World ID</Dialog.Title>
-                <Dialog.Description className="dialog-description">
-                  Open the secure World verification page, then follow its instructions in World App.
-                </Dialog.Description>
-                <div className="dialog-actions">
-                  <Dialog.Close className="btn secondary">Cancel</Dialog.Close>
-                  <a className="btn" href={worldUrl} rel="noopener noreferrer" target="_blank">Open World ID →</a>
-                </div>
-              </Dialog.Popup>
-            </Dialog.Viewport>
-          </Dialog.Portal>
-        </Dialog.Root>
-      ) : null}
     </>
   );
 }

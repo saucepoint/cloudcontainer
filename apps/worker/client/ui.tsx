@@ -103,7 +103,7 @@ function ConfirmationDialog(): React.JSX.Element {
             </AlertDialog.Description>
             <div className="dialog-actions">
               <AlertDialog.Close className="btn secondary">Cancel</AlertDialog.Close>
-              <AlertDialog.Close className="btn" onClick={confirm}>
+              <AlertDialog.Close className={confirmation.danger ? "btn danger-solid" : "btn primary"} onClick={confirm}>
                 {confirmation.confirmLabel}
               </AlertDialog.Close>
             </div>
@@ -117,7 +117,7 @@ function ConfirmationDialog(): React.JSX.Element {
 const root = document.getElementById("ui-root");
 if (root) createRoot(root).render(<ConfirmationDialog />);
 
-reveal(document.querySelectorAll("main > h1, main > .lead, main > .card, main > form > .card"));
+reveal(document.querySelectorAll("main > h1, main > .lead, main > .landing-hero, main > .card, main > form > .card"));
 
 document.addEventListener("click", (event) => {
   const target = event.target;

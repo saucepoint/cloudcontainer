@@ -14,6 +14,21 @@ import { requestJson as api } from "./http.js";
 type Enrollment = { endpoint: string; token: string };
 type EnrollmentMode = "agent" | "manual";
 
+/** Briefly animates transient button feedback such as "Copied ✓". */
+function SwapText({ swapped, swappedText, children }: { swapped: boolean; swappedText: string; children: React.ReactNode }) {
+  const reducedMotion = useReducedMotion();
+  return (
+    <motion.span
+      key={swapped ? "swapped" : "idle"}
+      initial={swapped && !reducedMotion ? { opacity: 0, y: 3 } : false}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+    >
+      {swapped ? swappedText : children}
+    </motion.span>
+  );
+}
+
 const KEY_HELP = "ssh-keygen -t ed25519\ncat ~/.ssh/id_ed25519.pub";
 
 export function Connection({
@@ -45,7 +60,7 @@ export function Connection({
     return (
       <>
         <p><strong>Run this in your terminal</strong></p>
-        <div className="command-row"><pre className="ssh">{container.sshCommand}</pre><button type="button" className="btn secondary" onClick={() => void copy()}>{copied ? "Copied ✓" : "Copy SSH command"}</button></div>
+        <div className="command-row"><pre className="ssh">{container.sshCommand}</pre><button type="button" className="btn secondary" onClick={() => void copy()}><SwapText swapped={copied} swappedText="Copied ✓">Copy SSH command</SwapText></button></div>
         {copyError ? <p className="err" role="alert">{copyError}</p> : null}
         {container.hostKeyFingerprints.length ? <details><summary>Verify this workbench on your first connection</summary><p className="muted">SSH may ask whether you trust this host. The fingerprint it shows must match one below.</p><pre className="ssh">{container.hostKeyFingerprints.join("\n")}</pre></details> : null}
       </>
@@ -170,7 +185,7 @@ export function SshKeys({
     <>
       {keys.length === 0 && ready ? <p className="notice warning"><strong>Add a public key to use SSH.</strong></p> : (
         <ul className="check">
-          {keys.map((key) => <li key={key.id}><span style={{ fontFamily: "var(--mono)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }}>{key.pubkey.slice(0, 60)}…</span>{ready ? <button type="button" className="link-btn" disabled={Boolean(busy)} onClick={() => remove(key)}><BusyLabel busy={busy === `remove-${key.id}`}>Remove</BusyLabel></button> : null}</li>)}
+          {keys.map((key) => <li key={key.id}><span className="key-fingerprint">{key.pubkey.slice(0, 60)}…</span>{ready ? <button type="button" className="link-btn" disabled={Boolean(busy)} onClick={() => remove(key)}><BusyLabel busy={busy === `remove-${key.id}`}>Remove</BusyLabel></button> : null}</li>)}
         </ul>
       )}
       {!ready ? <p className="notice"><strong>SSH setup unlocks after the workbench is ready.</strong></p> : (
@@ -179,7 +194,6 @@ export function SshKeys({
             <button
               type="button"
               className={`btn ${enrollmentMode === "agent" ? "" : "secondary"}`}
-              data-active={enrollmentMode === "agent" ? "true" : undefined}
               aria-pressed={enrollmentMode === "agent"}
               disabled={Boolean(busy)}
               onClick={openAgentEnrollment}
@@ -189,7 +203,6 @@ export function SshKeys({
             <button
               type="button"
               className={`btn ${enrollmentMode === "manual" ? "" : "secondary"}`}
-              data-active={enrollmentMode === "manual" ? "true" : undefined}
               aria-pressed={enrollmentMode === "manual"}
               disabled={Boolean(busy)}
               onClick={openManualEnrollment}
@@ -212,7 +225,7 @@ export function SshKeys({
                   <p className="muted">It creates a dedicated key, registers only the public half, and configures the short command <code>ssh workbench</code>.</p>
                 </div>
                 <div className="row">
-                  <button type="button" className="btn" onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied ✓" : "Copy prompt"}</button>
+                  <button type="button" className="btn" onClick={() => void copy("prompt", prompt)}><SwapText swapped={copied === "prompt"} swappedText="Copied ✓">Copy prompt</SwapText></button>
                   <button type="button" className="btn secondary" disabled={Boolean(busy)} onClick={refreshEnrollment}><BusyLabel busy={busy === "refresh"}>I finished — refresh keys</BusyLabel></button>
                 </div>
                 <details>
@@ -233,12 +246,12 @@ export function SshKeys({
                 <p className="muted">First create a key if needed, then print the public half:</p>
                 <div className="command-row">
                   <pre className="ssh">{KEY_HELP}</pre>
-                  <button type="button" className="btn secondary" onClick={() => void copy("commands", KEY_HELP)}>{copied === "commands" ? "Copied ✓" : "Copy commands"}</button>
+                  <button type="button" className="btn secondary" onClick={() => void copy("commands", KEY_HELP)}><SwapText swapped={copied === "commands"} swappedText="Copied ✓">Copy commands</SwapText></button>
                 </div>
                 <p className="muted">Paste only the output from the <code>.pub</code> file. Never paste your private key.</p>
                 <label htmlFor="newkey">SSH public key</label>
                 <textarea id="newkey" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder="ssh-ed25519 AAAA… you@laptop" spellCheck={false} />
-                <div className="row"><button type="button" className="btn" disabled={Boolean(busy)} onClick={save}><BusyLabel busy={busy === "save"}>Save key</BusyLabel></button></div>
+                <div className="row"><button type="button" className="btn primary" disabled={Boolean(busy)} onClick={save}><BusyLabel busy={busy === "save"}>Save key</BusyLabel></button></div>
               </motion.div>
             ) : null}
           </AnimatePresence>

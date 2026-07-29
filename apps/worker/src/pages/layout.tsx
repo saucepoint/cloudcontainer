@@ -11,6 +11,8 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="theme-color" content="#fbfaf7" />
+      <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+      <link rel="preload" href="/fonts/ibm-plex-sans-latin.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
       <title>{title ? `${title} — usebench.dev` : "usebench.dev"}</title>
       <style dangerouslySetInnerHTML={{ __html: PAGE_STYLES }} />
     </head>
@@ -22,12 +24,12 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
         <div class="wrap">
           <header class="site">
             <a class="logo" href={loggedIn ? "/dashboard" : "/"}>
-              usebench<span>.dev</span>
+              work<span class="logo-bench">bench</span>
             </a>
             {loggedIn ? (
-              <nav class="row" aria-label="Account" style="margin:0">
+              <nav class="row flush" aria-label="Account">
                 <a class="btn secondary" href="/security">Security</a>
-                <form method="post" action="/auth/logout" style="margin:0">
+                <form method="post" action="/auth/logout" class="flush">
                   <button class="btn secondary" type="submit">
                     Sign out
                   </button>

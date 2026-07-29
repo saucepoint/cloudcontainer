@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
-import { LandingPage, OnboardingPage, SecurityPage, VerificationPage } from "../src/pages/views.js";
+import {
+  LandingPage,
+  NotFoundPage,
+  OnboardingPage,
+  SecurityPage,
+  VerificationPage,
+} from "../src/pages/views.js";
 import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
 function inlineScriptsOf(html: string): string[] {
@@ -49,11 +55,21 @@ describe("landing page call to action", () => {
   it("uses the workbench value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain("<title>usebench.dev</title>");
-    expect(html).toContain("usebench.dev");
+    expect(html).toContain('work<span class="logo-bench">bench</span>');
     expect(html).toContain("A cloud workbench");
     expect(html).toContain("an always-on container for long running coding agents");
     expect(html).toContain("free for each unique person");
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
+  });
+
+  it("presents the free capacity first and labels the larger tier as upcoming", () => {
+    const html = String(LandingPage({ devAuth: false }));
+    const freeTier = "1 vCPU · 2 GB RAM · 8 GB persistent disk · Debian 13";
+    const premiumTier = "2 vCPU · 4 GB RAM · 8 GB persistent disk · Debian 13";
+    expect(html).toContain(freeTier);
+    expect(html).toContain(premiumTier);
+    expect(html).toContain('<span class="muted tier-label">coming soon</span>');
+    expect(html.indexOf(freeTier)).toBeLessThan(html.indexOf(premiumTier));
   });
 
   it("offers Google, GitHub, and passkey entry points", () => {
@@ -124,6 +140,25 @@ describe("account eligibility verification", () => {
     expect(accountClient).not.toContain("proofOfHuman");
     expect(accountClient).not.toContain("orbLegacy");
     expect(accountClient).toContain('postJson("/api/account/world-id/verify", completion.result)');
+  });
+
+  it("opens World App on mobile and presents an inline QR code on desktop", () => {
+    expect(accountClient).toContain('window.matchMedia("(max-width: 700px)").matches');
+    expect(accountClient).toContain('window.open("", "_blank")');
+    expect(accountClient).toContain("mobileTarget.location.replace(request.connectorURI)");
+    expect(accountClient).toContain("toDataURL(request.connectorURI");
+    expect(accountClient).toContain('className="world-id-qr"');
+    expect(accountClient).toContain('alt="QR code to continue verification in World App"');
+  });
+
+  it("reports World ID progress and errors under the action without a confirmation dialog", () => {
+    const action = accountClient.indexOf("Continue with World ID →</button>");
+    const status = accountClient.indexOf("{worldStatus}</p>");
+    expect(action).toBeGreaterThan(-1);
+    expect(status).toBeGreaterThan(action);
+    expect(accountClient).toContain('role={worldError ? "alert" : "status"}');
+    expect(accountClient).not.toContain('from "@base-ui/react/dialog"');
+    expect(accountClient).not.toContain("<Dialog.");
   });
 
   it("loads pinned IDKit assets externally instead of shipping WebAssembly", () => {
@@ -430,11 +465,74 @@ describe("interface foundation", () => {
     expect(html).toContain('<script type="module" src="/ui.js"></script>');
   });
 
-  it("uses the light, borderless action system", () => {
+  it("uses borderless actions with solid treatment reserved for primary CTAs", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain("color-scheme: light");
-    expect(html).toContain(".btn.secondary, .btn.danger { border: 0");
-    expect(html).toContain("color: var(--accent)");
+    expect(html).toContain(".btn, .link-btn { padding: 0.35rem 0.2rem; border: 0;");
+    expect(html).toContain(".btn.primary { padding: 0.45rem 0.95rem; border: 1px solid var(--accent);");
+    expect(html).toContain("background: var(--accent); color: #fff");
+    expect(html).toContain(".btn.danger { background: transparent; color: var(--danger); }");
+    expect(html).toContain(".btn.danger-solid:hover { background: var(--danger-strong)");
+    expect(html).toContain("text-decoration: underline;");
+  });
+
+  it("serves a self-hosted grotesque as the UI typeface", () => {
+    const html = String(LandingPage({ devAuth: false }));
+    expect(html).toContain("@font-face");
+    expect(html).toContain('/fonts/ibm-plex-sans-latin.woff2');
+    expect(html).toContain('--sans: "IBM Plex Sans", Arial, Helvetica, sans-serif;');
+    expect(html).toContain("font: 15px/1.5 var(--sans);");
+    expect(html).toContain('rel="preload" href="/fonts/ibm-plex-sans-latin.woff2"');
+  });
+
+  it("ships a favicon and serves a branded 404 page", async () => {
+    const html = String(LandingPage({ devAuth: false }));
+    expect(html).toContain('rel="icon" type="image/svg+xml" href="/favicon.svg"');
+    const notFound = String(NotFoundPage({}));
+    expect(notFound).toContain("Page not found.");
+    expect(notFound).toContain('href="/"');
+
+    const pageResponse = await workerApp.request("/missing", {}, makeEnv());
+    expect(pageResponse.status).toBe(404);
+    expect(pageResponse.headers.get("content-type")).toContain("text/html");
+    expect(await pageResponse.text()).toContain("Page not found.");
+
+    const apiResponse = await workerApp.request("/api/missing", {}, makeEnv());
+    expect(apiResponse.status).toBe(404);
+    expect(apiResponse.headers.get("content-type")).toContain("application/json");
+    await expect(apiResponse.json()).resolves.toEqual({ error: "not found" });
+  });
+
+  it("left-aligns the landing hero", () => {
+    const html = String(LandingPage({ devAuth: false }));
+    expect(html).toContain('class="landing-hero"');
+    expect(html).toContain(".landing-hero { text-align: left; }");
+  });
+
+  it("accents bench in the workbench wordmark and groups compact landing auth actions", () => {
+    const html = String(LandingPage({ devAuth: false }));
+    expect(html).toContain('work<span class="logo-bench">bench</span>');
+    expect(html).toContain(".logo-bench { color: var(--accent); }");
+    expect(html).toContain(".auth-provider-list { display: grid; width: min(100%, 25rem);");
+    expect(html).toContain("border: 1px solid var(--line); border-radius: var(--radius);");
+    expect(html).toContain(".auth-provider { width: min(100%, 18rem); justify-self: center;");
+  });
+
+  it("reserves sign-in space only on agent tiles that have one", () => {
+    const html = String(OnboardingPage({}));
+    expect(html).toContain(".agent:has(.agent-signin) .agent-choice { padding-right: 9.5rem; }");
+    expect(html).toContain(".agent:has(.agent-signin) .agent-choice { padding-right: 1rem; }");
+  });
+
+  it("shows a skeleton while the dashboard loads", () => {
+    const html = String(DashboardPage({}));
+    expect(html).toContain('class="skel skel-title"');
+    expect(html).toContain("aria-busy");
+    expect(html).toContain(".skel::after");
+  });
+
+  it("renders destructive confirmations with a solid danger action", () => {
+    expect(uiClient).toContain('confirmation.danger ? "btn danger-solid" : "btn primary"');
   });
 
   it("visually separates text fields from structural dividers", () => {
@@ -442,18 +540,20 @@ describe("interface foundation", () => {
     expect(html).toContain(
       "background: var(--field); color: var(--ink); border: 1px solid var(--line-strong);",
     );
-    expect(html).toContain("border-radius: 5px; padding: 0.64rem 0.7rem;");
+    expect(html).toContain("border-radius: var(--radius); padding: 0.64rem 0.7rem;");
     expect(html).toContain("input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }");
     expect(html).toContain(
       "input:focus, textarea:focus, select:focus { background: #fff; border-color: var(--focus);",
     );
   });
 
-  it("keeps the landing divider full width while constraining sign-in content", () => {
+  it("centers the compact auth group within the full-width landing section", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('class="card landing-signin"');
-    expect(html).toContain('class="landing-signin-content"');
-    expect(html).toContain(".landing-signin-content { max-width: 580px; }");
+    expect(html).toContain('class="landing-signin-content" role="region"');
+    expect(html).not.toContain('>Sign in or create an account</h2>');
+    expect(html).toContain(".landing-signin-content { width: 100%; }");
+    expect(html).toContain("margin: 1rem auto 0;");
   });
 
   it("uses spacing, bullets, and grouped surfaces instead of row dividers", () => {
@@ -464,7 +564,7 @@ describe("interface foundation", () => {
     expect(html).toContain(".provider > * { grid-column: 2; }");
     expect(html).toContain(".repo-choice input { flex: 0 0 auto; margin: 0.2rem 0 0;");
     expect(html).toContain(".repo-list { display: grid; gap: 0.3rem;");
-    expect(html).toContain("background: var(--surface); border: 0; border-radius: 4px;");
+    expect(html).toContain("background: var(--surface); border: 0; border-radius: var(--radius);");
     expect(html).not.toContain(".check li:last-child { border-bottom: 0; }");
   });
 

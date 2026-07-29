@@ -6,9 +6,10 @@ export const DashboardPage: FC = () => (
     <div id="dashboard-root">
       <h1>Your workbench.</h1>
       <div class="card" aria-live="polite" aria-busy="true">
-        <p class="muted">
-          <span class="spinner" aria-hidden="true"></span>Loading your workbench…
-        </p>
+        <span class="sr-only">Loading your workbench…</span>
+        <div class="skel skel-title"></div>
+        <div class="skel skel-line"></div>
+        <div class="skel skel-line short"></div>
       </div>
     </div>
     <script type="module" src="/dashboard.js"></script>

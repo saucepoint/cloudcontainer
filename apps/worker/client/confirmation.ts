@@ -3,6 +3,8 @@ export interface Confirmation {
   description: string;
   confirmLabel: string;
   onConfirm: () => void;
+  /** Render the confirm button as a solid destructive action. */
+  danger?: boolean;
 }
 
 declare global {
@@ -16,9 +18,10 @@ export function askConfirmation(
   description: string,
   confirmLabel: string,
   onConfirm: () => void,
+  danger = false,
 ): void {
   if (window.requestConfirmation) {
-    window.requestConfirmation({ title, description, confirmLabel, onConfirm });
+    window.requestConfirmation({ title, description, confirmLabel, onConfirm, danger });
   } else if (confirm(description)) {
     onConfirm();
   }

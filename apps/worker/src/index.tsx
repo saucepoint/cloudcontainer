@@ -9,7 +9,7 @@ import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { DashboardPage } from "./pages/dashboard.js";
-import { LandingPage, OnboardingPage, SecurityPage } from "./pages/views.js";
+import { LandingPage, NotFoundPage, OnboardingPage, SecurityPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
@@ -74,6 +74,13 @@ app.route("/", githubRoutes);
 app.route("/", codexAuthRoutes);
 app.route("/", subscriptionRoutes);
 app.route("/", apiRoutes);
+
+app.notFound((c) => {
+  if (c.req.path === "/api" || c.req.path.startsWith("/api/")) {
+    return c.json({ error: "not found" }, 404);
+  }
+  return c.html(<NotFoundPage />, 404);
+});
 
 export default {
   fetch: app.fetch,

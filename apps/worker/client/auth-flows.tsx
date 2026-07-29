@@ -158,13 +158,13 @@ function PasteFlow({ config, complete, release }: { config: PasteConfig; complet
   if (!authorizeUrl) return <p className="err" role="alert">{error}</p>;
   return (
     <>
-      <ol style={{ margin: "0.6rem 0 0.6rem 1.2rem" }}>
+      <ol className="flow-steps">
         <li><a href={authorizeUrl} target="_blank" rel="noreferrer">{config.openLabel}</a>{config.step1}</li>
         <li>{config.step2}</li>
       </ol>
       <label htmlFor={config.inputId}>{config.inputLabel}</label>
       <input type="text" id={config.inputId} autoComplete="off" spellCheck={false} placeholder={config.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
-      <div className="row"><button type="button" className="btn" disabled={busy} onClick={() => void connect()}>{busy ? "Connecting…" : "Connect"}</button></div>
+      <div className="row"><button type="button" className="btn primary" disabled={busy} onClick={() => void connect()}>{busy ? "Connecting…" : "Connect"}</button></div>
       <div className="err" role="alert" aria-live="assertive">{error}</div>
     </>
   );
