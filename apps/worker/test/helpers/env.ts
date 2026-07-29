@@ -107,7 +107,7 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     AUTH_GITHUB_CLIENT_ID: "",
     WORLD_ID_APP_ID: "",
     WORLD_ID_RP_ID: "",
-    WORLD_ID_ACTION: "verify-account",
+    WORLD_ID_ACTION: "verify-account-1",
     WORLD_ID_ENVIRONMENT: "production",
     BETTER_AUTH_SECRET: "test-better-auth-secret-must-be-at-least-32-characters",
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),

@@ -10,7 +10,7 @@ import { createTestSession, makeEnv, seedUser, stubFetch } from "./helpers/env.j
 const WORLD_ID_CONFIG = {
   WORLD_ID_APP_ID: "app_test",
   WORLD_ID_RP_ID: "rp_test",
-  WORLD_ID_ACTION: "verify-account",
+  WORLD_ID_ACTION: "verify-account-1",
   WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
 } satisfies Partial<Bindings>;
 
@@ -46,7 +46,7 @@ function worldIdProof(userId: string) {
   return {
     protocol_version: "4.0",
     nonce: crypto.randomUUID(),
-    action: "verify-account",
+    action: "verify-account-1",
     environment: "production",
     responses: [{ signal_hash: hashSignal(userId) }],
   };
@@ -78,7 +78,7 @@ describe("account verification", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       app_id: "app_test",
-      action: "verify-account",
+      action: "verify-account-1",
       environment: "production",
       allow_legacy_proofs: false,
       signal: user.id,
