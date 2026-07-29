@@ -108,14 +108,14 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent { display: grid; grid-template-columns: minmax(0, 1fr); background: var(--surface);
   border-radius: var(--radius); overflow: hidden; transition: background-color 140ms ease; }
 .agent:hover { background: var(--surface-strong); }
-.agent input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.agent-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .agent-choice { grid-column: 1; grid-row: 1; display: flex; min-height: 6.2rem; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.85rem 1rem;
   color: var(--ink); background: transparent; border: 0; border-radius: 0; cursor: pointer; font-size: 0.94rem; }
 .agent:has(.agent-signin) .agent-choice { padding-right: 9.5rem; }
 .agent-choice:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 .agent-checkbox { display: inline-flex; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; align-items: center; justify-content: center;
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
-.agent input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
+.agent-choice input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
 .agent-copy { min-width: 0; flex: 1; }
 .agent-title { display: block; }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
@@ -134,7 +134,7 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .device-flow-code .ssh { min-width: 0; margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: 0.16em; text-align: center; }
 .device-flow-code .btn { justify-self: start; white-space: nowrap; }
 .device-flow .muted { margin: 0; }
-.flow-steps { margin: 0.6rem 0 0.6rem 1.2rem; }
+.flow-steps { margin: 0.6rem 0; padding-left: 1.2rem; }
 .badge { display: inline-flex; align-items: center; gap: 0.42rem; padding: 0; font-family: var(--mono);
   font-size: 0.76rem; font-weight: 600; white-space: nowrap; transition: color 240ms ease; }
 .badge::before { content: ""; width: 0.48rem; height: 0.48rem; border-radius: 50%;

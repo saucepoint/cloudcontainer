@@ -9,6 +9,7 @@ import {
   SecurityPage,
   VerificationPage,
 } from "../src/pages/views.js";
+import { PAGE_STYLES } from "../src/pages/styles.js";
 import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
 function inlineScriptsOf(html: string): string[] {
@@ -224,6 +225,17 @@ describe("subscription sign-in wiring", () => {
     expect(codexFlow).toContain("copyCode: true");
     expect(authFlowsClient).toContain('"Copy code"');
     expect(authFlowsClient).toContain("device-flow-code");
+  });
+
+  it("keeps the Claude authorization-code field visible inside the agent card", () => {
+    expect(PAGE_STYLES).toContain(".agent-choice input {");
+    expect(PAGE_STYLES).not.toContain(".agent input {");
+    expect(authFlowsClient).toContain('id={config.inputId}');
+  });
+
+  it("keeps Claude sign-in instructions aligned with the flow container", () => {
+    expect(PAGE_STYLES).toContain(".flow-steps { margin: 0.6rem 0; padding-left: 1.2rem; }");
+    expect(PAGE_STYLES).not.toContain(".flow-steps { margin: 0.6rem 0 0.6rem 1.2rem; }");
   });
 
   it("dashboard omits credential management after server creation", () => {
