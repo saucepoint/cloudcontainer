@@ -418,7 +418,7 @@ describe("GET /api/dashboard", () => {
     };
     expect(body.container).toMatchObject({
       status: "running",
-      diskGb: 8,
+      diskGb: 5,
       sshCommand: "ssh -p 30500 dev@host-1.workbench.test",
     });
     expect(body.container).not.toHaveProperty("rootDiskGb");

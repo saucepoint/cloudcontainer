@@ -194,7 +194,7 @@ export async function seedContainer(
     tier: "free",
     cpu: 1,
     ram_mb: 2048,
-    disk_gb: 8,
+    disk_gb: 5,
     status: "running",
     status_detail: null,
     host_key_fingerprints: null,

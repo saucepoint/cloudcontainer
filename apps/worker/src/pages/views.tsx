@@ -30,18 +30,21 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
     <div class="card">
       <ul class="check spec-list">
         <li>
-          1 vCPU · 2 GB RAM · 8 GB persistent disk · Debian 13
+          1 vCPU · 2 GB RAM · 5 GB Storage · Debian 13
           <span class="ok">free tier</span>
         </li>
         <li>
-          2 vCPU · 4 GB RAM · 8 GB persistent disk · Debian 13
+          2 vCPU · 4 GB RAM · 8 GB Storage · Debian 13
           <span class="muted tier-label">coming soon</span>
         </li>
         <li>
-          Pi, Claude Code, Codex, and/or OpenCode
+          Pi, Claude Code, Codex, OpenCode
         </li>
         <li>
-          SSH, tmux, git, Node, Python, and more
+          SSH, tmux, git, bash, curl, and more
+        </li>
+        <li>
+          <i>Your repos and agents, preconfigured and ready in less than 5 mins</i>
         </li>
       </ul>
     </div>

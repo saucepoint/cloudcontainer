@@ -82,10 +82,10 @@ POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" | \
   jq -er '.metadata.space.total // .space.total')
 DISK_GB=$(( POOL_TOTAL_BYTES * DISK_CAPACITY_PERCENT / 100 / 1073741824 ))
 
-# The current service tier is 1 vCPU, 2 GiB RAM, and 8 GiB each for root/home.
+# The current service tier is 1 vCPU, 2 GiB RAM, and 5 GiB each for root/home.
 RAM_SLOTS=$(( RAM_CAPACITY_MB / 2048 ))
 CPU_SLOTS=$VCPU_CAPACITY
-DISK_SLOTS=$(( DISK_GB / 16 ))
+DISK_SLOTS=$(( DISK_GB / 10 ))
 TENANT_SLOTS=$RAM_SLOTS
 (( CPU_SLOTS < TENANT_SLOTS )) && TENANT_SLOTS=$CPU_SLOTS
 (( DISK_SLOTS < TENANT_SLOTS )) && TENANT_SLOTS=$DISK_SLOTS
@@ -149,7 +149,7 @@ elif [[ "$TENANT_ROOT_POOL" != "$POOL_NAME" ]]; then
   echo "!! tenant profile root uses pool $TENANT_ROOT_POOL instead of $POOL_NAME"
   exit 1
 fi
-incus --project "$PROJECT_NAME" profile device set default root size=8GiB
+incus --project "$PROJECT_NAME" profile device set default root size=5GiB
 TENANT_NETWORK=$(incus --project "$PROJECT_NAME" profile device get default eth0 network 2>/dev/null || true)
 if [[ -z "$TENANT_NETWORK" ]]; then
   incus --project "$PROJECT_NAME" profile device add default eth0 nic \

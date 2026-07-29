@@ -15,6 +15,7 @@ import {
   GithubRepoNameSchema,
   GithubReposSchema,
   LlmKeysSchema,
+  TIERS,
 } from "../src/types.js";
 
 const spec = {
@@ -22,10 +23,17 @@ const spec = {
   tier: "free",
   cpu: 1,
   ramMb: 2048,
-  diskGb: 8,
+  diskGb: 5,
   sshPort: 30500,
 };
 const base = { jobId: "j-1", containerId: "c-1" };
+
+describe("tier capacities", () => {
+  it("keeps the free tier at 5 GiB and the upcoming paid tier at 8 GiB", () => {
+    expect(TIERS.free.diskGb).toBe(5);
+    expect(TIERS.paid.diskGb).toBe(8);
+  });
+});
 
 describe("JobRequestSchema", () => {
   it("accepts a well-formed provision request", () => {

@@ -132,7 +132,7 @@ fi
 
 check_eq "profile root pool" "$POOL_NAME" \
   incus --project "$PROJECT_NAME" profile device get default root pool
-check_eq "profile root default quota" "8GiB" \
+check_eq "profile root default quota" "5GiB" \
   incus --project "$PROJECT_NAME" profile device get default root size
 check_eq "profile NIC network" "$NETWORK_NAME" \
   incus --project "$PROJECT_NAME" profile device get default eth0 network

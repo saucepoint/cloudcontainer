@@ -71,9 +71,9 @@ function LandingAuth(): React.JSX.Element {
       >
         <GitHubLogoIcon aria-hidden="true" />Sign in with GitHub
       </button>
-      <div className="auth-divider"><span>or use a passkey</span></div>
+      <div className="auth-divider"><span>passkeys</span></div>
       <button
-        className="btn secondary auth-provider"
+        className="btn auth-provider"
         type="button"
         disabled={pending}
         onClick={() => void createPasskey()}
@@ -81,7 +81,7 @@ function LandingAuth(): React.JSX.Element {
         <LockClosedIcon aria-hidden="true" />Create passkey
       </button>
       <button
-        className="btn secondary auth-provider"
+        className="btn auth-provider"
         type="button"
         disabled={pending}
         onClick={() => void usePasskey()}

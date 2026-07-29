@@ -387,7 +387,7 @@ describe("refreshJob", () => {
   it("destroy success quarantines the port, releases host accounting, and drops the row", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
     await seedContainer(env, { status: "running" });
     await env.DB.prepare(
       "INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES ('user-1', 1, 2)",
@@ -457,7 +457,7 @@ describe("refreshJob", () => {
     await seedHost(env, {
       vcpu_allocated: 2,
       ram_allocated_mb: 4096,
-      disk_allocated_gb: 32,
+      disk_allocated_gb: 20,
     });
     await seedContainer(env, { status: "destroying" });
     const now = Date.now();
@@ -485,7 +485,7 @@ describe("refreshJob", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
   });
 
   it("renews the D1 lease when the daemon reports a running heartbeat", async () => {
@@ -616,7 +616,7 @@ describe("startProvision", () => {
     }>();
     expect(host?.vcpu_allocated).toBe(1);
     expect(host?.ram_allocated_mb).toBe(2048);
-    expect(host?.disk_allocated_gb).toBe(16);
+    expect(host?.disk_allocated_gb).toBe(10);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
   });
 
@@ -733,7 +733,7 @@ describe("startProvision", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
     expect(daemon.submitted).toHaveLength(1);
   });
 });

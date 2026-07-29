@@ -60,7 +60,7 @@ function ContainerCard({
           <BusyLabel busy={busy}>{STATUS_LABELS[container.status]}</BusyLabel>
         </span>
       </div>
-      <p className="muted">{container.cpu} vCPU · {Math.round(container.ramMb / 1024)} GB RAM · {container.diskGb} GB persistent disk · {container.tier}</p>
+      <p className="muted">{container.cpu} vCPU · {Math.round(container.ramMb / 1024)} GB RAM · {container.diskGb} GB Storage · {container.tier}</p>
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
       {container.status === "waitlisted" ? <p>All hosts are full. Your place is saved.</p> : null}
       {container.status === "stopped" ? <p>Files are safe. Start the workbench to use SSH.</p> : null}

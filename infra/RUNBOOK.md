@@ -133,7 +133,7 @@ Before activating the host, run the read-only policy audit:
 
 The bootstrap registers a conservative 3:1 vCPU ceiling, 60% of physical RAM,
 and 70% of pool capacity. The actual 1 vCPU/2 GiB tenant count is the minimum
-of CPU, RAM, and 16 GiB root-plus-home disk slots.
+of CPU, RAM, and 10 GiB root-plus-home disk slots.
 
 ### 3.3 Build and verify the base image
 

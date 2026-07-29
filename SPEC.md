@@ -84,7 +84,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - World ID proof-of-human or single-use administrator-invite eligibility verification.
 - One free environment per account.
 - Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
-  an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
+  a 5 GiB persistent home volume, and a 5 GiB disposable root filesystem.
   The daemon provisions a 2-vCPU Incus limit for developer experience; this
   provisioned limit is intentionally different from the presented allocation.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
@@ -113,8 +113,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Roadmap, not a commitment
 
-- A paid tier with in-place resource upgrades, Stripe, email, and a documented
-  grace/export policy.
+- A paid tier with 2 vCPU, 4096 MiB RAM, 8 GiB home and root disks, in-place
+  resource upgrades, Stripe, email, and a documented grace/export policy.
 - Encrypted production storage, replicated backups, and restore tooling.
 - Multiple production hosts, draining and capacity automation, and regional
   placement.
@@ -588,8 +588,8 @@ operations synchronize keys and credentials.
 - A dedicated restricted Incus project with aggregate CPU, memory, process,
   disk, and instance ceilings.
 - Per-tenant 2-vCPU provisioned allowance, hard 2 GiB memory without swap,
-  1024-process ceiling, isolated unprivileged idmap, an 8 GiB home-volume
-  quota, and an 8 GiB root-disk quota. The web interface intentionally
+  1024-process ceiling, isolated unprivileged idmap, a 5 GiB home-volume
+  quota, and a 5 GiB root-disk quota. The web interface intentionally
   presents the free tier as 1 vCPU; host accounting continues to reserve that
   presented allocation alongside both disks.
 - No nesting, privileged containers, raw low-level Incus configuration, or

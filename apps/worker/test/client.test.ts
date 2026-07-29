@@ -13,7 +13,7 @@ function container(overrides: Partial<ContainerView> = {}): ContainerView {
     tier: "free",
     cpu: 1,
     ramMb: 2048,
-    diskGb: 8,
+    diskGb: 5,
     sshCommand: null,
     hostKeyFingerprints: [],
     job: null,

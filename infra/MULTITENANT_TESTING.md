@@ -12,7 +12,7 @@ prove east-west isolation or CPU oversubscription. Use a host with at least
 
 ## What this baseline enforces
 
-- D1 reserves vCPU, non-reserved RAM, both 8 GiB disk quotas, and an SSH port
+- D1 reserves vCPU, non-reserved RAM, both 5 GiB disk quotas, and an SSH port
   in one transaction.
 - Placement requires an active host, a successful current health streak, and a
   daemon heartbeat no older than 15 minutes.
@@ -92,12 +92,12 @@ Keep the host drained if the audit or heartbeat does not pass.
 
 ## Capacity test
 
-For the current 1 vCPU/2 GiB/8 GiB tier, usable slots are:
+For the current 1 vCPU/2 GiB/5 GiB tier, usable slots are:
 
     min(
       vcpu_capacity,
       floor((ram_total_mb - ram_reserve_mb) / 2048),
-      floor(disk_total_gb / 16)
+      floor(disk_total_gb / 10)
     )
 
 Create `slots + 1` disposable accounts. Provision the first `slots` accounts
@@ -106,7 +106,7 @@ concurrently, then the extra account. Confirm:
 - exactly `slots` containers are placed and the extra account is waitlisted;
 - `vcpu_allocated = slots`;
 - `ram_allocated_mb = slots * 2048`;
-- `disk_allocated_gb = slots * 16`;
+- `disk_allocated_gb = slots * 10`;
 - every placed container has a unique SSH port; and
 - repeating concurrent requests does not change those totals.
 
@@ -139,7 +139,7 @@ but cannot open outbound TCP/25. Do not weaken the bridge policy to make a
 test pass.
 
 For disk enforcement, fill disposable files on both `/home/dev` and `/` past
-their advertised 8 GiB caps. The write must fail inside that tenant without
+their advertised 5 GiB caps. The write must fail inside that tenant without
 pool exhaustion or errors in another tenant. Remove the files afterward.
 
 Create a file owned by `dev` in `/home/dev`, run an application rebuild, and
@@ -184,7 +184,7 @@ mismatch, or tenant state changing across reboot contrary to the control plane.
 | Denser pilot | 16 physical cores | 128 GiB ECC | 2 × 1.92 TB enterprise NVMe mirror | 38 |
 
 These estimates use the bootstrap's conservative 60% physical-RAM allocation,
-3:1 vCPU-to-physical-core ceiling, 70% pool registration, and 16 GiB reserved
+3:1 vCPU-to-physical-core ceiling, 70% pool registration, and 10 GiB reserved
 disk per tenant. RAM is not oversubscribed; CPU is. Prefer high sustained
 single-core performance, ECC RAM, mirrored power-loss-protected NVMe, separate
 boot media, redundant networking/power, and out-of-band management.

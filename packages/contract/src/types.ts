@@ -77,8 +77,8 @@ export const JOB_STATUSES = ["queued", "running", "succeeded", "failed"] as cons
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
 export const TIERS = {
-  free: { cpu: 1, ramMb: 2048, diskGb: 8 },
-  paid: { cpu: 2, ramMb: 4096, diskGb: 32 },
+  free: { cpu: 1, ramMb: 2048, diskGb: 5 },
+  paid: { cpu: 2, ramMb: 4096, diskGb: 8 },
 } as const;
 export type Tier = keyof typeof TIERS;
 

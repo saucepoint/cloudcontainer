@@ -52,7 +52,7 @@ function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision
     op: "provision",
     jobId: "job-1",
     containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-    spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 8, sshPort: 30500 },
+    spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 5, sshPort: 30500 },
     sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test@laptop"],
     dashboardUrl: "https://workbench.example",
     githubRepos: [],
@@ -81,7 +81,7 @@ describe("provision command construction", () => {
     const result = await provisioner.run(provisionRequest());
 
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=8GiB"));
+    expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=5GiB"));
     const init = flat.find((f) => f.startsWith("init workbench-base cs-aaaaaaaabbbb"));
     expect(init).toContain("limits.cpu=2");
     expect(init).toContain("limits.cpu.allowance=200%");
@@ -101,7 +101,7 @@ describe("provision command construction", () => {
     expect(init).toContain("security.nesting=false");
     expect(init).toContain("user.workbench.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     expect(flat).toContain(
-      "config device override cs-aaaaaaaabbbb root size=8GiB",
+      "config device override cs-aaaaaaaabbbb root size=5GiB",
     );
     expect(flat).toContainEqual(
       expect.stringContaining("config device add cs-aaaaaaaabbbb home disk pool=default source=home-cs-aaaaaaaabbbb path=/home/dev"),
@@ -614,14 +614,14 @@ describe("resize / destroy", () => {
       op: "resize",
       jobId: "j",
       containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 32, sshPort: 30500 },
+      spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
-    expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=32GiB");
-    expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=32GiB");
+    expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=8GiB");
+    expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=8GiB");
   });
 
   it("keeps the provisioned CPU floor when the presented tier has one vCPU", async () => {
@@ -631,7 +631,7 @@ describe("resize / destroy", () => {
       op: "resize",
       jobId: "j",
       containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 8, sshPort: 30500 },
+      spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 5, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
