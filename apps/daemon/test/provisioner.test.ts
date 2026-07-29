@@ -144,6 +144,33 @@ describe("provision command construction", () => {
     }
   });
 
+  it("exports each added model provider under its documented environment variable", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      {
+        llmKeys: {
+          deepseek: "CANARY-deepseek",
+          kimi: "CANARY-kimi",
+          minimax: "CANARY-minimax",
+          zai: "CANARY-zai",
+          vercel_ai_gateway: "CANARY-vercel-gateway",
+        },
+      },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    const envWrite = calls.find((call) => call.stdin?.includes("DEEPSEEK_API_KEY"));
+    expect(envWrite?.stdin).toContain("export DEEPSEEK_API_KEY='CANARY-deepseek'");
+    expect(envWrite?.stdin).toContain("export MOONSHOT_API_KEY='CANARY-kimi'");
+    expect(envWrite?.stdin).toContain("export KIMI_API_KEY='CANARY-kimi'");
+    expect(envWrite?.stdin).toContain("export MINIMAX_API_KEY='CANARY-minimax'");
+    expect(envWrite?.stdin).toContain("export ZAI_API_KEY='CANARY-zai'");
+    expect(envWrite?.stdin).toContain("export AI_GATEWAY_API_KEY='CANARY-vercel-gateway'");
+    for (const call of calls) expect(call.args.join(" ")).not.toContain("CANARY-");
+  });
+
   it("preconfigures gh and clones selected repositories directly under ~/repos", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(

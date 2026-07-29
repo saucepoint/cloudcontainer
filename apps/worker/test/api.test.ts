@@ -692,6 +692,38 @@ describe("credentials endpoint", () => {
     expect(await presence.json()).toMatchObject({ llm: {}, wrangler: false });
   });
 
+  it("accepts every pasteable model provider and reports presence without values", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    const providers = [
+      "anthropic",
+      "openai",
+      "gemini",
+      "openrouter",
+      "opencode_go",
+      "deepseek",
+      "kimi",
+      "minimax",
+      "zai",
+      "vercel_ai_gateway",
+    ];
+    const res = await app().request(
+      "/api/credentials",
+      json({ llmKeys: Object.fromEntries(providers.map((provider) => [provider, `CANARY-${provider}`])) }, headers),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const presence = await app().request("/api/credentials", { headers }, env);
+    const body = await presence.json();
+    expect(body).toMatchObject({
+      llm: Object.fromEntries(providers.map((provider) => [provider, true])),
+      cloudflare: false,
+      github: null,
+    });
+    expect(JSON.stringify(body)).not.toContain("CANARY-");
+  });
+
   it("accepts an OpenCode Go key and reports wrangler presence separately from the API token", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);

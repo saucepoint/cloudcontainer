@@ -14,6 +14,7 @@ import {
   JobStatusResponseSchema,
   GithubRepoNameSchema,
   GithubReposSchema,
+  LLM_PROVIDERS,
   LlmKeysSchema,
   TIERS,
 } from "../src/types.js";
@@ -137,7 +138,9 @@ describe("JobRequestSchema", () => {
 describe("LlmKeysSchema", () => {
   it("accepts any subset of known providers and nothing else", () => {
     expect(LlmKeysSchema.safeParse({}).success).toBe(true);
-    expect(LlmKeysSchema.safeParse({ anthropic: "k" }).success).toBe(true);
+    for (const provider of LLM_PROVIDERS) {
+      expect(LlmKeysSchema.safeParse({ [provider]: "k" }).success).toBe(true);
+    }
     expect(LlmKeysSchema.safeParse({ made_up_provider: "k" }).success).toBe(false);
   });
 
@@ -165,6 +168,13 @@ describe("aggregate request budgets", () => {
         claude_subscription_token: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
         codex_subscription_token: fill.repeat(INPUT_LIMITS.codexAuthBytes / fill.length),
         github_copilot: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+        // The aggregate payload budget is smaller than every provider's
+        // individual maximum, so include newer providers at a minimal value.
+        deepseek: fill,
+        kimi: fill,
+        minimax: fill,
+        zai: fill,
+        vercel_ai_gateway: fill,
       },
       cloudflareToken: fill.repeat(INPUT_LIMITS.cloudflareTokenBytes / fill.length),
       wranglerOauth: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),

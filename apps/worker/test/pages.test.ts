@@ -214,6 +214,16 @@ describe("subscription sign-in wiring", () => {
     expect(section).toContain('name="llm_anthropic"');
     expect(section).toContain('href="https://console.anthropic.com/settings/keys"');
     expect(section).toContain('href="https://platform.openai.com/api-keys"');
+    for (const [name, keyUrl] of [
+      ["llm_deepseek", "https://platform.deepseek.com/api_keys"],
+      ["llm_kimi", "https://platform.kimi.com/"],
+      ["llm_minimax", "https://platform.minimax.io/account/api-keys"],
+      ["llm_zai", "https://z.ai/manage-apikey"],
+      ["llm_vercel_ai_gateway", "https://vercel.com/ai-gateway"],
+    ]) {
+      expect(section).toContain(`name="${name}"`);
+      expect(section).toContain(`href="${keyUrl}"`);
+    }
   });
 
   it("gives the ChatGPT device code a dedicated copy affordance", () => {

@@ -19,6 +19,12 @@ const LLM_ENV_VARS: Record<LlmProvider, readonly string[]> = {
   claude_subscription_token: ["CLAUDE_CODE_OAUTH_TOKEN"],
   codex_subscription_token: [],
   github_copilot: [],
+  deepseek: ["DEEPSEEK_API_KEY"],
+  // Keep both names for the Open Platform and Kimi Code ecosystems.
+  kimi: ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  zai: ["ZAI_API_KEY"],
+  vercel_ai_gateway: ["AI_GATEWAY_API_KEY"],
 };
 
 const CODEX_AUTH_PATH = "/home/dev/.codex/auth.json";
