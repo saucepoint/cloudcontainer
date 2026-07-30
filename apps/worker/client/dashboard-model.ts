@@ -41,6 +41,10 @@ export const STATUS_LABELS: Record<ContainerStatus, string> = {
   destroying: "Deleting",
 };
 
+export function formatRamGb(ramMb: number): string {
+  return String(ramMb / 1024);
+}
+
 export function displayError(error: unknown, fallback: string): string {
   const message = errorMessage(error, "");
   return message && message !== "internal error" ? message : fallback;
