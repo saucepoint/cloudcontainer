@@ -66,6 +66,7 @@ describe("landing page call to action", () => {
   it("presents the free capacity first and labels the larger tier as upcoming", () => {
     const html = String(LandingPage({ devAuth: false }));
     const freeTier = "1 vCPU · 1.5 GB RAM · 5 GB Storage · Debian 13";
+    expect(html).not.toContain("1 GB Swap");
     const premiumTier = "2 vCPU · 4 GB RAM · 8 GB Storage · Debian 13";
     expect(html).toContain(freeTier);
     expect(html).toContain(premiumTier);

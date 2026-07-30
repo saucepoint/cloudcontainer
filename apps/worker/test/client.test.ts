@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pollDelay, type ContainerView } from "../client/dashboard-model.js";
+import { formatRamGb, pollDelay, type ContainerView } from "../client/dashboard-model.js";
 import { HttpError, postJson, requestJson } from "../client/http.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -55,6 +55,13 @@ describe("browser JSON transport", () => {
       undefined,
       (status) => status === 401 ? "Sign-in failed." : "Could not complete that request.",
     )).rejects.toMatchObject({ message: "Sign-in failed.", status: 401 });
+  });
+});
+
+describe("dashboard resource display", () => {
+  it("shows the free-tier memory without rounding it up", () => {
+    expect(formatRamGb(1536)).toBe("1.5");
+    expect(formatRamGb(4096)).toBe("4");
   });
 });
 
