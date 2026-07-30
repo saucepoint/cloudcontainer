@@ -153,10 +153,11 @@ Before activating the host, run the read-only policy audit:
     ssh root@HOST \
       'cd /opt/workbench && bash infra/audit-multitenant.sh'
 
-The bootstrap registers a conservative 3:1 vCPU ceiling, 60% of physical RAM,
-and 70% of pool capacity. The actual 1 vCPU/1.5 GiB RAM/1 GiB swap tenant count
-is the minimum of CPU, RAM, and 10 GiB root-plus-home disk slots; bootstrap also
-requires enough host swap for every resulting slot.
+The bootstrap registers a conservative 3:1 vCPU ceiling, all detected physical
+RAM except a fixed 2 GiB host reserve, and 70% of pool capacity. The actual
+1 vCPU/1.5 GiB RAM/1 GiB swap tenant count is the minimum of CPU, RAM, and 10 GiB
+root-plus-home disk slots; bootstrap also requires enough host swap for every
+resulting slot.
 
 ### 3.3 Build and verify the base image
 

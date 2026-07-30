@@ -179,13 +179,13 @@ mismatch, or tenant state changing across reboot contrary to the control plane.
 
 | Purpose | CPU | RAM | Storage | Approximate 1.5 GiB slots |
 |---|---:|---:|---:|---:|
-| Minimum isolation test | 4 physical cores | 16 GiB | 2 × 250 GB NVMe mirror | 4 |
-| Small pilot | 8 physical cores | 64 GiB ECC | 2 × 1 TB enterprise NVMe mirror | 19 |
-| Denser pilot | 16 physical cores | 128 GiB ECC | 2 × 1.92 TB enterprise NVMe mirror | 38 |
+| Minimum isolation test | 4 physical cores | 16 GiB | 2 × 250 GB NVMe mirror | 9 |
+| Small pilot | 8 physical cores | 64 GiB ECC | 2 × 1 TB enterprise NVMe mirror | 24 |
+| Denser pilot | 16 physical cores | 128 GiB ECC | 2 × 1.92 TB enterprise NVMe mirror | 48 |
 
-These estimates use the bootstrap's conservative 60% physical-RAM allocation,
-3:1 vCPU-to-physical-core ceiling, 70% pool registration, and 10 GiB reserved
-disk per tenant. RAM is not oversubscribed; CPU is. Prefer high sustained
+These estimates use the bootstrap's fixed 2 GiB host-RAM reserve, 3:1
+vCPU-to-physical-core ceiling, 70% pool registration, and 10 GiB reserved disk
+per tenant. RAM is not oversubscribed; CPU is. Prefer high sustained
 single-core performance, ECC RAM, mirrored power-loss-protected NVMe, separate
 boot media, redundant networking/power, and out-of-band management.
 

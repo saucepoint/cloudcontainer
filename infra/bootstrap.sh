@@ -77,13 +77,26 @@ echo "== [3/6] nftables baseline =="
 mkdir -p /etc/nftables.d
 cat >/etc/nftables.d/workbench.nft <<'NFT'
 table inet workbench {
+  set wb-v4-connrate {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 60s
+  }
+  set wb-v6-connrate {
+    type ipv6_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 60s
+  }
   chain forward {
     type filter hook forward priority 0; policy accept;
     # No outbound SMTP from tenant containers, ever (spec §10 networking).
     tcp dport 25 drop
     # Blunt scanning/brute-force: cap new outbound connections per source.
-    meta nfproto ipv4 ct state new meter wb-v4-connrate { ip saddr limit rate over 60/second } drop
-    meta nfproto ipv6 ct state new meter wb-v6-connrate { ip6 saddr limit rate over 60/second } drop
+    meta nfproto ipv4 ct state new update @wb-v4-connrate { ip saddr limit rate 60/second burst 5 packets } accept
+    meta nfproto ipv6 ct state new update @wb-v6-connrate { ip6 saddr limit rate 60/second burst 5 packets } accept
+    ct state new drop
   }
 }
 NFT
@@ -91,6 +104,18 @@ grep -q 'include "/etc/nftables.d/' /etc/nftables.conf 2>/dev/null || \
   echo 'include "/etc/nftables.d/*.nft"' >> /etc/nftables.conf
 systemctl enable --now nftables
 systemctl reload nftables || systemctl restart nftables
+
+# Debian's nftables unit reloads the full ruleset, which removes Incus's
+# dynamically managed NAT/firewall table. Start Incus after nftables so its
+# bridge rules are restored and remain correct across reboots.
+install -d -m 0755 /etc/systemd/system/incus.service.d
+cat >/etc/systemd/system/incus.service.d/workbench-nftables.conf <<'UNIT'
+[Unit]
+Wants=nftables.service
+After=nftables.service
+UNIT
+systemctl daemon-reload
+systemctl restart incus
 
 echo "== [4/6] daemon install =="
 mkdir -p "$REPO_DIR" /etc/workbench
@@ -154,7 +179,7 @@ Host bootstrapped. Next steps:
      daemon_pubkey, ram_total_mb, ram_reserve_mb, vcpu_capacity,
      disk_total_gb, status, joined_at, last_seen_at)
    VALUES ('${HOST_ID}', '${IPV4}', '${IPV4}', 'https://${IPV4}:${DAEMON_PORT}',
-     '${CERT_FP}', '${X25519_PUB}', ${RAM_USABLE}, ${RAM_RESERVE}, ${VCPU_CAPACITY},
+     '${CERT_FP}', '${X25519_PUB}', ${RAM_TOTAL_MB}, ${RAM_RESERVE}, ${VCPU_CAPACITY},
      ${DISK_GB}, 'draining', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
      CAST(strftime('%s', 'now') AS INTEGER) * 1000);"
 

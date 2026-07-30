@@ -14,6 +14,7 @@ DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
 VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-3}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
 TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
+HOST_RAM_RESERVE_MB=2048
 TENANT_RAM_MB=1536
 TENANT_SWAP_MB=1024
 
@@ -32,7 +33,7 @@ if ! [[ "$TENANT_PROCESS_LIMIT" =~ ^[0-9]+$ ]] || (( TENANT_PROCESS_LIMIT < 64 )
   exit 1
 fi
 if ! incus query /1.0 | jq -e \
-  '.metadata.api_extensions | index("instance_memory_swap_bytes") != null' >/dev/null; then
+  '(.metadata.api_extensions // .api_extensions) | index("instance_memory_swap_bytes") != null' >/dev/null; then
   echo "!! Incus must support byte-valued limits.memory.swap (instance_memory_swap_bytes)"
   exit 1
 fi
@@ -56,6 +57,8 @@ printf '%s\n' br_netfilter > /etc/modules-load.d/workbench.conf
 # Keep the default project usable for image builds, but tenant instances are
 # created only in the restricted project below.
 incus network show "$NETWORK_NAME" >/dev/null 2>&1 || incus network create "$NETWORK_NAME"
+incus network set "$NETWORK_NAME" ipv4.firewall=true
+incus network set "$NETWORK_NAME" ipv6.firewall=true
 incus profile show default >/dev/null 2>&1 || incus profile create default
 if ! incus profile device get default root path >/dev/null 2>&1; then
   incus profile device add default root disk path=/ pool="$POOL_NAME"
@@ -65,11 +68,11 @@ if ! incus profile device get default eth0 network >/dev/null 2>&1; then
 fi
 
 RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-# Register only 80% of physical RAM, then retain 25% of that usable amount as
-# host/upgrade headroom. The scheduler allocates ram_total_mb - ram_reserve_mb.
-RAM_USABLE=$(( RAM_MB * 80 / 100 ))
-RAM_RESERVE=$(( RAM_USABLE * 25 / 100 ))
-RAM_CAPACITY_MB=$(( RAM_USABLE - RAM_RESERVE ))
+# Register all detected physical RAM and retain a fixed 2 GiB host reserve.
+# The scheduler allocates ram_total_mb - ram_reserve_mb.
+RAM_TOTAL_MB=$RAM_MB
+RAM_RESERVE=$HOST_RAM_RESERVE_MB
+RAM_CAPACITY_MB=$(( RAM_TOTAL_MB - RAM_RESERVE ))
 PHYSICAL_CORES=0
 if command -v lscpu >/dev/null; then
   PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET 2>/dev/null | awk -F, '
@@ -197,4 +200,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED"
+echo "Incus tenant policy: project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED"

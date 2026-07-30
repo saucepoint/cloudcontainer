@@ -30,7 +30,7 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
     <div class="card">
       <ul class="check spec-list">
         <li>
-          1 vCPU · 1.5 GB RAM · 1 GB Swap · 5 GB Storage · Debian 13
+          1 vCPU · 1.5 GB RAM · 5 GB Storage · Debian 13
           <span class="ok">free tier</span>
         </li>
         <li>

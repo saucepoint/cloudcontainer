@@ -58,7 +58,7 @@ else
   fail "Incus daemon is active"
 fi
 if incus query /1.0 2>/dev/null | jq -e \
-  '.metadata.api_extensions | index("instance_memory_swap_bytes") != null' >/dev/null; then
+  '(.metadata.api_extensions // .api_extensions) | index("instance_memory_swap_bytes") != null' >/dev/null; then
   pass "Incus supports byte-valued swap limits"
 else
   fail "Incus supports byte-valued swap limits"
@@ -146,6 +146,10 @@ check_eq "profile root default quota" "5GiB" \
   incus --project "$PROJECT_NAME" profile device get default root size
 check_eq "profile NIC network" "$NETWORK_NAME" \
   incus --project "$PROJECT_NAME" profile device get default eth0 network
+check_eq "Incus IPv4 firewall/NAT management" "true" \
+  incus network get "$NETWORK_NAME" ipv4.firewall
+check_eq "Incus IPv6 firewall/NAT management" "true" \
+  incus network get "$NETWORK_NAME" ipv6.firewall
 check_eq "profile MAC anti-spoofing" "true" \
   incus --project "$PROJECT_NAME" profile device get default eth0 security.mac_filtering
 check_eq "profile IPv4 anti-spoofing" "true" \
@@ -168,6 +172,11 @@ if nft list table inet workbench >/dev/null 2>&1; then
   pass "Workbench nftables policy is loaded"
 else
   fail "Workbench nftables policy is loaded"
+fi
+if nft list table inet incus >/dev/null 2>&1; then
+  pass "Incus nftables NAT/firewall policy is loaded"
+else
+  fail "Incus nftables NAT/firewall policy is loaded"
 fi
 if [[ ! -e /proc/sched_debug || "$(stat -c %a /proc/sched_debug)" == "400" ]]; then
   pass "scheduler debug data is root-only"

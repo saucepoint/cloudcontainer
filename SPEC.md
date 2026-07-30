@@ -532,9 +532,9 @@ requires enough vCPU reservation capacity, enough unallocated disk for both
 the home and root quotas, and enough non-reserved RAM. One failed daemon health
 check immediately pauses new placement; three consecutive failures mark the
 host unhealthy, and a later valid signed stats response recovers it. Hosts
-retain a RAM reserve so future operations are not scheduled against every
-available byte. CPU/RAM/disk accounting, port assignment, and FIFO admission
-must be committed together so concurrent reconciler runs cannot
+retain a fixed 2 GiB RAM reserve so future operations are not scheduled against
+every available byte. CPU/RAM/disk accounting, port assignment, and FIFO
+admission must be committed together so concurrent reconciler runs cannot
 double-allocate capacity.
 
 ---
