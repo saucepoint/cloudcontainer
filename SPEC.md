@@ -83,8 +83,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Better Auth account management with Google, GitHub, and passkey sign-in.
 - World ID proof-of-human or single-use administrator-invite eligibility verification.
 - One free environment per account.
-- Free resources, as presented in the web interface: 1 vCPU, 2048 MiB RAM,
-  a 5 GiB persistent home volume, and a 5 GiB disposable root filesystem.
+- Free resources, as presented in the web interface: 1 vCPU, 1536 MiB RAM,
+  1024 MiB swap, a 5 GiB persistent home volume, and a 5 GiB disposable root filesystem.
   The daemon provisions a 2-vCPU Incus limit for developer experience; this
   provisioned limit is intentionally different from the presented allocation.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
@@ -589,7 +589,8 @@ operations synchronize keys and credentials.
 - Public-key-only SSH and unique per-environment host keys.
 - A dedicated restricted Incus project with aggregate CPU, memory, process,
   disk, and instance ceilings.
-- Per-tenant 2-vCPU provisioned allowance, hard 2 GiB memory without swap,
+- Per-tenant 2-vCPU provisioned allowance, hard 1.5 GiB memory with a 1 GiB
+  swap ceiling,
   1024-process ceiling, isolated unprivileged idmap, a 5 GiB home-volume
   quota, and a 5 GiB root-disk quota. The web interface intentionally
   presents the free tier as 1 vCPU; host accounting continues to reserve that

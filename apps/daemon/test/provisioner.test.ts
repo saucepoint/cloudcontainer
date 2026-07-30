@@ -52,7 +52,7 @@ function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision
     op: "provision",
     jobId: "job-1",
     containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-    spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 5, sshPort: 30500 },
+    spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 1536, diskGb: 5, sshPort: 30500 },
     sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test@laptop"],
     dashboardUrl: "https://workbench.example",
     githubRepos: [],
@@ -85,11 +85,9 @@ describe("provision command construction", () => {
     const init = flat.find((f) => f.startsWith("init workbench-base cs-aaaaaaaabbbb"));
     expect(init).toContain("limits.cpu=2");
     expect(init).toContain("limits.cpu.allowance=200%");
-    expect(init).toContain("limits.memory=2048MiB");
+    expect(init).toContain("limits.memory=1536MiB");
     expect(init).toContain("limits.memory.enforce=hard");
-    // Restricted Incus projects classify limits.memory.swap as low-level
-    // configuration. This host policy therefore relies on swap being absent.
-    expect(init).not.toContain("limits.memory.swap");
+    expect(init).toContain("limits.memory.swap=1024MiB");
     expect(init).toContain("limits.processes=1024");
     expect(init).toContain("boot.autostart=last-state");
     expect(init).toContain("boot.autorestart=false");
@@ -647,6 +645,9 @@ describe("resize / destroy", () => {
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
+    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory.swap=false");
+    expect(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory=4096MiB"))
+      .toBeLessThan(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory.swap=false"));
     expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=8GiB");
     expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=8GiB");
   });
@@ -658,11 +659,14 @@ describe("resize / destroy", () => {
       op: "resize",
       jobId: "j",
       containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 2048, diskGb: 5, sshPort: 30500 },
+      spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 1536, diskGb: 5, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
     expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
+    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory.swap=1024MiB");
+    expect(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory.swap=1024MiB"))
+      .toBeLessThan(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory=1536MiB"));
   });
 
   it("destroy is idempotent when the container is already gone", async () => {

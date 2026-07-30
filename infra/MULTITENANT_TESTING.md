@@ -4,7 +4,7 @@ This procedure is the release gate for testing more than one untrusted Incus
 tenant on a host. It is intentionally destructive and belongs on staging
 hardware with disposable accounts and data.
 
-The current small development VPS is registered for one 1 vCPU/2 GiB tenant
+The current small development VPS is registered for one 1 vCPU/1.5 GiB RAM tenant
 slot. The new 70% disk safety policy can reject that undersized pool entirely;
 do not weaken it just to preserve a slot. In either case, one host tenant cannot
 prove east-west isolation or CPU oversubscription. Use a host with at least
@@ -22,7 +22,7 @@ prove east-west isolation or CPU oversubscription. Use a host with at least
 - The daemon operates only in a dedicated restricted Incus project with
   aggregate CPU, memory, process, disk, and instance ceilings.
 - Each tenant receives an unprivileged isolated idmap, one CPU-worth of
-  allowance, a hard 2 GiB memory limit without swap, 1024 processes, hard root
+  allowance, a hard 1.5 GiB memory limit with 1 GiB swap, 1024 processes, hard root
   and home quotas, anti-spoofing, east-west port isolation, and a 100 Mbit/s
   NIC ceiling.
 - A deliberately stopped tenant remains stopped across a host or Incus restart.
@@ -92,11 +92,11 @@ Keep the host drained if the audit or heartbeat does not pass.
 
 ## Capacity test
 
-For the current 1 vCPU/2 GiB/5 GiB tier, usable slots are:
+For the current 1 vCPU/1.5 GiB RAM/1 GiB swap/5 GiB tier, usable slots are:
 
     min(
       vcpu_capacity,
-      floor((ram_total_mb - ram_reserve_mb) / 2048),
+      floor((ram_total_mb - ram_reserve_mb) / 1536),
       floor(disk_total_gb / 10)
     )
 
@@ -105,7 +105,7 @@ concurrently, then the extra account. Confirm:
 
 - exactly `slots` containers are placed and the extra account is waitlisted;
 - `vcpu_allocated = slots`;
-- `ram_allocated_mb = slots * 2048`;
+- `ram_allocated_mb = slots * 1536`;
 - `disk_allocated_gb = slots * 10`;
 - every placed container has a unique SSH port; and
 - repeating concurrent requests does not change those totals.
@@ -146,11 +146,11 @@ Create a file owned by `dev` in `/home/dev`, run an application rebuild, and
 confirm the file survives and is still owned and writable by `dev`. This checks
 Incus's custom-volume idmap transition when an isolated rootfs is replaced.
 
-For memory enforcement, run a disposable `stress-ng` workload that requests
-more than 2 GiB. It may be killed inside the tenant; the host and neighboring
-SSH sessions must remain responsive, with no host OOM event. Run CPU stress in
-all tenants together and confirm each remains bounded to its configured CPU
-allowance.
+For memory enforcement, run a disposable `stress-ng` workload that exceeds
+1.5 GiB RAM plus 1 GiB swap. It may be killed inside the tenant; verify that
+`free -m` reports 1024 MiB swap and that the host and neighboring SSH sessions
+remain responsive, with no host OOM event. Run CPU stress in all tenants
+together and confirm each remains bounded to its configured CPU allowance.
 
 ## Reboot and failed-daemon tests
 
@@ -177,7 +177,7 @@ mismatch, or tenant state changing across reboot contrary to the control plane.
 
 ## Practical staging hardware
 
-| Purpose | CPU | RAM | Storage | Approximate 2 GiB slots |
+| Purpose | CPU | RAM | Storage | Approximate 1.5 GiB slots |
 |---|---:|---:|---:|---:|
 | Minimum isolation test | 4 physical cores | 16 GiB | 2 × 250 GB NVMe mirror | 4 |
 | Small pilot | 8 physical cores | 64 GiB ECC | 2 × 1 TB enterprise NVMe mirror | 19 |

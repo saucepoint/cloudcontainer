@@ -615,7 +615,7 @@ describe("startProvision", () => {
       disk_allocated_gb: number;
     }>();
     expect(host?.vcpu_allocated).toBe(1);
-    expect(host?.ram_allocated_mb).toBe(2048);
+    expect(host?.ram_allocated_mb).toBe(1536);
     expect(host?.disk_allocated_gb).toBe(10);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
   });
@@ -733,7 +733,7 @@ describe("startProvision", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
     expect(daemon.submitted).toHaveLength(1);
   });
 });

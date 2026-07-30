@@ -30,8 +30,14 @@ const spec = {
 const base = { jobId: "j-1", containerId: "c-1" };
 
 describe("tier capacities", () => {
-  it("keeps the free tier at 5 GiB and the upcoming paid tier at 8 GiB", () => {
+  it("gives the free tier 1.5 GiB RAM, 1 GiB swap, and 5 GiB disk", () => {
+    expect(TIERS.free.ramMb).toBe(1536);
+    expect(TIERS.free.swapMb).toBe(1024);
     expect(TIERS.free.diskGb).toBe(5);
+  });
+
+  it("keeps the upcoming paid tier at 8 GiB disk without swap", () => {
+    expect(TIERS.paid.swapMb).toBe(0);
     expect(TIERS.paid.diskGb).toBe(8);
   });
 });

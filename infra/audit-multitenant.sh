@@ -9,6 +9,8 @@ POOL_NAME="${POOL_NAME:-default}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
 TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
+TENANT_RAM_MB=1536
+TENANT_SWAP_MB=1024
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
 
 failures=0
@@ -55,10 +57,11 @@ if systemctl is-active --quiet incus; then
 else
   fail "Incus daemon is active"
 fi
-if [[ $(awk 'END { print NR }' /proc/swaps) -eq 1 ]]; then
-  pass "host swap is disabled"
+if incus query /1.0 2>/dev/null | jq -e \
+  '.metadata.api_extensions | index("instance_memory_swap_bytes") != null' >/dev/null; then
+  pass "Incus supports byte-valued swap limits"
 else
-  fail "host swap is disabled"
+  fail "Incus supports byte-valued swap limits"
 fi
 if [[ -d /sys/module/br_netfilter ]]; then
   pass "bridge netfilter is loaded"
@@ -115,6 +118,13 @@ check_set "tenant project disk ceiling" \
   incus project get "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}"
 
 PROJECT_SLOTS=$(incus project get "$PROJECT_NAME" limits.containers 2>/dev/null || echo 0)
+SWAP_TOTAL_MB=$(awk '/SwapTotal/ { print int($2 / 1024) }' /proc/meminfo)
+SWAP_REQUIRED_MB=$(( PROJECT_SLOTS * TENANT_SWAP_MB ))
+if (( SWAP_TOTAL_MB >= SWAP_REQUIRED_MB )); then
+  pass "host swap fits the tenant ceiling"
+else
+  fail "host swap fits the tenant ceiling (need ${SWAP_REQUIRED_MB}MiB, got ${SWAP_TOTAL_MB}MiB)"
+fi
 IDMAP_REQUIRED=$(( (PROJECT_SLOTS + 1) * 65536 ))
 if [[ -s /etc/subuid || -s /etc/subgid ]]; then
   SUBUID_TOTAL=$(awk -F: '$1 == "root" { total += int($3 / 65536) * 65536 } END { print total + 0 }' /etc/subuid 2>/dev/null || true)
@@ -180,17 +190,12 @@ while IFS= read -r name; do
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu
   check_set "$name has a CPU allowance" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu.allowance
-  check_set "$name has an absolute memory limit" \
+  check_eq "$name has the free-tier memory limit" "${TENANT_RAM_MB}MiB" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory
   check_eq "$name has hard memory enforcement" "hard" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory.enforce
-  TENANT_SWAP=$(incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap 2>/dev/null || true)
-  if [[ "$TENANT_SWAP" == "false" ]] || \
-    { [[ -z "$TENANT_SWAP" ]] && [[ $(awk 'END { print NR }' /proc/swaps) -eq 1 ]]; }; then
-    pass "$name cannot consume host swap"
-  else
-    fail "$name cannot consume host swap"
-  fi
+  check_eq "$name has the free-tier swap limit" "${TENANT_SWAP_MB}MiB" \
+    incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
   check_eq "$name process ceiling" "$TENANT_PROCESS_LIMIT" \
     incus --project "$PROJECT_NAME" config get "$name" limits.processes
   check_eq "$name is unprivileged" "false" \

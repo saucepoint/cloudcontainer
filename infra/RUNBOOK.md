@@ -85,6 +85,28 @@ For a disposable development host, bootstrap can create a file-backed pool:
 This stores an unencrypted zpool image on the host filesystem. It is
 development-only.
 
+Provide at least 1 GiB of host swap per expected tenant slot before bootstrap.
+Each free container is capped at 1 GiB of swap by Incus; the aggregate host
+capacity prevents tenants from competing for an undersized swap device. For a
+four-slot host without an existing swap partition, one option is a dedicated
+4 GiB swap file on the host root filesystem:
+
+    fallocate -l 4G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+Do not place the swap file inside the tenant storage pool.
+
+When applying this policy to an existing host, drain it first and notify users:
+the policy script updates existing free containers live from 2 GiB RAM/no swap
+to 1.5 GiB RAM/1 GiB swap, enabling swap before lowering RAM to avoid a
+transient tighter ceiling. Active workloads can still see reclaim latency.
+Apply migration `0011_free_tier_memory.sql` while the host remains drained so
+D1 reservations match the Incus limits before the host returns to active
+placement.
+
 ### 3.2 Copy and bootstrap
 
 From the repository root:
@@ -132,8 +154,9 @@ Before activating the host, run the read-only policy audit:
       'cd /opt/workbench && bash infra/audit-multitenant.sh'
 
 The bootstrap registers a conservative 3:1 vCPU ceiling, 60% of physical RAM,
-and 70% of pool capacity. The actual 1 vCPU/2 GiB tenant count is the minimum
-of CPU, RAM, and 10 GiB root-plus-home disk slots.
+and 70% of pool capacity. The actual 1 vCPU/1.5 GiB RAM/1 GiB swap tenant count
+is the minimum of CPU, RAM, and 10 GiB root-plus-home disk slots; bootstrap also
+requires enough host swap for every resulting slot.
 
 ### 3.3 Build and verify the base image
 

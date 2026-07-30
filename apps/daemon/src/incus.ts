@@ -140,7 +140,14 @@ export class Incus {
     await this.run(["storage", "volume", "delete", pool, volume]);
   }
 
-  async init(image: string, name: string, containerId: string, cpu: number, ramMb: number): Promise<void> {
+  async init(
+    image: string,
+    name: string,
+    containerId: string,
+    cpu: number,
+    ramMb: number,
+    swapMb: number,
+  ): Promise<void> {
     await this.run([
       "init",
       image,
@@ -149,6 +156,7 @@ export class Incus {
       "-c", `limits.cpu.allowance=${cpu * 100}%`,
       "-c", `limits.memory=${ramMb}MiB`,
       "-c", "limits.memory.enforce=hard",
+      "-c", `limits.memory.swap=${swapMb > 0 ? `${swapMb}MiB` : "false"}`,
       "-c", `limits.processes=${TENANT_PROCESS_LIMIT}`,
       "-c", "boot.autostart=last-state",
       "-c", "boot.autorestart=false",
@@ -159,10 +167,22 @@ export class Incus {
     ]);
   }
 
-  async setLimits(name: string, cpu: number, ramMb: number): Promise<void> {
+  async setLimits(name: string, cpu: number, ramMb: number, swapMb: number): Promise<void> {
     await this.run(["config", "set", name, `limits.cpu=${cpu}`]);
     await this.run(["config", "set", name, `limits.cpu.allowance=${cpu * 100}%`]);
-    await this.run(["config", "set", name, `limits.memory=${ramMb}MiB`]);
+    const setMemory = () => this.run(["config", "set", name, `limits.memory=${ramMb}MiB`]);
+    const setSwap = () => this.run([
+      "config", "set", name, `limits.memory.swap=${swapMb > 0 ? `${swapMb}MiB` : "false"}`,
+    ]);
+    // Add swap before a RAM downgrade; raise RAM before removing swap on an
+    // upgrade. This avoids a transient lower combined ceiling in either path.
+    if (swapMb > 0) {
+      await setSwap();
+      await setMemory();
+    } else {
+      await setMemory();
+      await setSwap();
+    }
   }
 
   /** Cap the disposable root filesystem inherited from the default profile. */

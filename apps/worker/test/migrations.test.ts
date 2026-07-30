@@ -138,3 +138,52 @@ describe("0010 Better Auth account migration", () => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
+
+describe("0011 free-tier memory migration", () => {
+  it("reduces legacy free reservations and recomputes host accounting", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, created_at, updated_at)
+      VALUES
+        ('free-user', 'Free', 'free@example.test', 1, 1, 1),
+        ('paid-user', 'Paid', 'paid@example.test', 1, 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_allocated_mb, ram_reserve_mb, disk_total_gb,
+         disk_allocated_gb, status, joined_at)
+      VALUES
+        ('host-1', '192.0.2.1', 'host.test', 'https://host.test', 'pub',
+         8192, 6144, 2048, 100, 20, 'draining', 1);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb,
+         status, created_at)
+      VALUES
+        ('free-container', 'free-user', 'host-1', 30500, '["claude"]',
+         'free', 1, 2048, 5, 'running', 1),
+        ('paid-container', 'paid-user', 'host-1', 30501, '["claude"]',
+         'paid', 2, 4096, 8, 'running', 1);
+    `);
+
+    db.exec(migration("0011_free_tier_memory.sql"));
+
+    expect(db.prepare("SELECT ram_mb FROM containers WHERE tier = 'free'").get())
+      .toEqual({ ram_mb: 1536 });
+    expect(db.prepare("SELECT ram_mb FROM containers WHERE tier = 'paid'").get())
+      .toEqual({ ram_mb: 4096 });
+    expect(db.prepare("SELECT ram_allocated_mb FROM hosts WHERE id = 'host-1'").get())
+      .toEqual({ ram_allocated_mb: 5632 });
+  });
+});

@@ -4,6 +4,7 @@
  */
 import {
   AGENTS,
+  TIERS,
   type Agent,
   type JobRequest,
   type ProvisionResult,
@@ -63,7 +64,12 @@ export class Provisioner {
         await this.ensureStopped(name);
         return null;
       case "resize":
-        await this.incus.setLimits(name, this.provisionedCpu(request.spec.cpu), request.spec.ramMb);
+        await this.incus.setLimits(
+          name,
+          this.provisionedCpu(request.spec.cpu),
+          request.spec.ramMb,
+          TIERS[request.spec.tier].swapMb,
+        );
         await this.incus.setRootDiskLimit(name, request.spec.diskGb);
         await this.incus.resizeHomeVolume(
           this.config.storagePool,
@@ -126,6 +132,7 @@ export class Provisioner {
         request.containerId,
         this.provisionedCpu(spec.cpu),
         spec.ramMb,
+        TIERS[spec.tier].swapMb,
       );
       await this.incus.setRootDiskLimit(name, spec.diskGb);
       await this.incus.attachHome(name, this.config.storagePool, volume);

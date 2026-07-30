@@ -14,6 +14,8 @@ DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
 VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-3}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
 TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
+TENANT_RAM_MB=1536
+TENANT_SWAP_MB=1024
 
 if ! [[ "$DISK_CAPACITY_PERCENT" =~ ^[0-9]+$ ]] || \
   (( DISK_CAPACITY_PERCENT < 1 || DISK_CAPACITY_PERCENT > 90 )); then
@@ -29,8 +31,9 @@ if ! [[ "$TENANT_PROCESS_LIMIT" =~ ^[0-9]+$ ]] || (( TENANT_PROCESS_LIMIT < 64 )
   echo "!! TENANT_PROCESS_LIMIT must be an integer of at least 64"
   exit 1
 fi
-if [[ $(awk 'END { print NR }' /proc/swaps) -ne 1 ]]; then
-  echo "!! host swap must be disabled because restricted projects cannot set limits.memory.swap"
+if ! incus query /1.0 | jq -e \
+  '.metadata.api_extensions | index("instance_memory_swap_bytes") != null' >/dev/null; then
+  echo "!! Incus must support byte-valued limits.memory.swap (instance_memory_swap_bytes)"
   exit 1
 fi
 
@@ -82,8 +85,10 @@ POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" | \
   jq -er '.metadata.space.total // .space.total')
 DISK_GB=$(( POOL_TOTAL_BYTES * DISK_CAPACITY_PERCENT / 100 / 1073741824 ))
 
-# The current service tier is 1 vCPU, 2 GiB RAM, and 5 GiB each for root/home.
-RAM_SLOTS=$(( RAM_CAPACITY_MB / 2048 ))
+# The current service tier is 1 vCPU, 1.5 GiB RAM, 1 GiB swap, and 5 GiB each
+# for root/home. Swap is capped per tenant by the daemon and must also exist on
+# the host in sufficient aggregate capacity.
+RAM_SLOTS=$(( RAM_CAPACITY_MB / TENANT_RAM_MB ))
 CPU_SLOTS=$VCPU_CAPACITY
 DISK_SLOTS=$(( DISK_GB / 10 ))
 TENANT_SLOTS=$RAM_SLOTS
@@ -91,6 +96,13 @@ TENANT_SLOTS=$RAM_SLOTS
 (( DISK_SLOTS < TENANT_SLOTS )) && TENANT_SLOTS=$DISK_SLOTS
 if [[ "$TENANT_SLOTS" -lt 1 ]]; then
   echo "!! host has no complete tenant slot after reserves (cpu=$CPU_SLOTS ram=$RAM_SLOTS disk=$DISK_SLOTS)"
+  exit 1
+fi
+SWAP_TOTAL_MB=$(awk '/SwapTotal/ { print int($2 / 1024) }' /proc/meminfo)
+SWAP_REQUIRED_MB=$(( TENANT_SLOTS * TENANT_SWAP_MB ))
+if (( SWAP_TOTAL_MB < SWAP_REQUIRED_MB )); then
+  echo "!! host swap is too small for $TENANT_SLOTS tenant slots"
+  echo "   need at least ${SWAP_REQUIRED_MB}MiB; found ${SWAP_TOTAL_MB}MiB"
   exit 1
 fi
 
@@ -164,6 +176,17 @@ incus --project "$PROJECT_NAME" profile device set default eth0 security.ipv6_fi
 incus --project "$PROJECT_NAME" profile device set default eth0 security.port_isolation=true
 incus --project "$PROJECT_NAME" profile device set default eth0 limits.max="$TENANT_NETWORK_LIMIT"
 
+# This release has only free tenants. Reconcile existing instances as part of
+# the drained host-policy rollout so D1 accounting and live cgroup limits do
+# not diverge until a later rebuild.
+while IFS= read -r name; do
+  [[ -n "$name" ]] || continue
+  # Add swap before lowering RAM so a live tenant never passes through a
+  # transient 1.5 GiB memory-only ceiling.
+  incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap="${TENANT_SWAP_MB}MiB"
+  incus --project "$PROJECT_NAME" config set "$name" limits.memory="${TENANT_RAM_MB}MiB"
+done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
+
 # Prevent unprivileged tenants from enumerating host scheduler/cgroup names or
 # slab internals. tmpfiles reapplies these virtual-filesystem modes on boot.
 install -d -m 0755 /etc/tmpfiles.d
@@ -174,4 +197,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED"
+echo "Incus tenant policy: project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED"
