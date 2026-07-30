@@ -102,10 +102,12 @@ Do not place the swap file inside the tenant storage pool.
 When applying this policy to an existing host, drain it first and notify users:
 the policy script updates existing free containers live from 2 GiB RAM/no swap
 to 1.5 GiB RAM/1 GiB swap, enabling swap before lowering RAM to avoid a
-transient tighter ceiling. Active workloads can still see reclaim latency.
-Apply migration `0011_free_tier_memory.sql` while the host remains drained so
-D1 reservations match the Incus limits before the host returns to active
-placement.
+transient tighter ceiling. Active workloads can still see reclaim latency. After
+copying this release, run `PROJECT_NAME=workbench bash
+infra/configure-multitenant.sh` while the host is drained; this applies the
+project permission needed by new and existing containers. Apply migration `0011_free_tier_memory.sql` while the host remains
+drained so D1 reservations match the Incus limits before the host returns to
+active placement.
 
 ### 3.2 Copy and bootstrap
 
@@ -138,6 +140,8 @@ Bootstrap:
   dir-pool fallback;
 - creates a restricted `workbench` tenant project with aggregate capacity,
   anti-spoofing, east-west isolation, and bandwidth limits;
+- enables the Incus low-level configuration exception required for the
+  daemon-owned bounded swap limit (tenant users have no Incus API access);
 - installs the outbound-port-25 and new-connection-rate rules;
 - installs the repository dependencies and daemon systemd unit;
 - creates the host X25519 credential keypair;

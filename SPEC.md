@@ -595,8 +595,9 @@ operations synchronize keys and credentials.
   quota, and a 5 GiB root-disk quota. The web interface intentionally
   presents the free tier as 1 vCPU; host accounting continues to reserve that
   presented allocation alongside both disks.
-- No nesting, privileged containers, raw low-level Incus configuration, or
-  Docker-in-container support.
+- No nesting, privileged containers, or Docker-in-container support. The
+  restricted project permits low-level configuration only for the daemon-owned
+  bounded swap limit; tenant users have no Incus API access.
 - NIC MAC/IPv4/IPv6 anti-spoofing, east-west port isolation, and a 100 Mbit/s
   per-tenant bandwidth ceiling.
 - Host scheduler-debug and kernel-slab metadata are root-only to reduce

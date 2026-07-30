@@ -20,7 +20,9 @@ prove east-west isolation or CPU oversubscription. Use a host with at least
   check immediately makes it ineligible for new placement. A valid signed
   stats response restores it.
 - The daemon operates only in a dedicated restricted Incus project with
-  aggregate CPU, memory, process, disk, and instance ceilings.
+  aggregate CPU, memory, process, disk, and instance ceilings. The project’s
+  low-level exception is limited to daemon-managed swap configuration; tenant
+  users have no Incus API access.
 - Each tenant receives an unprivileged isolated idmap, one CPU-worth of
   allowance, a hard 1.5 GiB memory limit with 1 GiB swap, 1024 processes, hard root
   and home quotas, anti-spoofing, east-west port isolation, and a 100 Mbit/s

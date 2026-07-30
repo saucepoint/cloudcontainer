@@ -88,6 +88,8 @@ else
 fi
 
 check_eq "tenant project is restricted" "true" incus project get "$PROJECT_NAME" restricted
+check_eq "tenant project allows low-level config for managed swap" "allow" \
+  incus project get "$PROJECT_NAME" restricted.containers.lowlevel
 check_eq "tenant project requires isolated idmaps" "isolated" \
   incus project get "$PROJECT_NAME" restricted.containers.privilege
 check_eq "tenant project blocks nesting" "block" \
