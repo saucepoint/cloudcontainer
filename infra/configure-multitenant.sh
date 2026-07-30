@@ -134,12 +134,15 @@ fi
 
 # Restricted-project defaults block raw LXC config, nesting, privileged
 # containers, host devices, and unmanaged storage/network access. The daemon
-# alone needs proxy devices for public SSH forwarding.
+# alone needs proxy devices for public SSH forwarding and the low-level
+# exception below for its bounded per-tenant swap limit; tenant users have no
+# Incus API access.
 incus project set "$PROJECT_NAME" features.images=false
 incus project set "$PROJECT_NAME" features.networks=false
 incus project set "$PROJECT_NAME" features.profiles=true
 incus project set "$PROJECT_NAME" features.storage.volumes=true
 incus project set "$PROJECT_NAME" restricted=true
+incus project set "$PROJECT_NAME" restricted.containers.lowlevel=allow
 incus project set "$PROJECT_NAME" restricted.containers.nesting=block
 incus project set "$PROJECT_NAME" restricted.containers.privilege=isolated
 incus project set "$PROJECT_NAME" restricted.devices.disk=managed
