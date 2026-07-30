@@ -86,8 +86,10 @@ export class CredentialInstaller {
     const selectedAgents = new Set(agents);
     // Validate nested serialized formats before making any container changes.
     const wrangler = creds.wranglerOauth ? parseWranglerOauth(creds.wranglerOauth) : undefined;
-    const sharesCodexAuth = selectedAgents.has("pi") || selectedAgents.has("opencode");
-    const codexAuth = llm.codex_subscription_token && sharesCodexAuth
+    const installsCodexCliAuth = selectedAgents.has("codex");
+    const usesCodexSubscription =
+      installsCodexCliAuth || selectedAgents.has("pi") || selectedAgents.has("opencode");
+    const codexAuth = llm.codex_subscription_token && usesCodexSubscription
       ? parseCodexAuth(llm.codex_subscription_token)
       : undefined;
     const lines: string[] = ["# managed by workbench — rewritten on credential changes"];
@@ -101,7 +103,10 @@ export class CredentialInstaller {
 
     // File-based dashboard credentials are write-only: absence preserves any
     // login the user completed from inside their persistent home directory.
-    if (llm.codex_subscription_token) {
+    // OpenAI refresh tokens rotate and are single-use, so do not seed the
+    // standalone Codex store when the subscription is being used by Pi or
+    // OpenCode instead.
+    if (llm.codex_subscription_token && installsCodexCliAuth) {
       await this.incus.writeFile(name, CODEX_AUTH_PATH, llm.codex_subscription_token.trim() + "\n", {
         owner: "dev:dev",
         mode: "0600",
@@ -248,7 +253,9 @@ export class CredentialInstaller {
         name,
         "grep -o '^export [A-Z_]*' /home/dev/.config/workbench/env 2>/dev/null | awk '{print $2}'; " +
           "test -f /home/dev/.config/gh/hosts.yml && echo GH_CONNECTED; " +
-          `test -f ${CODEX_AUTH_PATH} && echo CODEX_AUTH_JSON; ` +
+          `(test -f ${CODEX_AUTH_PATH} || ` +
+          `grep -q '"openai-codex"' ${PI_AUTH_PATH} 2>/dev/null || ` +
+          `grep -q '"openai"' ${OPENCODE_AUTH_PATH} 2>/dev/null) && echo CODEX_AUTH_JSON; ` +
           `grep -q '"github-copilot"' ${OPENCODE_AUTH_PATH} 2>/dev/null && echo COPILOT_CONNECTED; ` +
           `test -f ${WRANGLER_CONFIG_PATH} && echo WRANGLER_CONNECTED || true`,
       );

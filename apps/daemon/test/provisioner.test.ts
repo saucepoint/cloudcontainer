@@ -295,13 +295,24 @@ describe("provision command construction", () => {
   it("writes the Codex subscription auth.json to ~/.codex, 0600 — never into argv", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
-      { llmKeys: { codex_subscription_token: '{"tokens":"CANARY-codex-123"}' } },
+      {
+        llmKeys: {
+          codex_subscription_token: JSON.stringify({
+            tokens: {
+              access_token: "CANARY-codex-access",
+              refresh_token: "CANARY-codex-refresh",
+            },
+          }),
+        },
+      },
       hostKeys.publicKey,
     );
+    const request = provisionRequest(sealed);
+    request.spec.agents = ["codex"];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
-    await provisioner.run(provisionRequest(sealed));
+    await provisioner.run(request);
 
-    const authWrite = calls.find((c) => c.stdin?.includes("CANARY-codex-123"));
+    const authWrite = calls.find((c) => c.stdin?.includes("CANARY-codex-access"));
     expect(authWrite).toBeDefined();
     const script = authWrite!.args.join(" ");
     expect(script).toContain(".codex/auth.json");
@@ -309,6 +320,32 @@ describe("provision command construction", () => {
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
     }
+  });
+
+  it("does not duplicate the rotating Codex session into ~/.codex when only Pi uses it", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      {
+        llmKeys: {
+          codex_subscription_token: JSON.stringify({
+            tokens: {
+              access_token: "CANARY-codex-access",
+              refresh_token: "CANARY-codex-refresh",
+            },
+          }),
+        },
+      },
+      hostKeys.publicKey,
+    );
+    const request = provisionRequest(sealed);
+    request.spec.agents = ["pi"];
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(request);
+
+    expect(calls.some((call) => call.args.join(" ").includes("/home/dev/.codex/auth.json"))).toBe(false);
+    const piMerge = calls.find((call) => call.stdin?.includes("/home/dev/.pi/agent/auth.json"));
+    expect(piMerge?.stdin).toContain('"openai-codex":{"type":"oauth"');
+    expect(piMerge?.stdin).toContain('"refresh":"CANARY-codex-refresh"');
   });
 
   it("marks Claude onboarding complete when its subscription token is injected", async () => {
