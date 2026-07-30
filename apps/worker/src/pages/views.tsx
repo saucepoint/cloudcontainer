@@ -320,6 +320,8 @@ export const OnboardingPage: FC<{
               id="github-connect"
               class="btn secondary"
               href="/auth/github?return_to=/onboarding"
+              target="_blank"
+              rel="noopener noreferrer"
             >
               <GitHubLogoIcon />Connect or update GitHub
             </a>

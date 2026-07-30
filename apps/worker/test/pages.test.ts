@@ -113,6 +113,8 @@ describe("sign-in button icons", () => {
     );
     expect(connect).toContain('viewBox="0 0 15 15"');
     expect(connect).toContain("Connect or update GitHub");
+    expect(connect).toContain('target="_blank"');
+    expect(connect).toContain('rel="noopener noreferrer"');
     expect(html).toContain(".btn svg, .link-btn svg { width: 1em; height: 1em;");
   });
 });
