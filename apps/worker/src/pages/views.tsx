@@ -175,7 +175,7 @@ const API_KEY_PROVIDERS: ReadonlyArray<{
     provider: "opencode_go",
     title: "OpenCode Go API key",
     keyUrl: "https://opencode.ai/auth",
-    linkLabel: "Get key from OpenCode",
+    linkLabel: "Get key",
   },
   {
     provider: "anthropic",

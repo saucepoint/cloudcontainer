@@ -173,6 +173,7 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .provider::before { content: ""; grid-column: 1; grid-row: 1; align-self: start; width: 0.34rem; height: 0.34rem;
   margin-top: 0.5rem; border-radius: 50%; background: var(--line-strong); }
 .provider > * { grid-column: 2; }
+.onboarding-api-keys .provider::before { content: none; }
 .provider-head { display: flex; gap: 1rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .provider small { display: block; color: var(--muted); margin-top: 0.12rem; }
 .repo-list { display: grid; gap: 0.3rem; margin-top: 0.8rem; max-height: 22rem; overflow-y: auto; }
