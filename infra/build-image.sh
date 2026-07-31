@@ -58,8 +58,30 @@ for pair in "ghostty:xterm-ghostty" "kitty:xterm-kitty"; do
   fi
 done
 
-# dev user: passwordless sudo, no password auth anywhere
-useradd -m -s /bin/zsh dev || true
+# Shell defaults: Bash is the login shell; both shells show user, host, and cwd.
+# Users can opt into zsh with: sudo usermod --shell /bin/zsh "$USER"
+cat >> /etc/skel/.bashrc <<'BASHRC'
+
+# usebench.dev prompt: name@machine:working-directory
+case $- in
+  *i*) PS1='\u@\h:\w\$ ' ;;
+esac
+BASHRC
+cat > /etc/skel/.zshrc <<'ZSHRC'
+# usebench.dev prompt: name@machine:working-directory
+if [[ -o interactive ]]; then
+  PROMPT='%n@%m:%~%# '
+fi
+ZSHRC
+cat >> /etc/zsh/zshrc <<'ZSHGLOBAL'
+
+# usebench.dev default prompt; ~/.zshrc may override it.
+if [[ -o interactive ]]; then
+  PROMPT='%n@%m:%~%# '
+fi
+ZSHGLOBAL
+useradd -m -s /bin/bash dev || true
+usermod --shell /bin/bash dev
 usermod -aG sudo dev
 echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
 chmod 440 /etc/sudoers.d/dev

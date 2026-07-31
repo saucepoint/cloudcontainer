@@ -60,6 +60,11 @@ aggregate request. While work is active, it polls only container state: every
 five seconds for jobs/transitions and every thirty seconds on the waitlist.
 Polling is non-overlapping, pauses in a hidden tab, and resumes on visibility.
 
+SSH sessions use Bash by default, with a prompt showing the user, machine, and
+current directory. Zsh is installed with the same prompt; opt in with
+`sudo usermod --shell /bin/zsh "$USER"` and reconnect. Switch back with
+`sudo usermod --shell /bin/bash "$USER"`.
+
 ## Local development
 
 Requirements: Node.js 22 and npm.

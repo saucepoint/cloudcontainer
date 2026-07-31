@@ -322,14 +322,18 @@ The workbench-base image is Debian 13 and contains:
 - openssh-server, sudo, git, GitHub CLI, build-essential, CMake, and OpenSSL and SQLite development libraries;
 - Python 3, virtual environments, and uv;
 - system-wide Node.js 22;
-- curl, rsync, zsh, tmux, ripgrep, fd, bat, jq, zip, unzip, sqlite3, nano, tree, less, and manpages;
+- curl, rsync, bash, zsh, tmux, ripgrep, fd, bat, jq, zip, unzip, sqlite3, nano, tree, less, and manpages;
 - unattended-upgrades; and
 - Pi, Claude Code, Codex, and OpenCode installed from the package versions that
   were current when the image was built.
 
-The image has a non-root dev user with passwordless sudo. SSH password and root
-login are disabled. Baked SSH host keys are removed so each new environment
-generates unique keys.
+The image has a non-root dev user with passwordless sudo. Bash is the default
+login shell and its prompt shows the user name, machine name, and working
+directory. Zsh is also installed and uses the same prompt when selected. Users
+can opt into zsh, or switch back to Bash, with `sudo usermod --shell
+/bin/zsh "$USER"` and `sudo usermod --shell /bin/bash "$USER"`. SSH password and
+root login are disabled. Baked SSH host keys are removed so each new
+environment generates unique keys.
 
 Provisioning verifies every selected agent binary. It runs a missing-only
 fallback installer only when a selected binary is absent. It must not reinstall
