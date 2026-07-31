@@ -18,7 +18,7 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
     <div class="landing-hero">
-      <h1 class="landing-title">A cloud workbench <br/>for agents</h1>
+      <h1 class="landing-title">A cloud terminal <br/>for agents</h1>
       <p class="lead">
         free for each unique person
         <br />

@@ -35,7 +35,7 @@ Constraint: uphold "simple and utilitarian" — keep the light theme and the exi
 5. **Two shadow/radius languages.** Dialogs use a brutalist hard offset shadow (`7px 7px 0`) + 1px ink border + radius 0; everything else uses soft `0 1px 2px` shadows and 3–5px radii. Pick one — the soft language fits "utilitarian" better.
 6. **Button hierarchy is unclear.** Almost every action is a borderless blue text-button; the only solid button is the centered pill "Create workbench →". Primary/secondary/danger are indistinguishable by scan. Also `.create-workbench-btn` is the *only* centered element on an otherwise flush-left page.
 7. **Inline styles in components** (SSH key list truncation in `dashboard-ssh.tsx`, nav `margin:0` in `layout.tsx`) bypass the token system — move to classes.
-8. **Heading punctuation drift**: "Your workbench." / "Account security." carry periods; landing "A cloud workbench for agents" doesn't. Minor, but the voice should pick one convention.
+8. **Heading punctuation drift**: "Your workbench." / "Account security." carry periods; landing "A cloud terminal for agents" doesn't. Minor, but the voice should pick one convention.
 9. **Contrast is borderline**: `--muted #706f69` on `--paper` is ~4.4:1 and is used for 0.86rem helper text — at AA's edge. Darkening to ~`#65645e` buys margin with no visible change.
 10. **Tap targets below 44px on mobile**: `.btn` min-height is 2.15rem (~34px) with only 0.2rem horizontal padding; auth tabs 2.4rem. Fine for a mouse, cramped for thumbs — especially the header "Security / Sign out" pair.
 
