@@ -24,7 +24,7 @@ function makeApp() {
     project: "default",
   };
   const listJson = JSON.stringify([
-    { name: "cs-abc", status: "Running", config: { "user.workbench.id": "c-123" } },
+    { name: "workbench-abc000", status: "Running", config: { "user.workbench.id": "c-123" } },
     { name: "unrelated", status: "Running", config: {} },
   ]);
   const exec: ExecFn = async (_c, args) => ({

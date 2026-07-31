@@ -35,11 +35,21 @@ export function shellQuote(s: string): string {
 }
 
 export function containerName(containerId: string): string {
+  const suffix = containerId.replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 6).padEnd(6, "0");
+  return `workbench-${suffix}`;
+}
+
+/** Name used before workbench instance names were shortened. */
+export function legacyContainerName(containerId: string): string {
   return `cs-${containerId.replace(/-/g, "").slice(0, 12)}`;
 }
 
 export function homeVolumeName(containerId: string): string {
   return `home-${containerName(containerId)}`;
+}
+
+export function legacyHomeVolumeName(containerId: string): string {
+  return `home-${legacyContainerName(containerId)}`;
 }
 
 interface IncusContainer {

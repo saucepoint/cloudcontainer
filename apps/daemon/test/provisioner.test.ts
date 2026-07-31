@@ -6,7 +6,15 @@ import {
   type JobRequest,
 } from "@workbench/contract";
 import type { DaemonConfig } from "../src/config.js";
-import { containerName, homeVolumeName, Incus, IncusNotFoundError, type ExecFn } from "../src/incus.js";
+import {
+  containerName,
+  homeVolumeName,
+  Incus,
+  IncusNotFoundError,
+  legacyContainerName,
+  legacyHomeVolumeName,
+  type ExecFn,
+} from "../src/incus.js";
 import { JobConflictError, JobRunner } from "../src/jobs.js";
 import { Provisioner } from "../src/provisioner.js";
 
@@ -62,8 +70,11 @@ function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision
 
 describe("naming", () => {
   it("derives stable incus names from container ids", () => {
-    expect(containerName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("cs-aaaaaaaabbbb");
-    expect(homeVolumeName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("home-cs-aaaaaaaabbbb");
+    expect(containerName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("workbench-aaaaaa");
+    expect(homeVolumeName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("home-workbench-aaaaaa");
+    expect(containerName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toMatch(/^workbench-[a-z0-9]{6}$/);
+    expect(legacyContainerName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("cs-aaaaaaaabbbb");
+    expect(legacyHomeVolumeName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe("home-cs-aaaaaaaabbbb");
   });
 });
 
@@ -81,8 +92,8 @@ describe("provision command construction", () => {
     const result = await provisioner.run(provisionRequest());
 
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-cs-aaaaaaaabbbb size=5GiB"));
-    const init = flat.find((f) => f.startsWith("init workbench-base cs-aaaaaaaabbbb"));
+    expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-workbench-aaaaaa size=5GiB"));
+    const init = flat.find((f) => f.startsWith("init workbench-base workbench-aaaaaa"));
     expect(init).toContain("limits.cpu=2");
     expect(init).toContain("limits.cpu.allowance=200%");
     expect(init).toContain("limits.memory=1536MiB");
@@ -99,15 +110,15 @@ describe("provision command construction", () => {
     expect(init).toContain("security.nesting=false");
     expect(init).toContain("user.workbench.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     expect(flat).toContain(
-      "config device override cs-aaaaaaaabbbb root size=5GiB",
+      "config device override workbench-aaaaaa root size=5GiB",
     );
     expect(flat).toContainEqual(
-      expect.stringContaining("config device add cs-aaaaaaaabbbb home disk pool=default source=home-cs-aaaaaaaabbbb path=/home/dev"),
+      expect.stringContaining("config device add workbench-aaaaaa home disk pool=default source=home-workbench-aaaaaa path=/home/dev"),
     );
     expect(flat).toContainEqual(
-      expect.stringContaining("config device add cs-aaaaaaaabbbb ssh proxy listen=tcp:0.0.0.0:30500 connect=tcp:127.0.0.1:22"),
+      expect.stringContaining("config device add workbench-aaaaaa ssh proxy listen=tcp:0.0.0.0:30500 connect=tcp:127.0.0.1:22"),
     );
-    expect(flat).toContainEqual(expect.stringContaining("start cs-aaaaaaaabbbb"));
+    expect(flat).toContainEqual(expect.stringContaining("start workbench-aaaaaa"));
     expect(result?.hostKeyFingerprints).toEqual(["256 SHA256:abc root@cs (ED25519)"]);
   });
 
@@ -588,6 +599,29 @@ describe("provision command construction", () => {
 });
 
 describe("resize / destroy", () => {
+  it("uses the legacy name for lifecycle operations on existing instances", async () => {
+    const calls: Call[] = [];
+    const legacy = legacyContainerName("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    const exec: ExecFn = async (_cmd, args, stdin) => {
+      calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
+      if (args[0] === "info" && args[1] === "workbench-aaaaaa") {
+        throw new IncusNotFoundError();
+      }
+      if (args[0] === "list") {
+        return { stdout: JSON.stringify([{ name: legacy, status: "Running" }]), stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+
+    await new Provisioner(new Incus(exec), makeConfig()).run({
+      op: "stop",
+      jobId: "legacy-stop",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+
+    expect(calls.map((call) => call.args.join(" "))).toContain(`stop ${legacy} --force`);
+  });
+
   it("applies a stopped container's latest key and credential snapshot on start", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
@@ -596,7 +630,7 @@ describe("resize / destroy", () => {
     );
     const provisioner = new Provisioner(
       new Incus(fakeExec(calls, (args) => args[0] === "list"
-        ? JSON.stringify([{ name: "cs-aaaaaaaabbbb", status: "Stopped" }])
+        ? JSON.stringify([{ name: "workbench-aaaaaa", status: "Stopped" }])
         : "")),
       makeConfig(),
     );
@@ -610,7 +644,7 @@ describe("resize / destroy", () => {
       sealedCredentials: sealed,
     });
 
-    expect(calls.map((call) => call.args.join(" "))).toContain("start cs-aaaaaaaabbbb");
+    expect(calls.map((call) => call.args.join(" "))).toContain("start workbench-aaaaaa");
     expect(calls.some((call) => call.stdin?.includes("ssh-ed25519 AAAA new-laptop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("CANARY-after-stop"))).toBe(true);
     expect(calls.some((call) => call.stdin?.includes("https://workbench.example"))).toBe(true);
@@ -624,7 +658,7 @@ describe("resize / destroy", () => {
       calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
       if (args[0] === "list") {
         return {
-          stdout: JSON.stringify([{ name: "cs-aaaaaaaabbbb", status }]),
+          stdout: JSON.stringify([{ name: "workbench-aaaaaa", status }]),
           stderr: "",
         };
       }
@@ -659,7 +693,7 @@ describe("resize / destroy", () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(
       new Incus(fakeExec(calls, (args) => args[0] === "list"
-        ? JSON.stringify([{ name: "cs-c1", status: "Stopped" }])
+        ? JSON.stringify([{ name: "workbench-c10000", status: "Stopped" }])
         : "")),
       makeConfig(),
     );
@@ -679,14 +713,14 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory=4096MiB");
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory.swap=false");
-    expect(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory=4096MiB"))
-      .toBeLessThan(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory.swap=false"));
-    expect(flat).toContain("config device override cs-aaaaaaaabbbb root size=8GiB");
-    expect(flat).toContain("storage volume set default home-cs-aaaaaaaabbbb size=8GiB");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.memory=4096MiB");
+    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=false");
+    expect(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"))
+      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=false"));
+    expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
+    expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
   });
 
   it("keeps the provisioned CPU floor when the presented tier has one vCPU", async () => {
@@ -699,11 +733,11 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 1536, diskGb: 5, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu=2");
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.cpu.allowance=200%");
-    expect(flat).toContain("config set cs-aaaaaaaabbbb limits.memory.swap=1024MiB");
-    expect(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory.swap=1024MiB"))
-      .toBeLessThan(flat.indexOf("config set cs-aaaaaaaabbbb limits.memory=1536MiB"));
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1024MiB");
+    expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1024MiB"))
+      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=1536MiB"));
   });
 
   it("destroy is idempotent when the container is already gone", async () => {

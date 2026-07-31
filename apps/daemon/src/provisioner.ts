@@ -12,7 +12,14 @@ import {
 import { installScript } from "./agents.js";
 import type { DaemonConfig } from "./config.js";
 import { CredentialInstaller } from "./credential-installer.js";
-import { containerName, homeVolumeName, shellQuote, type Incus } from "./incus.js";
+import {
+  containerName,
+  homeVolumeName,
+  legacyContainerName,
+  legacyHomeVolumeName,
+  shellQuote,
+  type Incus,
+} from "./incus.js";
 import { renderMotd } from "./motd.js";
 
 // The Worker’s `spec.cpu` is the public, presented allocation. Give every
@@ -30,7 +37,10 @@ export class Provisioner {
   }
 
   async run(request: JobRequest): Promise<ProvisionResult | null> {
-    const name = containerName(request.containerId);
+    const name =
+      request.op === "provision" || request.op === "rebuild"
+        ? containerName(request.containerId)
+        : await this.existingName(request.containerId);
     switch (request.op) {
       case "provision":
       case "rebuild":
@@ -73,15 +83,20 @@ export class Provisioner {
         await this.incus.setRootDiskLimit(name, request.spec.diskGb);
         await this.incus.resizeHomeVolume(
           this.config.storagePool,
-          homeVolumeName(request.containerId),
+          await this.existingHomeVolume(request.containerId),
           request.spec.diskGb,
         );
         return null;
       case "destroy": {
         if (await this.incus.exists(name)) await this.incus.delete(name);
-        const volume = homeVolumeName(request.containerId);
-        if (await this.incus.volumeExists(this.config.storagePool, volume)) {
-          await this.incus.deleteHomeVolume(this.config.storagePool, volume);
+        const volumes = new Set([
+          homeVolumeName(request.containerId),
+          legacyHomeVolumeName(request.containerId),
+        ]);
+        for (const volume of volumes) {
+          if (await this.incus.volumeExists(this.config.storagePool, volume)) {
+            await this.incus.deleteHomeVolume(this.config.storagePool, volume);
+          }
         }
         return null;
       }
@@ -116,10 +131,14 @@ export class Provisioner {
     const { spec, sshKeys, dashboardUrl } = request;
     this.validateGithubRepositoryTargets(request.githubRepos);
     const credentials = this.credentialInstaller.unseal(request.sealedCredentials);
-    const volume = homeVolumeName(request.containerId);
+    const volume = await this.existingHomeVolume(request.containerId);
 
     // Rebuilds and interrupted first attempts both replace the rootfs. The
     // separately managed home volume survives either path.
+    const legacyName = legacyContainerName(request.containerId);
+    if (legacyName !== name && await this.incus.exists(legacyName)) {
+      await this.incus.delete(legacyName);
+    }
     if (await this.incus.exists(name)) await this.incus.delete(name);
     if (!(await this.incus.volumeExists(this.config.storagePool, volume))) {
       await this.incus.createHomeVolume(this.config.storagePool, volume, spec.diskGb);
@@ -186,6 +205,27 @@ export class Provisioner {
 
   private provisionedCpu(presentedCpu: number): number {
     return Math.max(PROVISIONED_VCPU_FLOOR, presentedCpu);
+  }
+
+  /** Keep lifecycle operations working for instances created with the old name format. */
+  private async existingName(containerId: string): Promise<string> {
+    const name = containerName(containerId);
+    if (await this.incus.exists(name)) return name;
+
+    const legacyName = legacyContainerName(containerId);
+    if (legacyName !== name && await this.incus.exists(legacyName)) return legacyName;
+    return name;
+  }
+
+  private async existingHomeVolume(containerId: string): Promise<string> {
+    const volume = homeVolumeName(containerId);
+    if (await this.incus.volumeExists(this.config.storagePool, volume)) return volume;
+
+    const legacyVolume = legacyHomeVolumeName(containerId);
+    if (legacyVolume !== volume && await this.incus.volumeExists(this.config.storagePool, legacyVolume)) {
+      return legacyVolume;
+    }
+    return volume;
   }
 
   private validateGithubRepositoryTargets(repositories: readonly string[]): void {
