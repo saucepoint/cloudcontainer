@@ -19,7 +19,13 @@
  * Attempts are single-use rows in oauth_states, bound to the signing-in user.
  */
 import { Hono } from "hono";
-import { type WranglerOauth, WranglerOauthSchema } from "@workbench/contract";
+import {
+  CLAUDE_OAUTH_AGENTS,
+  CLAUDE_OAUTH_PROVIDERS,
+  type ClaudeOauthAgent,
+  type WranglerOauth,
+  WranglerOauthSchema,
+} from "@workbench/contract";
 import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
@@ -103,12 +109,28 @@ function logFailure(event: string, err: unknown): void {
   console.error(JSON.stringify({ event, error: String(err) }));
 }
 
+function claudeOauthAgent(value: unknown): ClaudeOauthAgent | undefined {
+  if (value === undefined) return "claude";
+  return typeof value === "string" && (CLAUDE_OAUTH_AGENTS as readonly string[]).includes(value)
+    ? value as ClaudeOauthAgent
+    : undefined;
+}
+
+function claudeStateKey(agent: ClaudeOauthAgent, state: string): string {
+  // Preserve the original native-Claude key for old browser assets during a
+  // rolling Worker deployment. New Pi/OpenCode attempts are agent-bound.
+  return agent === "claude" ? `claude:${state}` : `claude:${agent}:${state}`;
+}
+
 export const subscriptionRoutes = new Hono<AppContext>()
 
   // ---------------------------------------------------------------- Claude
   .post("/api/claude/oauth/start", requireUser, requireCredentialSetup, async (c) => {
+    const body = await readJsonBody<{ agent?: unknown }>(c);
+    const agent = claudeOauthAgent(body?.agent);
+    if (!agent) return c.json({ error: "unsupported Claude sign-in target" }, 400);
     const verifier = newVerifier();
-    await putOauthState(c.env, `claude:${verifier}`, c.get("user").id, ATTEMPT_TTL_MS);
+    await putOauthState(c.env, claudeStateKey(agent, verifier), c.get("user").id, ATTEMPT_TTL_MS);
     const params = new URLSearchParams({
       code: "true",
       client_id: CLAUDE_CLIENT_ID,
@@ -126,13 +148,15 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   .post("/api/claude/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJsonBody<{ code?: string }>(c);
+    const body = await readJsonBody<{ code?: string; agent?: unknown }>(c);
+    const agent = claudeOauthAgent(body?.agent);
+    if (!agent) return c.json({ error: "unsupported Claude sign-in target" }, 400);
     const pasted = typeof body?.code === "string" ? body.code.trim() : "";
     const [code, state] = pasted.split("#");
     if (!code || !state || pasted.length > 2048) {
       return c.json({ error: "paste the full code, including the part after #" }, 400);
     }
-    const stateKey = `claude:${state}`;
+    const stateKey = claudeStateKey(agent, state);
     if (!(await checkOauthState(c.env, stateKey, c.get("user").id))) {
       return c.json({ error: "unknown or expired sign-in attempt — start over" }, 403);
     }
@@ -163,7 +187,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     }
 
     await upsertCredentials(c.env, c.get("user").id, {
-      llmKeys: { claude_subscription_token: accessToken },
+      llmKeys: { [CLAUDE_OAUTH_PROVIDERS[agent]]: accessToken },
     });
     await pushCredentialsToContainer(c.env, c.get("user").id);
     return c.json({ status: "connected" });

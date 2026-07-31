@@ -3,8 +3,8 @@
  * OpenAI's device-code flow control-plane-side: the dashboard shows a one-time
  * code, the user approves it at auth.openai.com from any browser, and the
  * Worker exchanges the resulting authorization code for tokens and stores them
- * as the `codex_subscription_token` auth.json blob the Codex CLI expects, so
- * sealing, live refresh, and rebuilds all behave identically.
+ * as the auth.json blob each target agent expects, stored in a distinct
+ * per-agent credential slot before sealing and delivery.
  *
  * OpenAI offers no third-party OAuth registration for ChatGPT-plan auth; this
  * reuses the Codex CLI's public PKCE client id (as OpenCode does). Flow
@@ -12,6 +12,11 @@
  * carries the PKCE verifier, so no verifier state is held here.
  */
 import { Hono } from "hono";
+import {
+  CHATGPT_OAUTH_AGENTS,
+  CHATGPT_OAUTH_PROVIDERS,
+  type ChatgptOauthAgent,
+} from "@workbench/contract";
 import { requireCredentialSetup, requireUser } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
@@ -153,11 +158,25 @@ export function buildCodexAuthJson(tokens: {
   });
 }
 
-const stateKey = (deviceAuthId: string) => `codex:${deviceAuthId}`;
+function chatgptOauthAgent(value: unknown): ChatgptOauthAgent | undefined {
+  if (value === undefined) return "codex";
+  return typeof value === "string" && (CHATGPT_OAUTH_AGENTS as readonly string[]).includes(value)
+    ? value as ChatgptOauthAgent
+    : undefined;
+}
+
+function stateKey(agent: ChatgptOauthAgent, deviceAuthId: string): string {
+  // Preserve the original native-Codex key for old browser assets during a
+  // rolling Worker deployment. New Pi/OpenCode attempts are agent-bound.
+  return agent === "codex" ? `codex:${deviceAuthId}` : `codex:${agent}:${deviceAuthId}`;
+}
 
 export const codexAuthRoutes = new Hono<AppContext>()
 
   .post("/api/codex/device", requireUser, requireCredentialSetup, async (c) => {
+    const body = await readJsonBody<{ agent?: unknown }>(c);
+    const agent = chatgptOauthAgent(body?.agent);
+    if (!agent) return c.json({ error: "unsupported ChatGPT sign-in target" }, 400);
     let start: DeviceAuthStart;
     try {
       start = await requestDeviceCode();
@@ -167,14 +186,26 @@ export const codexAuthRoutes = new Hono<AppContext>()
       return c.json({ error: "could not reach OpenAI — try again in a minute" }, 502);
     }
     // Bind the attempt to this user so nobody else can poll it into their account.
-    await putOauthState(c.env, stateKey(start.deviceAuthId), c.get("user").id, DEVICE_AUTH_TTL_MS);
+    await putOauthState(
+      c.env,
+      stateKey(agent, start.deviceAuthId),
+      c.get("user").id,
+      DEVICE_AUTH_TTL_MS,
+    );
     return c.json(start);
   })
 
   .post("/api/codex/device/poll", requireUser, requireCredentialSetup, async (c) => {
-    const body = await readJsonBody<{ deviceAuthId?: string; userCode?: string }>(c);
+    const body = await readJsonBody<{
+      deviceAuthId?: string;
+      userCode?: string;
+      agent?: unknown;
+    }>(c);
+    const agent = chatgptOauthAgent(body?.agent);
+    if (!agent) return c.json({ error: "unsupported ChatGPT sign-in target" }, 400);
     if (!body?.deviceAuthId || !body.userCode) return c.json({ error: "bad request" }, 400);
-    if (!(await checkOauthState(c.env, stateKey(body.deviceAuthId), c.get("user").id))) {
+    const attemptKey = stateKey(agent, body.deviceAuthId);
+    if (!(await checkOauthState(c.env, attemptKey, c.get("user").id))) {
       return c.json({ error: "unknown or expired sign-in attempt — start over" }, 403);
     }
 
@@ -182,15 +213,15 @@ export const codexAuthRoutes = new Hono<AppContext>()
     try {
       result = await pollDeviceAuth(body.deviceAuthId, body.userCode);
     } catch (err) {
-      await deleteOauthState(c.env, stateKey(body.deviceAuthId));
+      await deleteOauthState(c.env, attemptKey);
       console.error(JSON.stringify({ event: "codex_device_poll_failed", error: String(err) }));
       return c.json({ error: "ChatGPT sign-in failed — start over and try again" }, 502);
     }
     if (result.status === "pending") return c.json({ status: "pending" });
 
-    await deleteOauthState(c.env, stateKey(body.deviceAuthId));
+    await deleteOauthState(c.env, attemptKey);
     await upsertCredentials(c.env, c.get("user").id, {
-      llmKeys: { codex_subscription_token: result.authJson },
+      llmKeys: { [CHATGPT_OAUTH_PROVIDERS[agent]]: result.authJson },
     });
     // This onboarding-only credential is included in the initial provision.
     await pushCredentialsToContainer(c.env, c.get("user").id);

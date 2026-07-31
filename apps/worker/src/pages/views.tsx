@@ -2,6 +2,7 @@ import type { Child, FC } from "hono/jsx";
 import {
   AGENT_LABELS,
   AGENTS,
+  OAUTH_ONLY_LLM_PROVIDERS,
   type Agent,
   type LlmProvider,
 } from "@workbench/contract";
@@ -162,7 +163,7 @@ const ApiKeyProvider: FC<{
 
 type PasteableLlmProvider = Exclude<
   LlmProvider,
-  "claude_subscription_token" | "codex_subscription_token" | "github_copilot"
+  (typeof OAUTH_ONLY_LLM_PROVIDERS)[number]
 >;
 
 const API_KEY_PROVIDERS: ReadonlyArray<{
@@ -225,11 +226,11 @@ const API_KEY_PROVIDERS: ReadonlyArray<{
 ];
 
 const AgentSignin: FC<{
-  id: "claude" | "codex";
+  id: string;
   button: string;
   connected: string;
 }> = ({ id, button, connected }) => (
-  <>
+  <div class="agent-auth">
     <div class="agent-signin">
       <button type="button" id={`${id}-signin`} class="btn secondary">
         {button}
@@ -239,8 +240,33 @@ const AgentSignin: FC<{
       </span>
     </div>
     <div id={`${id}-flow`} role="status" aria-live="polite"></div>
-  </>
+  </div>
 );
+
+const AgentSignins: FC<{ agent: Agent }> = ({ agent }) => {
+  if (agent === "claude") {
+    return <div class="agent-signins">
+      <AgentSignin id="claude" button="Sign in with Claude" connected="Claude connected" />
+    </div>;
+  }
+  if (agent === "codex") {
+    return <div class="agent-signins">
+      <AgentSignin id="codex" button="Sign in with ChatGPT" connected="ChatGPT connected" />
+    </div>;
+  }
+  return <div class="agent-signins">
+    <AgentSignin
+      id={`${agent}-chatgpt`}
+      button="Sign in with ChatGPT"
+      connected="ChatGPT connected"
+    />
+    <AgentSignin
+      id={`${agent}-claude`}
+      button="Sign in with Claude"
+      connected="Claude connected"
+    />
+  </div>;
+};
 
 export const NotFoundPage: FC = () => (
   <Layout title="Page not found">
@@ -276,12 +302,7 @@ export const OnboardingPage: FC<{
                     <small>{AGENT_DESCRIPTIONS[a]}</small>
                   </span>
                 </label>
-                {a === "claude" ? (
-                  <AgentSignin id="claude" button="Sign in with Claude" connected="Claude connected" />
-                ) : null}
-                {a === "codex" ? (
-                  <AgentSignin id="codex" button="Sign in with ChatGPT" connected="ChatGPT connected" />
-                ) : null}
+                <AgentSignins agent={a} />
               </div>
             ))}
           </div>

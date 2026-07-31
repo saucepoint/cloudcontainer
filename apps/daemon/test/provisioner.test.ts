@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   generateEd25519Keypair,
@@ -66,6 +67,24 @@ function provisionRequest(sealed?: string): Extract<JobRequest, { op: "provision
     githubRepos: [],
     ...(sealed ? { sealedCredentials: sealed } : {}),
   };
+}
+
+function refreshCredentialsRequest(sealed: string): Extract<JobRequest, { op: "refresh-credentials" }> {
+  return {
+    op: "refresh-credentials",
+    jobId: "credential-refresh",
+    containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    dashboardUrl: "https://workbench.example",
+    sealedCredentials: sealed,
+  };
+}
+
+function fingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function managedState(value: Record<string, unknown>, version = 2): string {
+  return `present\n${JSON.stringify({ version, ...value })}\n`;
 }
 
 describe("naming", () => {
@@ -333,12 +352,12 @@ describe("provision command construction", () => {
     }
   });
 
-  it("does not duplicate the rotating Codex session into ~/.codex when only Pi uses it", async () => {
+  it("installs Pi's ChatGPT session only into Pi's auth store", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
       {
         llmKeys: {
-          codex_subscription_token: JSON.stringify({
+          pi_codex_subscription_token: JSON.stringify({
             tokens: {
               access_token: "CANARY-codex-access",
               refresh_token: "CANARY-codex-refresh",
@@ -353,7 +372,10 @@ describe("provision command construction", () => {
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
     await provisioner.run(request);
 
-    expect(calls.some((call) => call.args.join(" ").includes("/home/dev/.codex/auth.json"))).toBe(false);
+    expect(calls.some((call) =>
+      call.stdin?.includes("CANARY-codex-access") &&
+      call.args.join(" ").includes("/home/dev/.codex/auth.json")
+    )).toBe(false);
     const piMerge = calls.find((call) => call.stdin?.includes("/home/dev/.pi/agent/auth.json"));
     expect(piMerge?.stdin).toContain('"openai-codex":{"type":"oauth"');
     expect(piMerge?.stdin).toContain('"refresh":"CANARY-codex-refresh"');
@@ -385,23 +407,31 @@ describe("provision command construction", () => {
     }
   });
 
-  it("configures selected Pi and OpenCode with ChatGPT and Claude subscription OAuth", async () => {
+  it("installs distinct ChatGPT and Claude grants for Pi and OpenCode", async () => {
     const calls: Call[] = [];
-    const codexAuth = JSON.stringify({
+    const piCodexAuth = JSON.stringify({
       OPENAI_API_KEY: null,
       tokens: {
-        id_token: "CANARY-codex-id",
-        access_token: "CANARY-codex-access",
-        refresh_token: "CANARY-codex-refresh",
+        id_token: "CANARY-pi-id",
+        access_token: "CANARY-pi-access",
+        refresh_token: "CANARY-pi-refresh",
         account_id: "acct-42",
       },
       last_refresh: "2026-07-17T10:00:00.000Z",
     });
+    const opencodeCodexAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-opencode-access",
+        refresh_token: "CANARY-opencode-refresh",
+      },
+    });
     const sealed = sealJson(
       {
         llmKeys: {
-          claude_subscription_token: "CANARY-oat01-claude-123",
-          codex_subscription_token: codexAuth,
+          pi_claude_subscription_token: "CANARY-pi-claude",
+          pi_codex_subscription_token: piCodexAuth,
+          opencode_claude_subscription_token: "CANARY-opencode-claude",
+          opencode_codex_subscription_token: opencodeCodexAuth,
         },
       },
       hostKeys.publicKey,
@@ -411,25 +441,249 @@ describe("provision command construction", () => {
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
     await provisioner.run(request);
 
-    const piMerge = calls.find((c) => c.stdin?.includes("/home/dev/.pi/agent/auth.json"));
-    expect(piMerge?.stdin).toContain('"anthropic":{"type":"oauth"');
-    expect(piMerge?.stdin).toContain('"openai-codex":{"type":"oauth"');
-    expect(piMerge?.stdin).toContain('"access":"CANARY-codex-access"');
-    expect(piMerge?.stdin).toContain('"refresh":"CANARY-codex-refresh"');
-    expect(piMerge?.stdin).toContain("...current, ...add");
-    expect(piMerge?.stdin).toContain("fs.chmodSync(file, 0o600)");
+    const piMerges = calls.filter((c) => c.stdin?.includes("/home/dev/.pi/agent/auth.json"));
+    expect(piMerges.some((c) => c.stdin?.includes('"anthropic":{"type":"oauth"'))).toBe(true);
+    const piCodex = piMerges.find((c) => c.stdin?.includes('"openai-codex":{"type":"oauth"'));
+    expect(piCodex?.stdin).toContain('"access":"CANARY-pi-access"');
+    expect(piCodex?.stdin).toContain('"refresh":"CANARY-pi-refresh"');
+    expect(piCodex?.stdin).toContain("...current, ...add");
+    expect(piCodex?.stdin).toContain("fs.chmodSync(file, 0o600)");
+    expect(piMerges.find((c) => c.stdin?.includes('"anthropic"'))?.stdin)
+      .toContain('"access":"CANARY-pi-claude"');
 
-    const opencodeMerge = calls.find((c) =>
+    const opencodeMerges = calls.filter((c) =>
       c.stdin?.includes("/home/dev/.local/share/opencode/auth.json"),
     );
-    expect(opencodeMerge?.stdin).toContain('"anthropic":{"type":"oauth"');
-    expect(opencodeMerge?.stdin).toContain('"openai":{"type":"oauth"');
-    expect(opencodeMerge?.stdin).toContain('"accountId":"acct-42"');
-    expect(opencodeMerge?.stdin).toContain('"access":"CANARY-oat01-claude-123"');
-    expect(opencodeMerge?.stdin).toContain("...current, ...add");
+    expect(opencodeMerges.find((c) => c.stdin?.includes('"anthropic"'))?.stdin)
+      .toContain('"access":"CANARY-opencode-claude"');
+    expect(opencodeMerges.find((c) => c.stdin?.includes('"openai"'))?.stdin)
+      .toContain('"access":"CANARY-opencode-access"');
+    expect(calls.filter((c) => c.stdin?.includes("CANARY-pi-access"))).toHaveLength(1);
+    expect(calls.filter((c) => c.stdin?.includes("CANARY-opencode-access"))).toHaveLength(1);
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
     }
+  });
+
+  it("preserves Pi's rotated ChatGPT credential when the dashboard snapshot is unchanged", async () => {
+    const calls: Call[] = [];
+    const codexAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-stale-access",
+        refresh_token: "CANARY-stale-refresh",
+      },
+      last_refresh: "2026-07-30T15:33:33.486Z",
+    });
+    const marker = managedState({
+      chatgpt: { pi: { fingerprint: fingerprint(codexAuth) } },
+    });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "pi\n";
+        if (command.includes("credentialPairs")) return "pi\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run({
+      op: "start",
+      jobId: "start-with-unchanged-credentials",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      sshKeys: [],
+      dashboardUrl: "https://workbench.example",
+      sealedCredentials: sealJson(
+        { llmKeys: { pi_codex_subscription_token: codexAuth } },
+        hostKeys.publicKey,
+      ),
+    });
+
+    expect(calls.some((call) => call.stdin?.includes("CANARY-stale"))).toBe(false);
+  });
+
+  it("replaces only Pi's ChatGPT credential after an explicit dashboard reconnect", async () => {
+    const calls: Call[] = [];
+    const previous = JSON.stringify({
+      tokens: { access_token: "old-access", refresh_token: "old-refresh" },
+    });
+    const replacement = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-new-access",
+        refresh_token: "CANARY-new-refresh",
+      },
+    });
+    const marker = managedState({
+      chatgpt: { pi: { fingerprint: fingerprint(previous) } },
+    });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "pi\ncodex\n";
+        if (command.includes("credentialPairs")) return "pi\ncodex\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { llmKeys: { pi_codex_subscription_token: replacement } },
+      hostKeys.publicKey,
+    )));
+
+    const writes = calls.filter((call) => call.stdin?.includes("CANARY-new-access"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.stdin).toContain("/home/dev/.pi/agent/auth.json");
+  });
+
+  it("adopts a legacy Pi login without replaying the old dashboard credential", async () => {
+    const calls: Call[] = [];
+    const codexAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-legacy-access",
+        refresh_token: "CANARY-legacy-refresh",
+      },
+    });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("/etc/workbench-agents")) return "pi\n";
+        if (command.includes("credentialPairs")) return "pi\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { llmKeys: { pi_codex_subscription_token: codexAuth } },
+      hostKeys.publicKey,
+    )));
+
+    expect(calls.some((call) => call.stdin?.includes("CANARY-legacy"))).toBe(false);
+    const stateWrite = calls.find((call) => call.args.join(" ").includes("credential-state.json") && call.stdin);
+    expect(stateWrite?.stdin).toContain(fingerprint(codexAuth));
+    expect(stateWrite?.stdin).toContain('"pi"');
+  });
+
+  it("migrates a version-1 marker without deleting either local agent login", async () => {
+    const calls: Call[] = [];
+    const codexAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-native-access",
+        refresh_token: "CANARY-native-refresh",
+      },
+    });
+    const marker = managedState({
+      codex: { fingerprint: fingerprint(codexAuth), owner: "pi" },
+    }, 1);
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "pi\ncodex\n";
+        if (command.includes("credentialPairs")) return "pi\ncodex\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { llmKeys: { codex_subscription_token: codexAuth } },
+      hostKeys.publicKey,
+    )));
+
+    expect(calls.some((call) => call.stdin?.includes("CANARY-native"))).toBe(false);
+    expect(calls.some((call) =>
+      call.args.join(" ").includes("rm -f '/home/dev/.codex/auth.json'")
+    )).toBe(false);
+    expect(calls.some((call) =>
+      call.stdin?.includes('delete current["openai-codex"]')
+    )).toBe(false);
+    const stateWrite = calls.find((call) =>
+      call.args.join(" ").includes("credential-state.json") && call.stdin?.includes('"version": 2')
+    );
+    expect(stateWrite).toBeDefined();
+  });
+
+  it("preserves independently rotated Pi and Codex grants for unchanged snapshots", async () => {
+    const calls: Call[] = [];
+    const piAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-pi-stale-access",
+        refresh_token: "CANARY-pi-stale-refresh",
+      },
+    });
+    const codexAuth = JSON.stringify({
+      tokens: {
+        access_token: "CANARY-codex-stale-access",
+        refresh_token: "CANARY-codex-stale-refresh",
+      },
+    });
+    const marker = managedState({
+      chatgpt: {
+        pi: { fingerprint: fingerprint(piAuth) },
+        codex: { fingerprint: fingerprint(codexAuth) },
+      },
+    });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "pi\ncodex\n";
+        if (command.includes("credentialPairs")) return "pi\ncodex\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      {
+        llmKeys: {
+          pi_codex_subscription_token: piAuth,
+          codex_subscription_token: codexAuth,
+        },
+      },
+      hostKeys.publicKey,
+    )));
+
+    expect(calls.some((call) => call.stdin?.includes("CANARY-pi-stale"))).toBe(false);
+    expect(calls.some((call) => call.stdin?.includes("CANARY-codex-stale"))).toBe(false);
+  });
+
+  it("removes only the previously managed ChatGPT owner on dashboard disconnect", async () => {
+    const calls: Call[] = [];
+    const marker = managedState({
+      chatgpt: { pi: { fingerprint: fingerprint("previous") } },
+    });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "pi\ncodex\n";
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson({}, hostKeys.publicKey)));
+
+    const deletion = calls.find((call) => call.stdin?.includes('delete current["openai-codex"]'));
+    expect(deletion?.stdin).toContain("/home/dev/.pi/agent/auth.json");
+    expect(calls.some((call) =>
+      call.args.join(" ").includes("rm -f '/home/dev/.codex/auth.json'")
+    )).toBe(false);
   });
 
   it("does not configure unselected open-source agents with subscription OAuth", async () => {
@@ -509,6 +763,78 @@ describe("provision command construction", () => {
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
     }
+  });
+
+  it("preserves Wrangler's locally rotated tokens for an unchanged dashboard snapshot", async () => {
+    const calls: Call[] = [];
+    const wranglerOauth = JSON.stringify({
+      oauth_token: "CANARY-stale-wr-access",
+      refresh_token: "CANARY-stale-wr-refresh",
+      expiration_time: "2026-07-31T07:34:12.215Z",
+      scopes: ["account:read"],
+    });
+    const marker = managedState({ wrangler: { fingerprint: fingerprint(wranglerOauth) } });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "claude\n";
+        if (command.includes(".wrangler/config/default.toml") && command.includes("echo present")) {
+          return "present\n";
+        }
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { wranglerOauth },
+      hostKeys.publicKey,
+    )));
+
+    expect(calls.some((call) => call.stdin?.includes("CANARY-stale-wr"))).toBe(false);
+  });
+
+  it("replaces Wrangler tokens after an explicit dashboard reconnect", async () => {
+    const calls: Call[] = [];
+    const previous = JSON.stringify({
+      oauth_token: "old-access",
+      refresh_token: "old-refresh",
+      expiration_time: "2026-07-31T07:34:12.215Z",
+      scopes: ["account:read"],
+    });
+    const replacement = JSON.stringify({
+      oauth_token: "CANARY-new-wr-access",
+      refresh_token: "CANARY-new-wr-refresh",
+      expiration_time: "2026-08-01T12:00:00.000Z",
+      scopes: ["account:read"],
+    });
+    const marker = managedState({ wrangler: { fingerprint: fingerprint(previous) } });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "claude\n";
+        if (command.includes(".wrangler/config/default.toml") && command.includes("echo present")) {
+          return "present\n";
+        }
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { wranglerOauth: replacement },
+      hostKeys.publicKey,
+    )));
+
+    const writes = calls.filter((call) => call.stdin?.includes("CANARY-new-wr-access"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.args.join(" ")).toContain(".wrangler/config/default.toml");
   });
 
   it("removes authorized_keys entirely on the no-key path (fail closed)", async () => {

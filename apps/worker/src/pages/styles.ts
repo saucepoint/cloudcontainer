@@ -111,7 +111,6 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .agent-choice { grid-column: 1; grid-row: 1; display: flex; min-height: 6.2rem; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.85rem 1rem;
   color: var(--ink); background: transparent; border: 0; border-radius: 0; cursor: pointer; font-size: 0.94rem; }
-.agent:has(.agent-signin) .agent-choice { padding-right: 9.5rem; }
 .agent-choice:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 .agent-checkbox { display: inline-flex; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; align-items: center; justify-content: center;
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
@@ -121,12 +120,13 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
 .agent:has(input:checked), .agent:has(input:checked):hover { background: var(--accent-soft); }
 .agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
-.agent-signin { grid-column: 1; grid-row: 1; display: flex; gap: 0.6rem; align-self: start; justify-self: end; align-items: center;
-  padding: 0.45rem 1rem 0; }
+.agent-signins { display: grid; gap: 0.5rem; padding: 0 1rem 0.85rem; }
+.agent-auth { min-width: 0; }
+.agent-signin { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
 .agent-signin .btn { font-size: 0.8rem; }
 .agent-signin .ok { font-size: 0.78rem; }
-.agent > [id$="-flow"] { grid-column: 1; grid-row: 2; min-width: 0; padding: 0 1rem 0.8rem; }
-.agent > [id$="-flow"]:empty { display: none; }
+.agent-auth > [id$="-flow"] { min-width: 0; }
+.agent-auth > [id$="-flow"]:empty { display: none; }
 .device-flow { display: grid; gap: 0.65rem; padding-top: 0.25rem; }
 .device-flow-steps { margin: 0; padding-left: 1.2rem; }
 .device-flow-steps li + li { margin-top: 0.2rem; }
@@ -258,9 +258,6 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .btn, .link-btn { min-height: 2.75rem; }
   .agents { grid-template-columns: 1fr; }
   .agent label { min-height: auto; }
-  .agent:has(.agent-signin) .agent-choice { padding-right: 1rem; }
-  .agent-signin { grid-row: 2; justify-self: start; padding: 0 1rem 0.9rem; }
-  .agent > [id$="-flow"] { grid-row: 3; }
   .card-head { align-items: flex-start; flex-wrap: wrap; }
   .command-row, .device-flow-code { grid-template-columns: 1fr; }
   .command-row .btn, .device-flow-code .btn { justify-self: start; }

@@ -652,6 +652,8 @@ describe("credentials endpoint", () => {
       { llmKeys: { openai: "x".repeat(16 * 1024 + 1) } },
       // OAuth-only credentials enter through their sign-in flows, never a paste.
       { llmKeys: { codex_subscription_token: '{"tokens":{"access_token":"x"}}' } },
+      { llmKeys: { pi_codex_subscription_token: '{"tokens":{"access_token":"x"}}' } },
+      { llmKeys: { opencode_claude_subscription_token: "oat01_pasted" } },
       { llmKeys: { github_copilot: "gho_pasted" } },
       { wranglerOauth: '{"oauth_token":"pasted"}' },
       { cloudflareToken: { token: "not-text" } },

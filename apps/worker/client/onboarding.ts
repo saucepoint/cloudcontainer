@@ -1,6 +1,8 @@
 import { INPUT_LIMITS, LLM_PROVIDERS, OAUTH_ONLY_LLM_PROVIDERS } from "@workbench/contract";
 import {
   claudeOauthFlow,
+  claudeOauthFlowFor,
+  chatgptOauthFlow,
   codexDeviceFlow,
   copilotDeviceFlow,
   isAuthFlowActive,
@@ -88,6 +90,10 @@ function wireSignin(id: string, flow: (target: HTMLElement, done: () => void) =>
 
 wireSignin("claude", claudeOauthFlow);
 wireSignin("codex", codexDeviceFlow);
+wireSignin("pi-chatgpt", chatgptOauthFlow("pi"));
+wireSignin("pi-claude", claudeOauthFlowFor("pi"));
+wireSignin("opencode-chatgpt", chatgptOauthFlow("opencode"));
+wireSignin("opencode-claude", claudeOauthFlowFor("opencode"));
 wireSignin("copilot", copilotDeviceFlow);
 wireSignin("wrangler", wranglerOauthFlow);
 

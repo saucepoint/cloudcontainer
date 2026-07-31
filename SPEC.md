@@ -163,13 +163,14 @@ Claude Code, Codex, and OpenCode. All other fields are visibly optional:
 - SSH public key;
 - OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Kimi, MiniMax, Z.AI,
   or Vercel AI Gateway API key;
-- Claude subscription token;
-- Codex ChatGPT-plan sign-in or auth.json paste;
+- per-agent Claude subscription sign-in for Claude Code, Pi, and OpenCode;
+- per-agent ChatGPT-plan sign-in for Codex, Pi, and OpenCode;
 - Cloudflare API token; and
 - GitHub App authorization and repositories to clone, when configured.
 
-Agent choices include a plain-language description and a beginner-oriented
-recommendation without hiding the other choices.
+Agent choices include a plain-language description without recommending one.
+Pi and OpenCode each present separate **Sign in with ChatGPT** and **Sign in
+with Claude** actions inside their agent choice.
 
 All four binaries are present for fast startup. The selected set records the
 user's preferred agents and drives dashboard wording, MOTD guidance, credential
@@ -370,9 +371,10 @@ No SSH key means no authorized_keys file and therefore no usable SSH login.
 ### Rebuild and persistence
 
 Rebuild replaces the root filesystem and reattaches the existing /home/dev
-volume. Files elsewhere are lost. Credentials and SSH keys are re-synchronized,
-and selected agents are verified against the new image. Destroy removes both
-the container and its home volume permanently.
+volume. Files elsewhere are lost. Static credentials and SSH keys are
+re-synchronized; unchanged CLI-owned OAuth snapshots preserve the newer tokens
+rotated inside the persistent home. Selected agents are verified against the
+new image. Destroy removes both the container and its home volume permanently.
 
 ---
 
@@ -411,14 +413,12 @@ add a Host workbench entry to the local SSH config, and verify the connection.
 
 - OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Kimi, MiniMax, Z.AI,
   and Vercel AI Gateway API keys.
-- Claude Code subscription token.
-- Codex ChatGPT-plan device-code sign-in.
-- Advanced Codex auth.json paste fallback.
+- Per-agent Claude subscription sign-in for Claude Code, Pi, and OpenCode.
+- Per-agent ChatGPT-plan device-code sign-in for Codex, Pi, and OpenCode.
 
-The Codex device flow reuses the Codex CLI client behavior. It is not a
+The ChatGPT device flow reuses the Codex CLI client behavior. It is not a
 separately registered third-party OAuth integration and could stop working if
-the upstream flow changes. In-shell login and auth.json paste remain recovery
-paths.
+the upstream flow changes. In-shell login remains the recovery path.
 
 ### Optional developer integrations
 
@@ -455,6 +455,17 @@ paths.
 - The daemon opens the payload in memory and writes only the required
   in-container files.
 - Managed files are owned by dev with mode 0600.
+- CLI-owned ChatGPT and Wrangler OAuth stores rotate refresh tokens inside the
+  persistent home. The daemon records a non-secret fingerprint of each applied
+  dashboard grant and never replaces a locally rotated credential when that
+  fingerprint is unchanged. A changed grant replaces only that provider, and
+  removing a previously managed grant clears only its managed store. Existing
+  homes without fingerprints adopt their local credentials during rollout.
+- Every Claude and ChatGPT sign-in is bound to its intended agent and stored in
+  a distinct encrypted credential slot. The daemon installs it only into that
+  agent's auth store; it never seeds one OAuth credential into multiple
+  independent clients. Each ChatGPT store has its own rotation fingerprint,
+  and independently authenticated local stores are preserved during rollout.
 - SSH key changes use sync-keys and are available only while the server is
   Ready. Model, GitHub, and Cloudflare credentials are selected during setup;
   the dashboard does not modify them after a server row exists. Later changes

@@ -7,6 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { generateX25519Keypair, sealJson } from "../src/crypto.js";
 import {
+  CHATGPT_OAUTH_PROVIDERS,
+  CLAUDE_OAUTH_PROVIDERS,
   ContainerSpecSchema,
   CredentialPayloadSchema,
   INPUT_LIMITS,
@@ -142,6 +144,21 @@ describe("JobRequestSchema", () => {
 });
 
 describe("LlmKeysSchema", () => {
+  it("maps each subscription sign-in to a distinct per-agent credential", () => {
+    expect(new Set(Object.values(CLAUDE_OAUTH_PROVIDERS)).size).toBe(3);
+    expect(new Set(Object.values(CHATGPT_OAUTH_PROVIDERS)).size).toBe(3);
+    expect(CHATGPT_OAUTH_PROVIDERS).toMatchObject({
+      pi: "pi_codex_subscription_token",
+      codex: "codex_subscription_token",
+      opencode: "opencode_codex_subscription_token",
+    });
+    expect(CLAUDE_OAUTH_PROVIDERS).toMatchObject({
+      pi: "pi_claude_subscription_token",
+      claude: "claude_subscription_token",
+      opencode: "opencode_claude_subscription_token",
+    });
+  });
+
   it("accepts any subset of known providers and nothing else", () => {
     expect(LlmKeysSchema.safeParse({}).success).toBe(true);
     for (const provider of LLM_PROVIDERS) {
@@ -157,6 +174,11 @@ describe("LlmKeysSchema", () => {
     expect(
       LlmKeysSchema.safeParse({
         codex_subscription_token: "x".repeat(INPUT_LIMITS.codexAuthBytes + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      LlmKeysSchema.safeParse({
+        opencode_codex_subscription_token: "x".repeat(INPUT_LIMITS.codexAuthBytes + 1),
       }).success,
     ).toBe(false);
   });

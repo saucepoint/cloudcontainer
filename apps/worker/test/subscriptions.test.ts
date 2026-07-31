@@ -52,8 +52,16 @@ function fakeAnthropic(opts: { fail?: boolean } = {}) {
   return { route, exchanges };
 }
 
-async function startClaude(env: Bindings, headers: Record<string, string>): Promise<string> {
-  const res = await app().request("/api/claude/oauth/start", { method: "POST", headers }, env);
+async function startClaude(
+  env: Bindings,
+  headers: Record<string, string>,
+  agent?: "pi" | "claude" | "opencode",
+): Promise<string> {
+  const res = await app().request(
+    "/api/claude/oauth/start",
+    agent ? json({ agent }, headers) : { method: "POST", headers },
+    env,
+  );
   expect(res.status).toBe(200);
   const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
   const url = new URL(authorizeUrl);
@@ -105,6 +113,46 @@ describe("Claude OAuth", () => {
       .bind(`claude:${state}`)
       .first();
     expect(gone).toBeNull();
+  });
+
+  it("binds Pi and OpenCode sign-ins to separate credential slots", async () => {
+    const anthropic = fakeAnthropic();
+    const { env, headers } = await setup(anthropic.route);
+    const state = await startClaude(env, headers, "pi");
+    const stored = await env.DB.prepare("SELECT user_id FROM oauth_states WHERE state = ?")
+      .bind(`claude:pi:${state}`)
+      .first<{ user_id: string }>();
+    expect(stored?.user_id).toBe("user-1");
+
+    const wrongAgent = await app().request(
+      "/api/claude/oauth/finish",
+      json({ code: `authcode-1#${state}`, agent: "opencode" }, headers),
+      env,
+    );
+    expect(wrongAgent.status).toBe(403);
+
+    const connected = await app().request(
+      "/api/claude/oauth/finish",
+      json({ code: `authcode-1#${state}`, agent: "pi" }, headers),
+      env,
+    );
+    expect(connected.status).toBe(200);
+    const credentials = decryptLlmKeys(env, await getCredentialsRow(env, "user-1"));
+    expect(credentials.pi_claude_subscription_token).toBe("CANARY-oat01");
+    expect(credentials.claude_subscription_token).toBeUndefined();
+    expect(credentials.opencode_claude_subscription_token).toBeUndefined();
+  });
+
+  it("rejects unsupported Claude sign-in targets before creating state", async () => {
+    const { env, headers } = await setup(fakeAnthropic().route);
+    const res = await app().request(
+      "/api/claude/oauth/start",
+      json({ agent: "codex" }, headers),
+      env,
+    );
+    expect(res.status).toBe(400);
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM oauth_states").first<{ n: number }>();
+    expect(row?.n).toBe(0);
   });
 
   it("rejects malformed pastes, unknown states, and other users' attempts", async () => {

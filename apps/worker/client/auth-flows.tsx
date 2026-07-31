@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { ChatgptOauthAgent, ClaudeOauthAgent } from "@workbench/contract";
 import { copyText } from "./clipboard.js";
 import { errorMessage, postJson } from "./http.js";
 
@@ -17,11 +18,13 @@ type DeviceConfig = {
   copyCode?: boolean;
   signInHint: string;
   startPath: string;
+  startBody?: object;
   pollPath: string;
   pollBody: (start: DeviceStart) => object;
 };
 type PasteConfig = {
   startPath: string;
+  startBody?: object;
   finishPath: string;
   openLabel: string;
   step1: string;
@@ -57,7 +60,7 @@ function DeviceFlow({ config, complete, release }: { config: DeviceConfig; compl
     let cancelled = false;
     void (async () => {
       try {
-        const next = await api<DeviceStart>(config.startPath);
+        const next = await api<DeviceStart>(config.startPath, config.startBody);
         if (cancelled) return;
         setStart(next);
         const deadline = Date.now() + next.expiresInSec * 1_000;
@@ -126,7 +129,7 @@ function PasteFlow({ config, complete, release }: { config: PasteConfig; complet
 
   React.useEffect(() => {
     let cancelled = false;
-    void api<{ authorizeUrl: string }>(config.startPath)
+    void api<{ authorizeUrl: string }>(config.startPath, config.startBody)
       .then((result) => { if (!cancelled) setAuthorizeUrl(result.authorizeUrl); })
       .catch((caught) => {
         if (!cancelled) {
@@ -199,14 +202,22 @@ const pasteFlow = (config: PasteConfig): AuthFlow => (element, done) => {
   mountFlow(element, done, (complete, release) => <PasteFlow config={config} complete={complete} release={release} />);
 };
 
-export const codexDeviceFlow = deviceFlow({
+export const chatgptOauthFlow = (agent: ChatgptOauthAgent): AuthFlow => deviceFlow({
   contacting: "Contacting OpenAI…",
   copyCode: true,
   signInHint: " and sign in to ChatGPT",
   startPath: "/api/codex/device",
+  startBody: { agent },
   pollPath: "/api/codex/device/poll",
-  pollBody: (start) => ({ deviceAuthId: start.deviceAuthId, userCode: start.userCode }),
+  pollBody: (start) => ({
+    deviceAuthId: start.deviceAuthId,
+    userCode: start.userCode,
+    agent,
+  }),
 });
+
+/** Native Codex alias retained for existing imports and cached browser assets. */
+export const codexDeviceFlow = chatgptOauthFlow("codex");
 
 export const copilotDeviceFlow = deviceFlow({
   contacting: "Contacting GitHub…",
@@ -216,18 +227,22 @@ export const copilotDeviceFlow = deviceFlow({
   pollBody: (start) => ({ deviceCode: start.deviceCode }),
 });
 
-export const claudeOauthFlow = pasteFlow({
+export const claudeOauthFlowFor = (agent: ClaudeOauthAgent): AuthFlow => pasteFlow({
   startPath: "/api/claude/oauth/start",
+  startBody: { agent },
   finishPath: "/api/claude/oauth/finish",
   openLabel: "Open claude.ai",
   step1: ", sign in, and approve access",
   step2: "Claude shows an authorization code — copy it and paste it below",
-  inputId: "claude-oauth-code",
+  inputId: `${agent}-claude-oauth-code`,
   inputLabel: "Authorization code",
   placeholder: "code#state",
   emptyError: "Paste the code Claude showed you after approving.",
-  finishBody: (value) => ({ code: value }),
+  finishBody: (value) => ({ code: value, agent }),
 });
+
+/** Native Claude Code alias retained for existing imports and cached browser assets. */
+export const claudeOauthFlow = claudeOauthFlowFor("claude");
 
 export const wranglerOauthFlow = pasteFlow({
   startPath: "/api/wrangler/oauth/start",

@@ -81,8 +81,16 @@ async function setup(openai = fakeOpenAI()) {
   return { env, headers, openai };
 }
 
-async function startDevice(env: Bindings, headers: Record<string, string>) {
-  const res = await app().request("/api/codex/device", { method: "POST", headers }, env);
+async function startDevice(
+  env: Bindings,
+  headers: Record<string, string>,
+  agent?: "pi" | "codex" | "opencode",
+) {
+  const res = await app().request(
+    "/api/codex/device",
+    agent ? json({ agent }, headers) : { method: "POST", headers },
+    env,
+  );
   expect(res.status).toBe(200);
   return (await res.json()) as {
     deviceAuthId: string;
@@ -149,6 +157,22 @@ describe("POST /api/codex/device", () => {
     const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM oauth_states").first<{ n: number }>();
     expect(row?.n).toBe(0);
   });
+
+  it("binds Pi device auth to its own attempt namespace", async () => {
+    const { env, headers } = await setup();
+    await startDevice(env, headers, "pi");
+    const row = await env.DB.prepare("SELECT user_id FROM oauth_states WHERE state = ?")
+      .bind("codex:pi:dev-1")
+      .first<{ user_id: string }>();
+    expect(row?.user_id).toBe("user-1");
+  });
+
+  it("rejects unsupported ChatGPT sign-in targets before contacting OpenAI", async () => {
+    const { env, headers, openai } = await setup();
+    const res = await app().request("/api/codex/device", json({ agent: "claude" }, headers), env);
+    expect(res.status).toBe(400);
+    expect(openai.calls).toEqual([]);
+  });
 });
 
 describe("POST /api/codex/device/poll", () => {
@@ -195,6 +219,34 @@ describe("POST /api/codex/device/poll", () => {
       .bind("codex:dev-1")
       .first();
     expect(state).toBeNull(); // single-use
+  });
+
+  it("cannot complete a Pi attempt into OpenCode and stores it only for Pi", async () => {
+    const openai = fakeOpenAI({ approved: true });
+    const { env, headers } = await setup(openai);
+    const start = await startDevice(env, headers, "pi");
+
+    const wrongAgent = await app().request(
+      "/api/codex/device/poll",
+      json({
+        deviceAuthId: start.deviceAuthId,
+        userCode: start.userCode,
+        agent: "opencode",
+      }, headers),
+      env,
+    );
+    expect(wrongAgent.status).toBe(403);
+
+    const connected = await app().request(
+      "/api/codex/device/poll",
+      json({ deviceAuthId: start.deviceAuthId, userCode: start.userCode, agent: "pi" }, headers),
+      env,
+    );
+    expect(connected.status).toBe(200);
+    const credentials = decryptLlmKeys(env, await getCredentialsRow(env, "user-1"));
+    expect(credentials.pi_codex_subscription_token).toBeDefined();
+    expect(credentials.codex_subscription_token).toBeUndefined();
+    expect(credentials.opencode_codex_subscription_token).toBeUndefined();
   });
 
   it("refuses a device flow after a server has been created", async () => {

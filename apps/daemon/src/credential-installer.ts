@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CredentialPayloadSchema,
   LLM_PROVIDERS,
@@ -18,6 +19,10 @@ const LLM_ENV_VARS: Record<LlmProvider, readonly string[]> = {
   opencode_go: ["OPENCODE_API_KEY"],
   claude_subscription_token: ["CLAUDE_CODE_OAUTH_TOKEN"],
   codex_subscription_token: [],
+  pi_claude_subscription_token: [],
+  pi_codex_subscription_token: [],
+  opencode_claude_subscription_token: [],
+  opencode_codex_subscription_token: [],
   github_copilot: [],
   deepseek: ["DEEPSEEK_API_KEY"],
   // Keep both names for the Open Platform and Kimi Code ecosystems.
@@ -32,12 +37,29 @@ const PI_AUTH_PATH = "/home/dev/.pi/agent/auth.json";
 const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
 const OPENCODE_AUTH_PATH = "/home/dev/.local/share/opencode/auth.json";
 const WRANGLER_CONFIG_PATH = "/home/dev/.wrangler/config/default.toml";
+const MANAGED_CREDENTIAL_STATE_PATH = "/home/dev/.config/workbench/credential-state.json";
+
+type CodexAuthOwner = "pi" | "codex" | "opencode";
+
+interface ManagedCredentialState {
+  version: 2;
+  chatgpt?: Partial<Record<CodexAuthOwner, { fingerprint: string }>>;
+  wrangler?: {
+    fingerprint: string;
+  };
+}
+
+interface StoredManagedCredentialState {
+  /** False for legacy homes that do not yet have per-agent fingerprints. */
+  exists: boolean;
+  state: ManagedCredentialState;
+}
 
 interface CodexAuthPayload {
   last_refresh?: unknown;
-  tokens?: {
-    access_token?: unknown;
-    refresh_token?: unknown;
+  tokens: {
+    access_token: string;
+    refresh_token: string;
     account_id?: unknown;
   };
 }
@@ -46,7 +68,28 @@ function parseCodexAuth(value: string): CodexAuthPayload {
   try {
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== "object") throw new Error();
-    return parsed as CodexAuthPayload;
+    const auth = parsed as {
+      last_refresh?: unknown;
+      tokens?: {
+        access_token?: unknown;
+        refresh_token?: unknown;
+        account_id?: unknown;
+      };
+    };
+    if (
+      typeof auth.tokens?.access_token !== "string" ||
+      typeof auth.tokens.refresh_token !== "string"
+    ) {
+      throw new Error();
+    }
+    return {
+      last_refresh: auth.last_refresh,
+      tokens: {
+        access_token: auth.tokens.access_token,
+        refresh_token: auth.tokens.refresh_token,
+        account_id: auth.tokens.account_id,
+      },
+    };
   } catch {
     // Parser diagnostics must never echo credential fragments into job errors.
     throw new Error("invalid Codex subscription auth payload");
@@ -63,6 +106,14 @@ function parseWranglerOauth(value: string) {
   const parsed = WranglerOauthSchema.safeParse(raw);
   if (!parsed.success) throw new Error("invalid Wrangler OAuth payload");
   return parsed.data;
+}
+
+function credentialFingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function isFingerprint(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
 /** Installs sealed credentials into a container without persisting them on the host. */
@@ -86,12 +137,19 @@ export class CredentialInstaller {
     const selectedAgents = new Set(agents);
     // Validate nested serialized formats before making any container changes.
     const wrangler = creds.wranglerOauth ? parseWranglerOauth(creds.wranglerOauth) : undefined;
-    const installsCodexCliAuth = selectedAgents.has("codex");
-    const usesCodexSubscription =
-      installsCodexCliAuth || selectedAgents.has("pi") || selectedAgents.has("opencode");
-    const codexAuth = llm.codex_subscription_token && usesCodexSubscription
-      ? parseCodexAuth(llm.codex_subscription_token)
-      : undefined;
+    const chatgptCredentials: Partial<
+      Record<CodexAuthOwner, { serialized: string; auth: CodexAuthPayload }>
+    > = {};
+    for (const [owner, serialized] of [
+      ["pi", llm.pi_codex_subscription_token],
+      ["codex", llm.codex_subscription_token],
+      ["opencode", llm.opencode_codex_subscription_token],
+    ] as const) {
+      if (serialized && selectedAgents.has(owner)) {
+        chatgptCredentials[owner] = { serialized, auth: parseCodexAuth(serialized) };
+      }
+    }
+    const managed = await this.readManagedCredentialState(name);
     const lines: string[] = ["# managed by workbench — rewritten on credential changes"];
     const add = (envVar: string, value: string | undefined) => {
       if (value) lines.push(`export ${envVar}=${shellQuote(value)}`);
@@ -100,19 +158,6 @@ export class CredentialInstaller {
       for (const envVar of LLM_ENV_VARS[provider]) add(envVar, llm[provider]);
     }
     add("CLOUDFLARE_API_TOKEN", creds.cloudflareToken);
-
-    // File-based dashboard credentials are write-only: absence preserves any
-    // login the user completed from inside their persistent home directory.
-    // OpenAI refresh tokens rotate and are single-use, so do not seed the
-    // standalone Codex store when the subscription is being used by Pi or
-    // OpenCode instead.
-    if (llm.codex_subscription_token && installsCodexCliAuth) {
-      await this.incus.writeFile(name, CODEX_AUTH_PATH, llm.codex_subscription_token.trim() + "\n", {
-        owner: "dev:dev",
-        mode: "0600",
-      });
-      await this.incus.shell(name, "chown dev:dev /home/dev/.codex");
-    }
 
     await this.incus.writeFile(name, "/home/dev/.config/workbench/env", lines.join("\n") + "\n", {
       owner: "dev:dev",
@@ -129,7 +174,7 @@ export class CredentialInstaller {
       ].join(" && "),
     );
 
-    if (llm.claude_subscription_token) {
+    if (llm.claude_subscription_token && selectedAgents.has("claude")) {
       const scriptPath = "/home/dev/.config/workbench/claude-state-merge.cjs";
       const script = [
         `const fs = require("fs");`,
@@ -149,41 +194,13 @@ export class CredentialInstaller {
 
     const piEntries: Record<string, unknown> = {};
     const opencodeEntries: Record<string, unknown> = {};
-    if (llm.claude_subscription_token) {
-      const oauth = {
+    if (llm.pi_claude_subscription_token && selectedAgents.has("pi")) {
+      piEntries.anthropic = {
         type: "oauth",
-        refresh: llm.claude_subscription_token,
-        access: llm.claude_subscription_token,
+        refresh: llm.pi_claude_subscription_token,
+        access: llm.pi_claude_subscription_token,
         expires: Number.MAX_SAFE_INTEGER,
       };
-      if (selectedAgents.has("pi")) piEntries.anthropic = oauth;
-      if (selectedAgents.has("opencode")) opencodeEntries.anthropic = oauth;
-    }
-    if (codexAuth) {
-      const access = codexAuth.tokens?.access_token;
-      const refresh = codexAuth.tokens?.refresh_token;
-      if (typeof access !== "string" || typeof refresh !== "string") {
-        throw new Error("invalid Codex subscription auth payload");
-      }
-      const refreshedAt =
-        typeof codexAuth.last_refresh === "string"
-          ? Date.parse(codexAuth.last_refresh)
-          : Number.NaN;
-      const oauth = {
-        type: "oauth",
-        refresh,
-        access,
-        expires: (Number.isFinite(refreshedAt) ? refreshedAt : Date.now()) + 60 * 60 * 1000,
-      };
-      if (selectedAgents.has("pi")) piEntries["openai-codex"] = oauth;
-      if (selectedAgents.has("opencode")) {
-        opencodeEntries.openai = {
-          ...oauth,
-          ...(typeof codexAuth.tokens?.account_id === "string"
-            ? { accountId: codexAuth.tokens.account_id }
-            : {}),
-        };
-      }
     }
     await this.mergeAgentAuth(name, "pi-auth-merge.cjs", PI_AUTH_PATH, piEntries);
 
@@ -198,28 +215,20 @@ export class CredentialInstaller {
     if (llm.opencode_go) {
       opencodeEntries.opencode = { type: "api", key: llm.opencode_go };
     }
+    if (llm.opencode_claude_subscription_token && selectedAgents.has("opencode")) {
+      opencodeEntries.anthropic = {
+        type: "oauth",
+        refresh: llm.opencode_claude_subscription_token,
+        access: llm.opencode_claude_subscription_token,
+        expires: Number.MAX_SAFE_INTEGER,
+      };
+    }
     await this.mergeAgentAuth(
       name,
       "opencode-auth-merge.cjs",
       OPENCODE_AUTH_PATH,
       opencodeEntries,
     );
-
-    if (wrangler) {
-      const tomlString = (value: string) => JSON.stringify(value);
-      const toml = [
-        "# managed by workbench — wrangler rotates these tokens itself",
-        `oauth_token = ${tomlString(wrangler.oauth_token)}`,
-        `refresh_token = ${tomlString(wrangler.refresh_token)}`,
-        `expiration_time = ${tomlString(wrangler.expiration_time)}`,
-        `scopes = [${wrangler.scopes.map(tomlString).join(", ")}]`,
-      ].join("\n");
-      await this.incus.writeFile(name, WRANGLER_CONFIG_PATH, toml + "\n", {
-        owner: "dev:dev",
-        mode: "0600",
-      });
-      await this.incus.shell(name, "chown -R dev:dev /home/dev/.wrangler");
-    }
 
     if (creds.githubToken) {
       const ghHosts = [
@@ -243,6 +252,22 @@ export class CredentialInstaller {
         "rm -f /home/dev/.config/gh/hosts.yml /home/dev/.git-credentials",
       );
     }
+
+    // CLI-owned OAuth stores rotate refresh tokens locally. Reconcile each
+    // dashboard grant independently so an unchanged lifecycle snapshot never
+    // replaces the newer local token, while reconnects and disconnects still
+    // apply after a stopped instance starts again.
+    await this.reconcileChatgptAuth(
+      name,
+      managed,
+      selectedAgents,
+      chatgptCredentials,
+    );
+    // Persist each provider decision before touching the next rotating store.
+    // A later provider failure can then retry without replaying this grant.
+    await this.writeManagedCredentialState(name, managed.state);
+    await this.reconcileWranglerAuth(name, managed, creds.wranglerOauth, wrangler);
+    await this.writeManagedCredentialState(name, managed.state);
   }
 
   /** Presence-only view; credential values are never read back from disk. */
@@ -297,5 +322,253 @@ export class CredentialInstaller {
     ].join("\n");
     await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
     await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
+  }
+
+  private async deleteAgentAuth(
+    name: string,
+    scriptName: string,
+    authPath: string,
+    provider: string,
+  ): Promise<void> {
+    const scriptPath = `/home/dev/.config/workbench/${scriptName}`;
+    const script = [
+      `const fs = require("fs");`,
+      `const file = ${JSON.stringify(authPath)};`,
+      `let current = {};`,
+      `try { current = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}`,
+      `delete current[${JSON.stringify(provider)}];`,
+      `fs.writeFileSync(file, JSON.stringify(current, null, 2) + "\\n", { mode: 0o600 });`,
+      `fs.chmodSync(file, 0o600);`,
+      `fs.rmSync(__filename);`,
+    ].join("\n");
+    await this.incus.writeFile(name, scriptPath, script, { owner: "dev:dev", mode: "0600" });
+    await this.incus.shell(name, `su - dev -c ${shellQuote(`node ${scriptPath}`)}`);
+  }
+
+  private async readManagedCredentialState(name: string): Promise<StoredManagedCredentialState> {
+    const { stdout } = await this.incus.shell(
+      name,
+      `if test -f ${shellQuote(MANAGED_CREDENTIAL_STATE_PATH)}; then ` +
+        `printf 'present\\n'; cat ${shellQuote(MANAGED_CREDENTIAL_STATE_PATH)}; fi`,
+    );
+    if (!stdout.startsWith("present\n")) return { exists: false, state: { version: 2 } };
+
+    try {
+      const parsed = JSON.parse(stdout.slice("present\n".length)) as Record<string, unknown>;
+      if (parsed.version !== 1 && parsed.version !== 2) throw new Error();
+      const state: ManagedCredentialState = { version: 2 };
+      if (parsed.version === 2 && parsed.chatgpt !== undefined) {
+        const raw = parsed.chatgpt as Record<string, unknown>;
+        const chatgpt: Partial<Record<CodexAuthOwner, { fingerprint: string }>> = {};
+        for (const owner of ["pi", "codex", "opencode"] as const) {
+          if (raw[owner] === undefined) continue;
+          const credential = raw[owner] as Record<string, unknown>;
+          if (!isFingerprint(credential.fingerprint)) throw new Error();
+          chatgpt[owner] = { fingerprint: credential.fingerprint };
+        }
+        if (Object.keys(chatgpt).length > 0) state.chatgpt = chatgpt;
+      }
+      if (parsed.wrangler !== undefined) {
+        const wrangler = parsed.wrangler as Record<string, unknown>;
+        if (!isFingerprint(wrangler.fingerprint)) throw new Error();
+        state.wrangler = { fingerprint: wrangler.fingerprint };
+      }
+      // Version 1 tracked one shared OpenAI grant. Treat those stores as
+      // unmanaged during migration so a per-agent rollout never deletes a
+      // locally refreshed login. Wrangler's independent marker is retained.
+      return { exists: parsed.version === 2, state };
+    } catch {
+      // A corrupt or unrecognized marker must fail closed rather than risk
+      // replaying a stale rotating token over a valid local session.
+      throw new Error("invalid managed credential state");
+    }
+  }
+
+  private async writeManagedCredentialState(
+    name: string,
+    state: ManagedCredentialState,
+  ): Promise<void> {
+    await this.incus.writeFile(
+      name,
+      MANAGED_CREDENTIAL_STATE_PATH,
+      JSON.stringify(state, null, 2) + "\n",
+      { owner: "dev:dev", mode: "0600" },
+    );
+  }
+
+  private async localCodexCredentials(
+    name: string,
+  ): Promise<Map<CodexAuthOwner, string | undefined>> {
+    const script = [
+      `const crypto = require("crypto");`,
+      `const fs = require("fs");`,
+      `const credentialPairs = [`,
+      `  ["codex", ${JSON.stringify(CODEX_AUTH_PATH)}, (value) => value.tokens],`,
+      `  ["pi", ${JSON.stringify(PI_AUTH_PATH)}, (value) => value["openai-codex"]],`,
+      `  ["opencode", ${JSON.stringify(OPENCODE_AUTH_PATH)}, (value) => value.openai],`,
+      `];`,
+      `for (const [owner, file, select] of credentialPairs) {`,
+      `  try {`,
+      `    const credential = select(JSON.parse(fs.readFileSync(file, "utf8")));`,
+      `    if (typeof credential?.access !== "string" && typeof credential?.access_token !== "string") continue;`,
+      `    if (typeof credential?.refresh !== "string" && typeof credential?.refresh_token !== "string") continue;`,
+      `    const access = credential.access ?? credential.access_token;`,
+      `    const refresh = credential.refresh ?? credential.refresh_token;`,
+      `    const fingerprint = crypto.createHash("sha256").update(access + "\\0" + refresh).digest("hex");`,
+      `    console.log(owner + " " + fingerprint);`,
+      `  } catch {}`,
+      `}`,
+    ].join("\n");
+    const { stdout } = await this.incus.shell(
+      name,
+      `su - dev -c ${shellQuote(`node -e ${shellQuote(script)}`)}`,
+    );
+    const found = new Map<CodexAuthOwner, string | undefined>();
+    for (const line of stdout.split("\n")) {
+      const [owner, fingerprint] = line.trim().split(/\s+/, 2);
+      if (owner !== "pi" && owner !== "codex" && owner !== "opencode") continue;
+      found.set(owner, isFingerprint(fingerprint) ? fingerprint : undefined);
+    }
+    return found;
+  }
+
+  private async reconcileChatgptAuth(
+    name: string,
+    managed: StoredManagedCredentialState,
+    selectedAgents: ReadonlySet<Agent>,
+    credentials: Partial<
+      Record<CodexAuthOwner, { serialized: string; auth: CodexAuthPayload }>
+    >,
+  ): Promise<void> {
+    const localCredentials = await this.localCodexCredentials(name);
+    const state = managed.state.chatgpt ?? {};
+    for (const owner of ["pi", "codex", "opencode"] as const) {
+      if (!selectedAgents.has(owner)) continue;
+      const credential = credentials[owner];
+      const current = state[owner];
+      if (!credential) {
+        if (current) {
+          await this.removeCodexAuth(name, owner);
+          delete state[owner];
+        }
+        continue;
+      }
+
+      const fingerprint = credentialFingerprint(credential.serialized.trim());
+      if (current?.fingerprint === fingerprint && localCredentials.has(owner)) continue;
+      // Homes without a per-agent marker may already contain a refreshed or
+      // manually created login. Adopt it instead of replaying a D1 snapshot.
+      if (!current && localCredentials.has(owner)) {
+        state[owner] = { fingerprint };
+        continue;
+      }
+      await this.installCodexAuth(name, owner, credential.serialized, credential.auth);
+      state[owner] = { fingerprint };
+    }
+    if (Object.keys(state).length > 0) managed.state.chatgpt = state;
+    else delete managed.state.chatgpt;
+  }
+
+  private async installCodexAuth(
+    name: string,
+    owner: CodexAuthOwner,
+    serialized: string,
+    auth: CodexAuthPayload,
+  ): Promise<void> {
+    if (owner === "codex") {
+      await this.incus.writeFile(name, CODEX_AUTH_PATH, serialized.trim() + "\n", {
+        owner: "dev:dev",
+        mode: "0600",
+      });
+      await this.incus.shell(name, "chown dev:dev /home/dev/.codex");
+      return;
+    }
+
+    const access = auth.tokens.access_token;
+    const refresh = auth.tokens.refresh_token;
+    const refreshedAt = typeof auth.last_refresh === "string"
+      ? Date.parse(auth.last_refresh)
+      : Number.NaN;
+    const oauth = {
+      type: "oauth",
+      refresh,
+      access,
+      expires: (Number.isFinite(refreshedAt) ? refreshedAt : Date.now()) + 60 * 60 * 1000,
+    };
+    if (owner === "pi") {
+      await this.mergeAgentAuth(
+        name,
+        "pi-auth-merge.cjs",
+        PI_AUTH_PATH,
+        { "openai-codex": oauth },
+      );
+      return;
+    }
+    await this.mergeAgentAuth(
+      name,
+      "opencode-auth-merge.cjs",
+      OPENCODE_AUTH_PATH,
+      {
+        openai: {
+          ...oauth,
+          ...(typeof auth.tokens?.account_id === "string"
+            ? { accountId: auth.tokens.account_id }
+            : {}),
+        },
+      },
+    );
+  }
+
+  private async removeCodexAuth(name: string, owner: CodexAuthOwner): Promise<void> {
+    if (owner === "codex") {
+      await this.incus.shell(name, `rm -f ${shellQuote(CODEX_AUTH_PATH)}`);
+    } else if (owner === "pi") {
+      await this.deleteAgentAuth(name, "pi-auth-delete.cjs", PI_AUTH_PATH, "openai-codex");
+    } else {
+      await this.deleteAgentAuth(name, "opencode-auth-delete.cjs", OPENCODE_AUTH_PATH, "openai");
+    }
+  }
+
+  private async reconcileWranglerAuth(
+    name: string,
+    managed: StoredManagedCredentialState,
+    serialized: string | undefined,
+    auth: ReturnType<typeof parseWranglerOauth> | undefined,
+  ): Promise<void> {
+    const current = managed.state.wrangler;
+    if (!serialized || !auth) {
+      if (current) {
+        await this.incus.shell(name, `rm -f ${shellQuote(WRANGLER_CONFIG_PATH)}`);
+        delete managed.state.wrangler;
+      }
+      return;
+    }
+
+    const fingerprint = credentialFingerprint(serialized);
+    const { stdout } = await this.incus.shell(
+      name,
+      `test -f ${shellQuote(WRANGLER_CONFIG_PATH)} && echo present || true`,
+    );
+    const localExists = stdout.split("\n").some((line) => line.trim() === "present");
+    if (current?.fingerprint === fingerprint && localExists) return;
+    if (!managed.exists && !current && localExists) {
+      managed.state.wrangler = { fingerprint };
+      return;
+    }
+
+    const tomlString = (value: string) => JSON.stringify(value);
+    const toml = [
+      "# managed by workbench — wrangler rotates these tokens itself",
+      `oauth_token = ${tomlString(auth.oauth_token)}`,
+      `refresh_token = ${tomlString(auth.refresh_token)}`,
+      `expiration_time = ${tomlString(auth.expiration_time)}`,
+      `scopes = [${auth.scopes.map(tomlString).join(", ")}]`,
+    ].join("\n");
+    await this.incus.writeFile(name, WRANGLER_CONFIG_PATH, toml + "\n", {
+      owner: "dev:dev",
+      mode: "0600",
+    });
+    await this.incus.shell(name, "chown -R dev:dev /home/dev/.wrangler");
+    managed.state.wrangler = { fingerprint };
   }
 }

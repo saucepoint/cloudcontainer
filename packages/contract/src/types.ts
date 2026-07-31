@@ -22,6 +22,10 @@ export const LLM_PROVIDERS = [
   "opencode_go",
   "claude_subscription_token",
   "codex_subscription_token",
+  "pi_claude_subscription_token",
+  "pi_codex_subscription_token",
+  "opencode_claude_subscription_token",
+  "opencode_codex_subscription_token",
   "github_copilot",
   "deepseek",
   "kimi",
@@ -39,6 +43,10 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
   opencode_go: "OpenCode Go",
   claude_subscription_token: "Claude subscription",
   codex_subscription_token: "ChatGPT (Codex)",
+  pi_claude_subscription_token: "Claude for Pi",
+  pi_codex_subscription_token: "ChatGPT for Pi",
+  opencode_claude_subscription_token: "Claude for OpenCode",
+  opencode_codex_subscription_token: "ChatGPT for OpenCode",
   github_copilot: "GitHub Copilot",
   deepseek: "DeepSeek",
   kimi: "Kimi",
@@ -55,8 +63,28 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
 export const OAUTH_ONLY_LLM_PROVIDERS = [
   "claude_subscription_token",
   "codex_subscription_token",
+  "pi_claude_subscription_token",
+  "pi_codex_subscription_token",
+  "opencode_claude_subscription_token",
+  "opencode_codex_subscription_token",
   "github_copilot",
 ] as const satisfies readonly LlmProvider[];
+
+export const CLAUDE_OAUTH_AGENTS = ["pi", "claude", "opencode"] as const;
+export type ClaudeOauthAgent = (typeof CLAUDE_OAUTH_AGENTS)[number];
+export const CLAUDE_OAUTH_PROVIDERS: Record<ClaudeOauthAgent, LlmProvider> = {
+  pi: "pi_claude_subscription_token",
+  claude: "claude_subscription_token",
+  opencode: "opencode_claude_subscription_token",
+};
+
+export const CHATGPT_OAUTH_AGENTS = ["pi", "codex", "opencode"] as const;
+export type ChatgptOauthAgent = (typeof CHATGPT_OAUTH_AGENTS)[number];
+export const CHATGPT_OAUTH_PROVIDERS: Record<ChatgptOauthAgent, LlmProvider> = {
+  pi: "pi_codex_subscription_token",
+  codex: "codex_subscription_token",
+  opencode: "opencode_codex_subscription_token",
+};
 
 export const CONTAINER_STATUSES = [
   "waitlisted",
@@ -117,6 +145,10 @@ export const LlmKeysSchema = z
     opencode_go: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
+    pi_claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    pi_codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
+    opencode_claude_subscription_token: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    opencode_codex_subscription_token: z.string().max(INPUT_LIMITS.codexAuthBytes).optional(),
     github_copilot: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     deepseek: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     kimi: z.string().max(INPUT_LIMITS.tokenBytes).optional(),

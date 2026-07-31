@@ -199,6 +199,17 @@ describe("subscription sign-in wiring", () => {
     expect(html).toContain("Sign in with ChatGPT");
     expect(html).toContain("Sign in with GitHub");
     expect(html).toContain("Sign in with Cloudflare");
+    for (const id of [
+      "pi-chatgpt-signin",
+      "pi-claude-signin",
+      "opencode-chatgpt-signin",
+      "opencode-claude-signin",
+    ]) {
+      expect(html).toContain(`id="${id}"`);
+      expect(onboardingClient).toContain(`wireSignin("${id.slice(0, -"-signin".length)}"`);
+    }
+    expect(onboardingClient).toContain('chatgptOauthFlow("pi")');
+    expect(onboardingClient).toContain('claudeOauthFlowFor("opencode")');
     expect(html).not.toContain("Wrangler sign-in");
     const cloudflare = html.slice(html.indexOf("Connect Cloudflare"), html.indexOf("</details>", html.indexOf("Connect Cloudflare")));
     expect(cloudflare).toContain('<div class="provider-head">');
@@ -238,7 +249,7 @@ describe("subscription sign-in wiring", () => {
 
   it("gives the ChatGPT device code a dedicated copy affordance", () => {
     const codexFlow = authFlowsClient.slice(
-      authFlowsClient.indexOf("export const codexDeviceFlow"),
+      authFlowsClient.indexOf("export const chatgptOauthFlow"),
       authFlowsClient.indexOf("export const copilotDeviceFlow"),
     );
     expect(codexFlow).toContain("copyCode: true");
@@ -441,10 +452,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html).toContain("1. Coding agents");
     expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
-    expect(html).toContain(".agent-signin { grid-column: 1; grid-row: 1;");
-    expect(html).toContain("align-self: start; justify-self: end;");
-    expect(html.indexOf("Sign in with Claude")).toBeGreaterThan(html.indexOf("Claude Code"));
-    expect(html.indexOf("Sign in with ChatGPT")).toBeGreaterThan(html.indexOf("Codex"));
+    expect(html).toContain(".agent-signins { display: grid;");
+    expect(html).toContain(".agent-signin { display: flex; flex-wrap: wrap;");
+    expect(html.indexOf('id="claude-signin"')).toBeGreaterThan(html.indexOf('id="agent-claude"'));
+    expect(html.indexOf('id="codex-signin"')).toBeGreaterThan(html.indexOf('id="agent-codex"'));
     expect(html).toContain("required");
   });
 
@@ -556,10 +567,11 @@ describe("interface foundation", () => {
     expect(html).toContain(".auth-provider { width: min(100%, 18rem); justify-self: center;");
   });
 
-  it("reserves sign-in space only on agent tiles that have one", () => {
+  it("stacks each agent's independent sign-ins below its selection copy", () => {
     const html = String(OnboardingPage({}));
-    expect(html).toContain(".agent:has(.agent-signin) .agent-choice { padding-right: 9.5rem; }");
-    expect(html).toContain(".agent:has(.agent-signin) .agent-choice { padding-right: 1rem; }");
+    expect(html).toContain(".agent-signins { display: grid; gap: 0.5rem;");
+    expect(html).toContain(".agent-auth > [id$=\"-flow\"] { min-width: 0; }");
+    expect(html).not.toContain(".agent:has(.agent-signin) .agent-choice");
   });
 
   it("shows a skeleton while the dashboard loads", () => {
