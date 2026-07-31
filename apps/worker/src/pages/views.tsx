@@ -30,18 +30,18 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
     <div class="card">
       <ul class="check spec-list">
         <li>
-          1 vCPU · 1.5 GB RAM · 5 GB Storage · Debian 13
+          1 vCPU · 1.5 GB RAM · 5 GB Storage
           <span class="ok">free tier</span>
         </li>
         <li>
-          2 vCPU · 4 GB RAM · 8 GB Storage · Debian 13
+          2 vCPU · 4 GB RAM · 8 GB Storage
           <span class="muted tier-label">coming soon</span>
         </li>
         <li>
           Pi, Claude Code, Codex, OpenCode
         </li>
         <li>
-          SSH, tmux, git, bash, curl, and more
+          Debian 13, ssh, tmux, git, bash, curl, and more
         </li>
         <li>
           <i>Your repos and agents, preconfigured and ready in less than 5 mins</i>
@@ -356,26 +356,21 @@ export const OnboardingPage: FC<{
         </details>
         <details>
           <summary>Connect Cloudflare</summary>
-          <div class="provider">
-            <div class="provider-head">
-              <div>
-                <strong>Wrangler sign-in</strong>
-              </div>
-              <button type="button" id="wrangler-signin" class="btn secondary">
-                Sign in with Cloudflare
-              </button>
-              <span
-                id="wrangler-connected"
-                class="ok"
-                style="display:none"
-                role="status"
-                aria-live="polite"
-              >
-                ✓ Cloudflare connected — wrangler is signed in
-              </span>
-            </div>
-            <div id="wrangler-flow" role="status" aria-live="polite"></div>
+          <div class="provider-head">
+            <button type="button" id="wrangler-signin" class="btn secondary">
+              Sign in with Cloudflare
+            </button>
+            <span
+              id="wrangler-connected"
+              class="ok"
+              style="display:none"
+              role="status"
+              aria-live="polite"
+            >
+              ✓ Cloudflare connected — wrangler is signed in
+            </span>
           </div>
+          <div id="wrangler-flow" role="status" aria-live="polite"></div>
           <label for="cloudflare-token">
             or paste an API token. You can{" "}
             <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">

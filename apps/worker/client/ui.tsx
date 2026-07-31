@@ -21,7 +21,7 @@ function reveal(elements: Element | Element[] | NodeListOf<Element>): void {
   );
 }
 
-const detailAnimations = new WeakMap<HTMLDetailsElement, Animation>();
+const detailAnimations = new WeakMap<HTMLDetailsElement, ReturnType<typeof animate>>();
 
 function collapsedDetailsHeight(details: HTMLDetailsElement, summary: HTMLElement): number {
   const styles = getComputedStyle(details);
@@ -35,7 +35,7 @@ function animateDetailsToggle(
   details: HTMLDetailsElement,
   summary: HTMLElement,
 ): void {
-  if (event.defaultPrevented || reducedMotion.matches || typeof details.animate !== "function") return;
+  if (event.defaultPrevented || reducedMotion.matches) return;
   event.preventDefault();
   if (detailAnimations.has(details)) return;
 
@@ -48,9 +48,10 @@ function animateDetailsToggle(
 
   details.style.height = `${startHeight}px`;
   details.style.overflow = "hidden";
-  const animation = details.animate(
+  const animation = animate(
+    details,
     { height: [`${startHeight}px`, `${endHeight}px`] },
-    { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
   );
   detailAnimations.set(details, animation);
 
@@ -60,11 +61,10 @@ function animateDetailsToggle(
     details.style.height = "";
     details.style.overflow = "";
   };
-  animation.onfinish = () => {
+  void animation.finished.then(() => {
     if (!opening) details.open = false;
     reset();
-  };
-  animation.oncancel = reset;
+  }, reset);
 }
 
 function ConfirmationDialog(): React.JSX.Element {

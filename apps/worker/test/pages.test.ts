@@ -65,12 +65,14 @@ describe("landing page call to action", () => {
 
   it("presents the free capacity first and labels the larger tier as upcoming", () => {
     const html = String(LandingPage({ devAuth: false }));
-    const freeTier = "1 vCPU · 1.5 GB RAM · 5 GB Storage · Debian 13";
+    const freeTier = "1 vCPU · 1.5 GB RAM · 5 GB Storage";
     expect(html).not.toContain("1 GB Swap");
-    const premiumTier = "2 vCPU · 4 GB RAM · 8 GB Storage · Debian 13";
+    const premiumTier = "2 vCPU · 4 GB RAM · 8 GB Storage";
     expect(html).toContain(freeTier);
     expect(html).toContain(premiumTier);
     expect(html).toContain('<span class="muted tier-label">coming soon</span>');
+    expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
+    expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");
     expect(html.indexOf(freeTier)).toBeLessThan(html.indexOf(premiumTier));
   });
 
@@ -197,6 +199,10 @@ describe("subscription sign-in wiring", () => {
     expect(html).toContain("Sign in with ChatGPT");
     expect(html).toContain("Sign in with GitHub");
     expect(html).toContain("Sign in with Cloudflare");
+    expect(html).not.toContain("Wrangler sign-in");
+    const cloudflare = html.slice(html.indexOf("Connect Cloudflare"), html.indexOf("</details>", html.indexOf("Connect Cloudflare")));
+    expect(cloudflare).toContain('<div class="provider-head">');
+    expect(cloudflare).not.toContain('<div class="provider">');
     expect(html).toContain('name="llm_opencode_go"');
     expect(html).not.toContain("llm_claude_subscription_token");
     expect(html).not.toContain("llm_codex_subscription_token");
@@ -480,6 +486,7 @@ describe("page accessibility and recovery affordances", () => {
     expect(uiClient).toContain("HTMLDetailsElement");
     expect(uiClient).toContain("details.open = true");
     expect(uiClient).toContain("details.open = false");
+    expect(uiClient).toContain("animate(\n    details,");
   });
 });
 
@@ -528,10 +535,16 @@ describe("interface foundation", () => {
     await expect(apiResponse.json()).resolves.toEqual({ error: "not found" });
   });
 
-  it("left-aligns the landing hero", () => {
+  it("spaces the landing hero copy and aligns tier labels", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('class="landing-hero"');
+    expect(html).toContain(".wrap { width: min(100% - 2.5rem, 731px);");
     expect(html).toContain(".landing-hero { text-align: left; }");
+    expect(html).toContain(".landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }");
+    expect(html).toContain(".spec-list .ok, .spec-list .tier-label { align-self: center;");
+    expect(html).toContain(".auth-provider-list { display: grid;");
+    expect(html).toContain("padding: 1.1rem 1.25rem;");
+    expect(html).toContain(".auth-status:empty { display: none; }");
   });
 
   it("accents bench in the workbench wordmark and groups compact landing auth actions", () => {

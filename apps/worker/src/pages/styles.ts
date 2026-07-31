@@ -46,7 +46,7 @@ a:hover { text-decoration-thickness: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 #app-root { isolation: isolate; }
-.wrap { width: min(100% - 2.5rem, 860px); margin: 0 auto; padding-bottom: 5rem; }
+.wrap { width: min(100% - 2.5rem, 731px); margin: 0 auto; padding-bottom: 5rem; }
 header.site { min-height: 70px; display: flex; align-items: center; justify-content: space-between;
   border-bottom: 1px solid var(--ink); margin-bottom: 3.75rem; }
 .logo { color: var(--ink); font-family: var(--mono); font-size: 0.96rem; font-weight: 700;
@@ -211,13 +211,15 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .err:empty { display: none; }
 .landing-hero { text-align: left; }
 .landing-title { max-width: 650px; }
+.landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }
 .landing-signin-content { width: 100%; }
 .auth-provider-list { display: grid; width: min(100%, 25rem); gap: 0.55rem; margin: 1rem auto 0;
-  padding: 1.1rem 1.25rem 0.8rem; border: 1px solid var(--line); border-radius: var(--radius); }
+  padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); }
 .auth-provider { width: min(100%, 18rem); justify-self: center; justify-content: center; }
 .auth-divider { display: flex; align-items: center; gap: 0.75rem; color: var(--muted); font-size: 0.85rem; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 .auth-status { min-height: 1.3em; margin: 0; }
+.auth-status:empty { display: none; }
 .auth-dev-option { margin-top: 1rem; }
 .auth-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
 .auth-code-row input { letter-spacing: 0.18em; text-transform: uppercase; }
@@ -231,8 +233,8 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
 .world-id-qr p { margin: 0.55rem 0 0; }
 .spec-list li { justify-content: flex-start; }
-.spec-list .ok, .spec-list .tier-label { margin-left: auto; font-family: var(--mono);
-  font-size: 0.75rem; white-space: nowrap; }
+.spec-list .ok, .spec-list .tier-label { align-self: center; display: inline-flex; align-items: center; margin-left: auto;
+  font-family: var(--mono); font-size: 0.75rem; line-height: 1.2; white-space: nowrap; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; background: rgb(32 32 29 / 0.32);
   transition: opacity 140ms ease; }
 .dialog-viewport { position: fixed; inset: 0; z-index: 51; display: grid; place-items: center;
