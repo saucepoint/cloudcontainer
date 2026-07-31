@@ -2,19 +2,28 @@
  * Request a one-time invite from the deployed Worker.
  *
  * Usage:
- *   INVITE_ADMIN_SECRET=... npm run invite:create -- --url https://example.com
+ *   INVITE_ADMIN_SECRET=... npm run create:invite
+ *
+ * Pass --url or set USEBENCH_URL to target another deployment, such as a
+ * local Worker.
  *
  * The shared admin secret is sent only in the Authorization header. The raw
  * invite is printed once; the Worker stores only its keyed HMAC-SHA-256.
  */
 import { argv, env, exit } from "node:process";
 
+const PRODUCTION_URL = "https://usebench.dev";
+
 function argument(name: string): string | undefined {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-const baseUrl = (argument("--url") ?? env.USEBENCH_URL ?? env.WORKBENCH_URL ?? env.CODESTATION_URL)?.replace(/\/$/, "");
+const baseUrl = (argument("--url")
+  ?? env.USEBENCH_URL
+  ?? env.WORKBENCH_URL
+  ?? env.CODESTATION_URL
+  ?? PRODUCTION_URL).replace(/\/$/, "");
 const secret = env.INVITE_ADMIN_SECRET;
 let target: URL | null = null;
 try {
@@ -26,7 +35,7 @@ const localHttp = target?.protocol === "http:"
   && (target.hostname === "localhost" || target.hostname === "127.0.0.1");
 
 if (!target || (target.protocol !== "https:" && !localHttp)) {
-  console.error("Pass an HTTPS --url (HTTP is allowed only for localhost) or set USEBENCH_URL.");
+  console.error("Pass an HTTPS --url (HTTP is allowed only for localhost) or set a deployment URL.");
   exit(1);
 }
 if (!secret) {

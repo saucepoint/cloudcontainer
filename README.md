@@ -186,8 +186,11 @@ shell history:
 
     read -rs INVITE_ADMIN_SECRET && export INVITE_ADMIN_SECRET
     echo
-    npm run invite:create -w apps/worker -- --url https://YOUR_BASE_URL
+    npm run create:invite
     unset INVITE_ADMIN_SECRET
+
+The script targets `https://usebench.dev` by default. Pass `-- --url
+https://YOUR_BASE_URL` after the command to target another deployment.
 
 The script prints one eight-character uppercase alphanumeric code. Send it to
 its intended recipient through a private channel. The recipient first signs in
