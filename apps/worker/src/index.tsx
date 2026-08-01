@@ -8,8 +8,9 @@ import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
+import { credentialsView } from "./container-view.js";
 import { DashboardPage } from "./pages/dashboard.js";
-import { LandingPage, NotFoundPage, OnboardingPage, SecurityPage } from "./pages/views.js";
+import { AccountPage, LandingPage, NotFoundPage, OnboardingPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
@@ -49,22 +50,32 @@ app.get("/onboarding", requireUser, async (c) => {
 
 app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
 
-app.get("/security", requireUser, async (c) => {
+const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
   const user = c.get("user");
-  const passkeys = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM passkey WHERE user_id = ?",
-  )
-    .bind(user.id)
-    .first<{ count: number }>();
-  const container = await getContainerForUser(c.env, user.id);
+  const [passkeys, container, credentials] = await Promise.all([
+    c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM passkey WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first<{ count: number }>(),
+    getContainerForUser(c.env, user.id),
+    credentialsView(c.env, user.id),
+  ]);
   return c.html(
-    <SecurityPage
+    <AccountPage
       passkeyCount={passkeys?.count ?? 0}
       continueHref={container ? "/dashboard" : "/onboarding"}
       welcome={c.req.query("welcome") === "1"}
+      containerStatus={container?.status ?? null}
+      hasCredentials={credentials.hasCredentials}
+      worldIdVerified={user.verification_method === "world_id"}
     />,
   );
-});
+};
+
+app.get("/account", requireUser, renderAccountPage);
+// Keep the old URL working while the navigation and page are now Account.
+app.get("/security", requireUser, renderAccountPage);
 
 app.route("/", authRoutes);
 app.route("/", accountRoutes);

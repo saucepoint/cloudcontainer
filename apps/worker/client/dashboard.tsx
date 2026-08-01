@@ -197,16 +197,6 @@ function DashboardApp() {
     applyContainer(containerResult.container);
   };
 
-  const deleteAccount = () => askConfirmation(
-    "Delete account?",
-    "This permanently deletes your credentials, keys, and account. There is no grace period.",
-    "Delete account",
-    () => void api("/api/account/delete", { method: "POST" })
-      .then(() => { location.href = "/"; })
-      .catch((error) => setActionError(displayError(error, "Could not delete the account."))),
-    true,
-  );
-
   if (!loaded) {
     return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><span className="sr-only">Loading your workbench…</span><div className="skel skel-title" /><div className="skel skel-line" /><div className="skel skel-line short" /></div></>;
   }
@@ -218,7 +208,6 @@ function DashboardApp() {
       {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
       <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
-      <section className="card" aria-labelledby="danger-heading"><h2 id="danger-heading">Account</h2><button type="button" className="btn danger" disabled={Boolean(container && container.status !== "waitlisted")} onClick={deleteAccount}>Delete account</button><p className="muted hint">{container && container.status !== "waitlisted" ? "Destroy your workbench first. When deletion finishes, you can delete the account." : "Purges all credentials and keys, and removes your account."}</p></section>
     </>
   );
 }

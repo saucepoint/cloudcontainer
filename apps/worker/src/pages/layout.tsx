@@ -28,7 +28,7 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
             </a>
             {loggedIn ? (
               <nav class="row flush" aria-label="Account">
-                <a class="btn secondary" href="/security">Security</a>
+                <a class="btn secondary" href="/account">Account</a>
                 <form method="post" action="/auth/logout" class="flush">
                   <button class="btn secondary" type="submit">
                     Sign out

@@ -29,6 +29,25 @@ export function decryptString(env: Bindings, ciphertext: string | null): string 
   return decryptJsonAtRest<string>(ciphertext, env.CREDENTIAL_MASTER_KEY);
 }
 
+/** Permanently remove stored service credentials and in-progress OAuth material. */
+export async function deleteStoredCredentials(env: Bindings, userId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM credentials_encrypted WHERE user_id = ?").bind(userId),
+    // Keep the linked sign-in identities, but remove tokens Better Auth cached for them.
+    env.DB.prepare(
+      `UPDATE auth_accounts SET
+         access_token = NULL,
+         refresh_token = NULL,
+         access_token_expires_at = NULL,
+         refresh_token_expires_at = NULL,
+         id_token = NULL,
+         updated_at = ?
+       WHERE user_id = ?`,
+    ).bind(Date.now(), userId),
+    env.DB.prepare("DELETE FROM oauth_states WHERE user_id = ?").bind(userId),
+  ]);
+}
+
 /** Merge new LLM keys / Cloudflare credentials into the encrypted row. Empty-string values delete a key. */
 export async function upsertCredentials(
   env: Bindings,
