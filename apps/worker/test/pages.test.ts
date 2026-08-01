@@ -457,6 +457,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(html.indexOf('id="claude-signin"')).toBeGreaterThan(html.indexOf('id="agent-claude"'));
     expect(html.indexOf('id="codex-signin"')).toBeGreaterThan(html.indexOf('id="agent-codex"'));
     expect(html).toContain("required");
+    const order = ["pi", "opencode", "codex", "claude"].map((agent) =>
+      html.indexOf(`value="${agent}"`),
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it("allows Claude and ChatGPT sign-in flows to be active independently", () => {

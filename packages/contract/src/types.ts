@@ -4,7 +4,7 @@ import { z } from "zod";
 // Core enums
 // ---------------------------------------------------------------------------
 
-export const AGENTS = ["pi", "claude", "codex", "opencode"] as const;
+export const AGENTS = ["pi", "opencode", "codex", "claude"] as const;
 export type Agent = (typeof AGENTS)[number];
 
 export const AGENT_LABELS: Record<Agent, string> = {

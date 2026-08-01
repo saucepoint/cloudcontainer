@@ -173,7 +173,7 @@ describe("POST /api/provision", () => {
     expect(res.status).toBe(202);
     const body = (await res.json()) as { container: { status: string; agents: string[] } };
     expect(body.container.status).toBe("provisioning");
-    expect(body.container.agents).toEqual(["claude", "codex"]); // canonical order
+    expect(body.container.agents).toEqual(["codex", "claude"]); // canonical order
 
     const keys = await env.DB.prepare("SELECT pubkey FROM ssh_keys").all<{ pubkey: string }>();
     expect(keys.results.map((k) => k.pubkey)).toEqual([PUBKEY]);
