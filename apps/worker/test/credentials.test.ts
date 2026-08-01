@@ -7,6 +7,8 @@ import {
   getCredentialsRow,
   upsertCredentials,
   validateCloudflareToken,
+  validateConvexToken,
+  validateSupabaseToken,
 } from "../src/credentials.js";
 import { makeEnv, seedUser, stubFetch } from "./helpers/env.js";
 
@@ -71,6 +73,27 @@ describe("upsertCredentials", () => {
     row = await getCredentialsRow(env, "user-1");
     expect(buildCredentialPayload(env, row).cloudflareToken).toBeUndefined();
     expect(decryptLlmKeys(env, row)).toEqual({ openai: "o" }); // untouched
+  });
+
+  it("stores and clears Supabase and Convex tokens independently", async () => {
+    const env = await envWithUser();
+    await upsertCredentials(env, "user-1", {
+      supabaseToken: "CANARY-supabase",
+      convexToken: "CANARY-convex",
+    });
+
+    let row = await getCredentialsRow(env, "user-1");
+    expect(row?.supabase_token).not.toContain("CANARY-supabase");
+    expect(row?.convex_token).not.toContain("CANARY-convex");
+    expect(buildCredentialPayload(env, row)).toMatchObject({
+      supabaseToken: "CANARY-supabase",
+      convexToken: "CANARY-convex",
+    });
+
+    await upsertCredentials(env, "user-1", { supabaseToken: "" });
+    row = await getCredentialsRow(env, "user-1");
+    expect(buildCredentialPayload(env, row).supabaseToken).toBeUndefined();
+    expect(buildCredentialPayload(env, row).convexToken).toBe("CANARY-convex");
   });
 
   it("stores the wrangler OAuth blob encrypted and clears it independently", async () => {
@@ -138,5 +161,37 @@ describe("validateCloudflareToken", () => {
         : null,
     );
     expect(await validateCloudflareToken("tok")).toBe(false);
+  });
+});
+
+describe("developer service token validation", () => {
+  it("validates Supabase bearer credentials against the Management API", async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (url.href !== "https://api.supabase.com/v1/projects") return null;
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer supabase-token");
+      return Response.json([]);
+    });
+
+    expect(await validateSupabaseToken("supabase-token")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("validates Convex personal access tokens with the CLI authorization check", async () => {
+    stubFetch((url, init) => {
+      if (url.href !== "https://api.convex.dev/api/authorize") return null;
+      expect(init.method).toBe("HEAD");
+      const headers = new Headers(init.headers);
+      expect(headers.get("authorization")).toBe("Bearer convex-token");
+      expect(headers.get("convex-client")).toBe("workbench-control-plane");
+      return new Response(null, { status: 200 });
+    });
+
+    expect(await validateConvexToken("convex-token")).toBe(true);
+  });
+
+  it("rejects provider tokens when their authorization endpoint rejects them", async () => {
+    stubFetch(() => new Response(null, { status: 401 }));
+    expect(await validateSupabaseToken("bad")).toBe(false);
+    expect(await validateConvexToken("bad")).toBe(false);
   });
 });

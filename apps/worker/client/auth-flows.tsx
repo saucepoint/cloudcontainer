@@ -256,3 +256,16 @@ export const wranglerOauthFlow = pasteFlow({
   emptyError: "Paste the localhost address from your browser.",
   finishBody: (value) => ({ callbackUrl: value }),
 });
+
+export const convexOauthFlow = pasteFlow({
+  startPath: "/api/convex/oauth/start",
+  finishPath: "/api/convex/oauth/finish",
+  openLabel: "Open the Convex dashboard",
+  step1: " and sign in",
+  step2: "Convex shows an authorization token — copy it and paste it below",
+  inputId: "convex-authorization-token",
+  inputLabel: "Authorization token",
+  placeholder: "Paste the token from Convex",
+  emptyError: "Paste the token Convex showed you after signing in.",
+  finishBody: (value) => ({ authorizationToken: value }),
+});

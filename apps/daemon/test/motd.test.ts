@@ -14,6 +14,8 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
     expect(motd).toContain("[ ] model access — configure manually in this terminal");
     expect(motd).toContain("[ ] github — configure manually in this terminal");
     expect(motd).toContain("[ ] cloudflare — configure manually in this terminal");
+    expect(motd).toContain("[ ] supabase — configure manually in this terminal");
+    expect(motd).toContain("[ ] convex — configure manually in this terminal");
     expect(motd).toContain("[ ] ssh keys (0)");
     expect(motd).toContain("https://workbench.example");
     expect(motd).toContain("dashboard credentials are setup-only");
@@ -36,12 +38,16 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
         githubToken: "1",
         githubLogin: "octocat",
         cloudflareToken: "1",
+        supabaseToken: "1",
+        convexToken: "1",
       },
       sshKeyCount: 2,
     });
     expect(motd).toContain("[x] model access (anthropic, openai)");
     expect(motd).toContain("[x] github (octocat)");
     expect(motd).toContain("[x] cloudflare (token installed)");
+    expect(motd).toContain("[x] supabase (token installed)");
+    expect(motd).toContain("[x] convex (CLI signed in)");
     expect(motd).toContain("[x] ssh keys (2)");
   });
 
@@ -62,6 +68,8 @@ describe("renderMotd (first-login checklist, §5.4)", () => {
         llmKeys: { anthropic: "CANARY-secret-key" },
         cloudflareToken: "CANARY-cf",
         wranglerOauth: "CANARY-wrangler",
+        supabaseToken: "CANARY-supabase",
+        convexToken: "CANARY-convex",
         githubToken: "CANARY-gh",
       },
     });

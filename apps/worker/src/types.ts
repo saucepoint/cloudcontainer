@@ -101,6 +101,8 @@ export interface CredentialsRow {
   github_expires_at: number | null;
   github_login: string | null;
   cloudflare_token: string | null;
+  supabase_token: string | null;
+  convex_token: string | null;
   wrangler_oauth: string | null;
   llm_keys: string | null;
   rotated_at: number | null;

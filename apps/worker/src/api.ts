@@ -13,6 +13,8 @@ import {
   deleteStoredCredentials,
   upsertCredentials,
   validateCloudflareToken,
+  validateConvexToken,
+  validateSupabaseToken,
 } from "./credentials.js";
 import { normalizeCredentialInput, type CredentialInput } from "./credential-input.js";
 import { containerView, credentialsView, currentContainerView } from "./container-view.js";
@@ -46,6 +48,40 @@ const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
   "Wait for your workbench to finish building before changing SSH keys or creating an SSH setup prompt.";
 
+interface DeveloperTokens {
+  cloudflareToken?: string;
+  supabaseToken?: string;
+  convexToken?: string;
+}
+
+async function validateDeveloperTokens(
+  tokens: DeveloperTokens,
+  provisioning: boolean,
+): Promise<{ error: string; status: 400 | 503 } | null> {
+  const checks = [
+    ["Cloudflare", tokens.cloudflareToken, validateCloudflareToken],
+    ["Supabase", tokens.supabaseToken, validateSupabaseToken],
+    ["Convex", tokens.convexToken, validateConvexToken],
+  ] as const;
+  const results = await Promise.all(
+    checks.map(async ([provider, token, validate]) => {
+      if (!token) return null;
+      try {
+        return (await validate(token))
+          ? null
+          : { error: `${provider} token failed validation`, status: 400 as const };
+      } catch {
+        const launchHint = provisioning ? `; remove the token to launch now` : "";
+        return {
+          error: `${provider} validation is temporarily unavailable${launchHint}`,
+          status: 503 as const,
+        };
+      }
+    }),
+  );
+  return results.find((result) => result !== null) ?? null;
+}
+
 const deleteCredentials = async (c: Parameters<typeof requireUser>[0]) => {
   const userId = c.get("user").id;
   await deleteStoredCredentials(c.env, userId);
@@ -70,6 +106,8 @@ export const apiRoutes = new Hono<AppContext>()
       sshPubkey?: string;
       llmKeys?: Record<string, unknown>;
       cloudflareToken?: unknown;
+      supabaseToken?: unknown;
+      convexToken?: unknown;
       githubRepos?: unknown;
     }>(c);
     const requested = new Set(body && Array.isArray(body.agents) ? body.agents : []);
@@ -90,18 +128,8 @@ export const apiRoutes = new Hono<AppContext>()
     }
     const normalized = normalizeCredentialInput(body);
     if ("error" in normalized) return c.json({ error: normalized.error }, 400);
-    if (normalized.value.cloudflareToken) {
-      let ok: boolean;
-      try {
-        ok = await validateCloudflareToken(normalized.value.cloudflareToken);
-      } catch {
-        return c.json(
-          { error: "Cloudflare validation is temporarily unavailable; remove the token to launch now" },
-          503,
-        );
-      }
-      if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
-    }
+    const validationIssue = await validateDeveloperTokens(normalized.value, true);
+    if (validationIssue) return c.json({ error: validationIssue.error }, validationIssue.status);
 
     if (body.githubRepos !== undefined && !Array.isArray(body.githubRepos)) {
       return c.json({ error: "GitHub repositories must be a list" }, 400);
@@ -132,11 +160,22 @@ export const apiRoutes = new Hono<AppContext>()
     const llmKeys = Object.fromEntries(
       Object.entries(normalized.value.llmKeys).filter(([, value]) => value),
     );
-    if (Object.keys(llmKeys).length > 0 || normalized.value.cloudflareToken) {
+    if (
+      Object.keys(llmKeys).length > 0 ||
+      normalized.value.cloudflareToken ||
+      normalized.value.supabaseToken ||
+      normalized.value.convexToken
+    ) {
       await upsertCredentials(c.env, user.id, {
         llmKeys,
         ...(normalized.value.cloudflareToken
           ? { cloudflareToken: normalized.value.cloudflareToken }
+          : {}),
+        ...(normalized.value.supabaseToken
+          ? { supabaseToken: normalized.value.supabaseToken }
+          : {}),
+        ...(normalized.value.convexToken
+          ? { convexToken: normalized.value.convexToken }
           : {}),
       });
     }
@@ -252,19 +291,18 @@ export const apiRoutes = new Hono<AppContext>()
     if (!body) return c.json({ error: "bad request" }, 400);
     const normalized = normalizeCredentialInput(body);
     if ("error" in normalized) return c.json({ error: normalized.error }, 400);
-    if (normalized.value.cloudflareToken) {
-      let ok: boolean;
-      try {
-        ok = await validateCloudflareToken(normalized.value.cloudflareToken);
-      } catch {
-        return c.json({ error: "Cloudflare validation is temporarily unavailable" }, 503);
-      }
-      if (!ok) return c.json({ error: "Cloudflare token failed validation" }, 400);
-    }
+    const validationIssue = await validateDeveloperTokens(normalized.value, false);
+    if (validationIssue) return c.json({ error: validationIssue.error }, validationIssue.status);
     await upsertCredentials(c.env, c.get("user").id, {
       llmKeys: normalized.value.llmKeys,
       ...(normalized.value.cloudflareToken !== undefined
         ? { cloudflareToken: normalized.value.cloudflareToken }
+        : {}),
+      ...(normalized.value.supabaseToken !== undefined
+        ? { supabaseToken: normalized.value.supabaseToken }
+        : {}),
+      ...(normalized.value.convexToken !== undefined
+        ? { convexToken: normalized.value.convexToken }
         : {}),
       ...(normalized.value.wranglerOauth !== undefined
         ? { wranglerOauth: normalized.value.wranglerOauth }

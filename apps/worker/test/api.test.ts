@@ -114,9 +114,12 @@ describe("POST /api/provision", () => {
     await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
     const headers = await login(env, user);
     const daemon = fakeDaemon();
-    stubFetch(daemon.route, (url) =>
-      url.hostname === "api.cloudflare.com" ? Response.json({ success: true }) : null,
-    );
+    stubFetch(daemon.route, (url) => {
+      if (url.hostname === "api.cloudflare.com") return Response.json({ success: true });
+      if (url.hostname === "api.supabase.com") return Response.json([]);
+      if (url.hostname === "api.convex.dev") return new Response(null, { status: 200 });
+      return null;
+    });
     return { env, headers, daemon };
   }
 
@@ -165,6 +168,8 @@ describe("POST /api/provision", () => {
           sshPubkey: PUBKEY,
           llmKeys: { anthropic: "CANARY-llm" },
           cloudflareToken: "cf-token",
+          supabaseToken: "CANARY-supabase",
+          convexToken: "CANARY-convex",
         },
         headers,
       ),
@@ -300,6 +305,30 @@ describe("POST /api/provision", () => {
       env,
     );
     expect(res.status).toBe(400);
+  });
+
+  it("rejects invalid Supabase and Convex tokens up front", async () => {
+    for (const [field, hostname] of [
+      ["supabaseToken", "api.supabase.com"],
+      ["convexToken", "api.convex.dev"],
+    ] as const) {
+      const { env } = makeEnv();
+      const user = await seedUser(env);
+      await seedHost(env);
+      const headers = await login(env, user);
+      stubFetch((url) =>
+        url.hostname === hostname ? new Response(null, { status: 401 }) : null,
+      );
+      const res = await app().request(
+        "/api/provision",
+        json({ agents: ["claude"], [field]: "bad" }, headers),
+        env,
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()) as { error: string }).toMatchObject({
+        error: expect.stringContaining("failed validation"),
+      });
+    }
   });
 
   it("explains that launch can continue without the token when Cloudflare is unavailable", async () => {
@@ -628,18 +657,32 @@ describe("credentials endpoint", () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     const headers = await login(env, user);
-    stubFetch((url) =>
-      url.hostname === "api.cloudflare.com" ? Response.json({ success: true }) : null,
-    );
+    stubFetch((url) => {
+      if (url.hostname === "api.cloudflare.com") return Response.json({ success: true });
+      if (url.hostname === "api.supabase.com") return Response.json([]);
+      if (url.hostname === "api.convex.dev") return new Response(null, { status: 200 });
+      return null;
+    });
 
     await app().request(
       "/api/credentials",
-      json({ llmKeys: { openai: "CANARY-oai" }, cloudflareToken: "CANARY-cf" }, headers),
+      json({
+        llmKeys: { openai: "CANARY-oai" },
+        cloudflareToken: "CANARY-cf",
+        supabaseToken: "CANARY-supabase",
+        convexToken: "CANARY-convex",
+      }, headers),
       env,
     );
     const res = await app().request("/api/credentials", { headers }, env);
     const body = await res.json();
-    expect(body).toMatchObject({ llm: { openai: true }, cloudflare: true, github: null });
+    expect(body).toMatchObject({
+      llm: { openai: true },
+      cloudflare: true,
+      supabase: true,
+      convex: true,
+      github: null,
+    });
     expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
 
@@ -690,6 +733,10 @@ describe("credentials endpoint", () => {
       { llmKeys: { github_copilot: "gho_pasted" } },
       { wranglerOauth: '{"oauth_token":"pasted"}' },
       { cloudflareToken: { token: "not-text" } },
+      { supabaseToken: { token: "not-text" } },
+      { convexToken: { token: "not-text" } },
+      { supabaseToken: "x".repeat(16 * 1024 + 1) },
+      { convexToken: "x".repeat(16 * 1024 + 1) },
     ];
 
     for (const body of invalidBodies) {
@@ -708,6 +755,8 @@ describe("credentials endpoint", () => {
     // Simulate credentials stored by the sign-in flows.
     await upsertCredentials(env, user.id, {
       llmKeys: { codex_subscription_token: '{"tokens":{}}', github_copilot: "gho_x" },
+      supabaseToken: "supabase-token",
+      convexToken: "convex-token",
       wranglerOauth: '{"oauth_token":"t"}',
     });
 
@@ -716,7 +765,12 @@ describe("credentials endpoint", () => {
         await app().request(
           "/api/credentials",
           json(
-            { llmKeys: { codex_subscription_token: "", github_copilot: "" }, wranglerOauth: "" },
+            {
+              llmKeys: { codex_subscription_token: "", github_copilot: "" },
+              supabaseToken: "",
+              convexToken: "",
+              wranglerOauth: "",
+            },
             headers,
           ),
           env,
@@ -724,7 +778,12 @@ describe("credentials endpoint", () => {
       ).status,
     ).toBe(200);
     const presence = await app().request("/api/credentials", { headers }, env);
-    expect(await presence.json()).toMatchObject({ llm: {}, wrangler: false });
+    expect(await presence.json()).toMatchObject({
+      llm: {},
+      supabase: false,
+      convex: false,
+      wrangler: false,
+    });
   });
 
   it("accepts every pasteable model provider and reports presence without values", async () => {

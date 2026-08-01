@@ -93,6 +93,8 @@ export async function credentialsView(env: Bindings, userId: string) {
   return {
     llm: Object.fromEntries(Object.keys(llm).map((key) => [key, true])),
     cloudflare: Boolean(row?.cloudflare_token),
+    supabase: Boolean(row?.supabase_token),
+    convex: Boolean(row?.convex_token),
     wrangler: Boolean(row?.wrangler_oauth),
     github: row?.github_login ?? (row?.github_token ? "connected" : null),
     githubAvailable: githubConfigured(env),

@@ -48,11 +48,17 @@ export async function deleteStoredCredentials(env: Bindings, userId: string): Pr
   ]);
 }
 
-/** Merge new LLM keys / Cloudflare credentials into the encrypted row. Empty-string values delete a key. */
+/** Merge new credentials into the encrypted row. Empty-string values delete a key. */
 export async function upsertCredentials(
   env: Bindings,
   userId: string,
-  updates: { llmKeys?: Record<string, string>; cloudflareToken?: string; wranglerOauth?: string },
+  updates: {
+    llmKeys?: Record<string, string>;
+    cloudflareToken?: string;
+    supabaseToken?: string;
+    convexToken?: string;
+    wranglerOauth?: string;
+  },
 ): Promise<void> {
   const row = await getCredentialsRow(env, userId);
   const existing = decryptLlmKeys(env, row);
@@ -67,10 +73,14 @@ export async function upsertCredentials(
     return update || undefined;
   };
   const cloudflareToken = nextString(row?.cloudflare_token ?? null, updates.cloudflareToken);
+  const supabaseToken = nextString(row?.supabase_token ?? null, updates.supabaseToken);
+  const convexToken = nextString(row?.convex_token ?? null, updates.convexToken);
   const wranglerOauth = nextString(row?.wrangler_oauth ?? null, updates.wranglerOauth);
   const candidate: CredentialPayload = {
     ...(Object.keys(merged).length > 0 ? { llmKeys: LlmKeysSchema.parse(merged) } : {}),
     ...(cloudflareToken ? { cloudflareToken } : {}),
+    ...(supabaseToken ? { supabaseToken } : {}),
+    ...(convexToken ? { convexToken } : {}),
     ...(wranglerOauth ? { wranglerOauth } : {}),
   };
   const githubToken = decryptString(env, row?.github_token ?? null);
@@ -85,16 +95,37 @@ export async function upsertCredentials(
   const cfCipher = validated.cloudflareToken
     ? encryptJsonAtRest(validated.cloudflareToken, env.CREDENTIAL_MASTER_KEY)
     : null;
+  const supabaseCipher = validated.supabaseToken
+    ? encryptJsonAtRest(validated.supabaseToken, env.CREDENTIAL_MASTER_KEY)
+    : null;
+  const convexCipher = validated.convexToken
+    ? encryptJsonAtRest(validated.convexToken, env.CREDENTIAL_MASTER_KEY)
+    : null;
   const wranglerCipher = validated.wranglerOauth
     ? encryptJsonAtRest(validated.wranglerOauth, env.CREDENTIAL_MASTER_KEY)
     : null;
 
   await env.DB.prepare(
-    `INSERT INTO credentials_encrypted (user_id, llm_keys, cloudflare_token, wrangler_oauth, rotated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5)
-     ON CONFLICT(user_id) DO UPDATE SET llm_keys = ?2, cloudflare_token = ?3, wrangler_oauth = ?4, rotated_at = ?5`,
+    `INSERT INTO credentials_encrypted
+       (user_id, llm_keys, cloudflare_token, supabase_token, convex_token, wrangler_oauth, rotated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(user_id) DO UPDATE SET
+       llm_keys = ?2,
+       cloudflare_token = ?3,
+       supabase_token = ?4,
+       convex_token = ?5,
+       wrangler_oauth = ?6,
+       rotated_at = ?7`,
   )
-    .bind(userId, llmCipher, cfCipher, wranglerCipher, Date.now())
+    .bind(
+      userId,
+      llmCipher,
+      cfCipher,
+      supabaseCipher,
+      convexCipher,
+      wranglerCipher,
+      Date.now(),
+    )
     .run();
 }
 
@@ -110,6 +141,10 @@ export function buildCredentialPayload(env: Bindings, row: CredentialsRow | null
   if (Object.keys(llmKeys).length > 0) payload.llmKeys = llmKeys;
   const cf = decryptString(env, row.cloudflare_token);
   if (cf) payload.cloudflareToken = cf;
+  const supabase = decryptString(env, row.supabase_token);
+  if (supabase) payload.supabaseToken = supabase;
+  const convex = decryptString(env, row.convex_token);
+  if (convex) payload.convexToken = convex;
   const wrangler = decryptString(env, row.wrangler_oauth);
   if (wrangler) payload.wranglerOauth = wrangler;
   const gh = decryptString(env, row.github_token);
@@ -129,4 +164,26 @@ export async function validateCloudflareToken(token: string): Promise<boolean> {
   if (!res.ok) return false;
   const json = (await res.json()) as { success?: boolean };
   return json.success === true;
+}
+
+/** Validate a Supabase personal or OAuth access token against the Management API. */
+export async function validateSupabaseToken(token: string): Promise<boolean> {
+  const res = await fetch("https://api.supabase.com/v1/projects", {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  return res.ok;
+}
+
+/** Validate a Convex personal access token using the CLI's authorization check. */
+export async function validateConvexToken(token: string): Promise<boolean> {
+  const res = await fetch("https://api.convex.dev/api/authorize", {
+    method: "HEAD",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "convex-client": "workbench-control-plane",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  return res.ok;
 }

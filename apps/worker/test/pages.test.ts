@@ -211,7 +211,13 @@ describe("account page", () => {
 describe("subscription sign-in wiring", () => {
   it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
     const html = String(OnboardingPage({}));
-    for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
+    for (const flow of [
+      "claudeOauthFlow",
+      "codexDeviceFlow",
+      "copilotDeviceFlow",
+      "wranglerOauthFlow",
+      "convexOauthFlow",
+    ]) {
       expect(authFlowsClient).toContain(`export const ${flow}`);
       expect(onboardingClient).toContain(flow);
     }
@@ -219,6 +225,7 @@ describe("subscription sign-in wiring", () => {
     expect(html).toContain("Sign in with ChatGPT");
     expect(html).toContain("Sign in with GitHub");
     expect(html).toContain("Sign in with Cloudflare");
+    expect(html).toContain("Sign in with Convex");
     for (const id of [
       "pi-chatgpt-signin",
       "pi-claude-signin",
@@ -290,7 +297,13 @@ describe("subscription sign-in wiring", () => {
 
   it("dashboard omits credential management after server creation", () => {
     const html = String(DashboardPage({}));
-    for (const flow of ["claudeOauthFlow", "codexDeviceFlow", "copilotDeviceFlow", "wranglerOauthFlow"]) {
+    for (const flow of [
+      "claudeOauthFlow",
+      "codexDeviceFlow",
+      "copilotDeviceFlow",
+      "wranglerOauthFlow",
+      "convexOauthFlow",
+    ]) {
       expect(html).not.toContain(flow);
     }
     expect(dashboardClient).not.toContain("CredentialsCard");
@@ -312,6 +325,27 @@ describe("onboarding wizard order", () => {
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key manually");
     expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
+  });
+
+  it("places collapsed Supabase and Convex connections under Cloudflare in Advanced", () => {
+    const html = String(OnboardingPage({}));
+    const advanced = html.indexOf("2. Advanced");
+    const cloudflare = html.indexOf("Connect Cloudflare");
+    const supabase = html.indexOf("Connect Supabase");
+    const convex = html.indexOf("Connect Convex");
+
+    expect(cloudflare).toBeGreaterThan(advanced);
+    expect(supabase).toBeGreaterThan(cloudflare);
+    expect(convex).toBeGreaterThan(supabase);
+    for (const [name, id] of [
+      ["supabaseToken", "supabase-token"],
+      ["convexToken", "convex-token"],
+    ]) {
+      expect(html).toContain(
+        `<input id="${id}" type="password" name="${name}" autocomplete="off"`,
+      );
+      expect(onboardingClient).toContain(`data.get("${name}")`);
+    }
   });
 
   it("places provider access between agent selection and optional GitHub setup", () => {

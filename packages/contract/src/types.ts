@@ -187,6 +187,8 @@ export const CredentialPayloadSchema = z
   .object({
     llmKeys: LlmKeysSchema.optional(),
     cloudflareToken: z.string().max(INPUT_LIMITS.cloudflareTokenBytes).optional(),
+    supabaseToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
+    convexToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     wranglerOauth: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubToken: z.string().max(INPUT_LIMITS.tokenBytes).optional(),
     githubLogin: z.string().max(256).optional(),

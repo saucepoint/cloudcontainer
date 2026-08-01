@@ -37,6 +37,7 @@ const PI_AUTH_PATH = "/home/dev/.pi/agent/auth.json";
 const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
 const OPENCODE_AUTH_PATH = "/home/dev/.local/share/opencode/auth.json";
 const WRANGLER_CONFIG_PATH = "/home/dev/.wrangler/config/default.toml";
+const CONVEX_CONFIG_PATH = "/home/dev/.convex/config.json";
 const MANAGED_CREDENTIAL_STATE_PATH = "/home/dev/.config/workbench/credential-state.json";
 
 type CodexAuthOwner = "pi" | "codex" | "opencode";
@@ -45,6 +46,9 @@ interface ManagedCredentialState {
   version: 2;
   chatgpt?: Partial<Record<CodexAuthOwner, { fingerprint: string }>>;
   wrangler?: {
+    fingerprint: string;
+  };
+  convex?: {
     fingerprint: string;
   };
 }
@@ -158,6 +162,7 @@ export class CredentialInstaller {
       for (const envVar of LLM_ENV_VARS[provider]) add(envVar, llm[provider]);
     }
     add("CLOUDFLARE_API_TOKEN", creds.cloudflareToken);
+    add("SUPABASE_ACCESS_TOKEN", creds.supabaseToken);
 
     await this.incus.writeFile(name, "/home/dev/.config/workbench/env", lines.join("\n") + "\n", {
       owner: "dev:dev",
@@ -268,6 +273,8 @@ export class CredentialInstaller {
     await this.writeManagedCredentialState(name, managed.state);
     await this.reconcileWranglerAuth(name, managed, creds.wranglerOauth, wrangler);
     await this.writeManagedCredentialState(name, managed.state);
+    await this.reconcileConvexAuth(name, managed, creds.convexToken);
+    await this.writeManagedCredentialState(name, managed.state);
   }
 
   /** Presence-only view; credential values are never read back from disk. */
@@ -282,7 +289,8 @@ export class CredentialInstaller {
           `grep -q '"openai-codex"' ${PI_AUTH_PATH} 2>/dev/null || ` +
           `grep -q '"openai"' ${OPENCODE_AUTH_PATH} 2>/dev/null) && echo CODEX_AUTH_JSON; ` +
           `grep -q '"github-copilot"' ${OPENCODE_AUTH_PATH} 2>/dev/null && echo COPILOT_CONNECTED; ` +
-          `test -f ${WRANGLER_CONFIG_PATH} && echo WRANGLER_CONNECTED || true`,
+          `test -f ${WRANGLER_CONFIG_PATH} && echo WRANGLER_CONNECTED; ` +
+          `test -f ${CONVEX_CONFIG_PATH} && echo CONVEX_CONNECTED || true`,
       );
       const vars = new Set(stdout.split("\n").map((line) => line.trim()));
       const llm: CredentialPayload["llmKeys"] = {};
@@ -293,7 +301,9 @@ export class CredentialInstaller {
       if (vars.has("COPILOT_CONNECTED")) llm.github_copilot = "1";
       if (Object.keys(llm).length) creds.llmKeys = llm;
       if (vars.has("CLOUDFLARE_API_TOKEN")) creds.cloudflareToken = "1";
+      if (vars.has("SUPABASE_ACCESS_TOKEN")) creds.supabaseToken = "1";
       if (vars.has("WRANGLER_CONNECTED")) creds.wranglerOauth = "1";
+      if (vars.has("CONVEX_CONNECTED")) creds.convexToken = "1";
       if (vars.has("GH_CONNECTED")) creds.githubToken = "1";
     } catch {
       // Best effort: an unreadable MOTD source should never fail a job.
@@ -372,6 +382,11 @@ export class CredentialInstaller {
         const wrangler = parsed.wrangler as Record<string, unknown>;
         if (!isFingerprint(wrangler.fingerprint)) throw new Error();
         state.wrangler = { fingerprint: wrangler.fingerprint };
+      }
+      if (parsed.convex !== undefined) {
+        const convex = parsed.convex as Record<string, unknown>;
+        if (!isFingerprint(convex.fingerprint)) throw new Error();
+        state.convex = { fingerprint: convex.fingerprint };
       }
       // Version 1 tracked one shared OpenAI grant. Treat those stores as
       // unmanaged during migration so a per-agent rollout never deletes a
@@ -570,5 +585,41 @@ export class CredentialInstaller {
     });
     await this.incus.shell(name, "chown -R dev:dev /home/dev/.wrangler");
     managed.state.wrangler = { fingerprint };
+  }
+
+  private async reconcileConvexAuth(
+    name: string,
+    managed: StoredManagedCredentialState,
+    token: string | undefined,
+  ): Promise<void> {
+    const current = managed.state.convex;
+    if (!token) {
+      if (current) {
+        await this.incus.shell(name, `rm -f ${shellQuote(CONVEX_CONFIG_PATH)}`);
+        delete managed.state.convex;
+      }
+      return;
+    }
+
+    const fingerprint = credentialFingerprint(token);
+    const { stdout } = await this.incus.shell(
+      name,
+      `test -f ${shellQuote(CONVEX_CONFIG_PATH)} && echo present || true`,
+    );
+    const localExists = stdout.split("\n").some((line) => line.trim() === "present");
+    if (current?.fingerprint === fingerprint && localExists) return;
+    if (!managed.exists && !current && localExists) {
+      managed.state.convex = { fingerprint };
+      return;
+    }
+
+    await this.incus.writeFile(
+      name,
+      CONVEX_CONFIG_PATH,
+      JSON.stringify({ accessToken: token }, null, 2) + "\n",
+      { owner: "dev:dev", mode: "0600" },
+    );
+    await this.incus.shell(name, "chown -R dev:dev /home/dev/.convex");
+    managed.state.convex = { fingerprint };
   }
 }

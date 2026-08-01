@@ -5,6 +5,7 @@ import {
   chatgptOauthFlow,
   codexDeviceFlow,
   copilotDeviceFlow,
+  convexOauthFlow,
   isAuthFlowActive,
   wranglerOauthFlow,
 } from "./auth-flows.js";
@@ -46,6 +47,8 @@ form.addEventListener("submit", async (event: SubmitEvent) => {
     sshPubkey: (data.get("sshPubkey") || "").toString().trim(),
     llmKeys,
     cloudflareToken: (data.get("cloudflareToken") || "").toString().trim() || undefined,
+    supabaseToken: (data.get("supabaseToken") || "").toString().trim() || undefined,
+    convexToken: (data.get("convexToken") || "").toString().trim() || undefined,
     githubRepos: data.getAll("githubRepo").map((repository) => repository.toString()),
   };
   if (body.agents.length === 0) {
@@ -96,6 +99,7 @@ wireSignin("opencode-chatgpt", chatgptOauthFlow("opencode"));
 wireSignin("opencode-claude", claudeOauthFlowFor("opencode"));
 wireSignin("copilot", copilotDeviceFlow);
 wireSignin("wrangler", wranglerOauthFlow);
+wireSignin("convex", convexOauthFlow);
 
 const githubConnect = element<HTMLAnchorElement>("github-connect");
 if (githubConnect) {

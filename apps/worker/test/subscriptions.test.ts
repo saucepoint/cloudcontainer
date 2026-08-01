@@ -405,11 +405,66 @@ describe("Cloudflare wrangler OAuth", () => {
   });
 });
 
+// ---------------------------------------------------------------- convex
+
+describe("Convex browser-token OAuth", () => {
+  it("exchanges the browser token and stores only the encrypted personal token", async () => {
+    const fetchMock = vi.fn();
+    const { env, headers } = await setup((url, init) => {
+      if (url.href !== "https://api.convex.dev/v1/create_personal_access_token") return null;
+      fetchMock(url, init);
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer CANARY-browser-token");
+      expect(JSON.parse(String(init.body))).toEqual({ name: "usebench.dev workbench" });
+      return Response.json({ accessToken: "CANARY-convex-personal" });
+    });
+
+    const start = await app().request(
+      "/api/convex/oauth/start",
+      { method: "POST", headers },
+      env,
+    );
+    expect(start.status).toBe(200);
+    expect(await start.json()).toEqual({ authorizeUrl: "https://dashboard.convex.dev/auth" });
+
+    const finish = await app().request(
+      "/api/convex/oauth/finish",
+      json({ authorizationToken: "CANARY-browser-token" }, headers),
+      env,
+    );
+    expect(finish.status).toBe(200);
+    expect(await finish.json()).toEqual({ status: "connected" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    const row = await getCredentialsRow(env, "user-1");
+    expect(row?.convex_token).not.toContain("CANARY-");
+    expect(decryptString(env, row!.convex_token)).toBe("CANARY-convex-personal");
+  });
+
+  it("rejects missing tokens and does not store a failed exchange", async () => {
+    const { env, headers } = await setup(() => new Response(null, { status: 401 }));
+    const missing = await app().request(
+      "/api/convex/oauth/finish",
+      json({ authorizationToken: "" }, headers),
+      env,
+    );
+    expect(missing.status).toBe(400);
+
+    const failed = await app().request(
+      "/api/convex/oauth/finish",
+      json({ authorizationToken: "bad-token" }, headers),
+      env,
+    );
+    expect(failed.status).toBe(502);
+    expect(await getCredentialsRow(env, "user-1")).toBeNull();
+  });
+});
+
 describe("credential setup lock", () => {
   it.each([
     "/api/claude/oauth/start",
     "/api/copilot/device",
     "/api/wrangler/oauth/start",
+    "/api/convex/oauth/start",
   ])("refuses %s after a server has been created", async (path) => {
     const { env } = makeEnv();
     const user = await seedUser(env);
