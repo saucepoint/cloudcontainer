@@ -11,12 +11,16 @@ const OAUTH_ONLY_PROVIDER_SET: ReadonlySet<LlmProvider> = new Set(OAUTH_ONLY_LLM
 export interface CredentialInput {
   llmKeys?: Record<string, unknown>;
   cloudflareToken?: unknown;
+  supabaseToken?: unknown;
+  convexToken?: unknown;
   wranglerOauth?: unknown;
 }
 
 interface NormalizedCredentialInput {
   llmKeys: Record<string, string>;
   cloudflareToken?: string;
+  supabaseToken?: string;
+  convexToken?: string;
   wranglerOauth?: "";
 }
 
@@ -63,6 +67,22 @@ export function normalizeCredentialInput(
   if (cloudflareToken && cloudflareToken.length > INPUT_LIMITS.cloudflareTokenBytes) {
     return { error: "Cloudflare token is too large" };
   }
+  if (input.supabaseToken !== undefined && typeof input.supabaseToken !== "string") {
+    return { error: "Supabase token must be text" };
+  }
+  const supabaseToken =
+    typeof input.supabaseToken === "string" ? input.supabaseToken.trim() : undefined;
+  if (supabaseToken && supabaseToken.length > INPUT_LIMITS.tokenBytes) {
+    return { error: "Supabase token is too large" };
+  }
+  if (input.convexToken !== undefined && typeof input.convexToken !== "string") {
+    return { error: "Convex token must be text" };
+  }
+  const convexToken =
+    typeof input.convexToken === "string" ? input.convexToken.trim() : undefined;
+  if (convexToken && convexToken.length > INPUT_LIMITS.tokenBytes) {
+    return { error: "Convex token is too large" };
+  }
   // Wrangler sign-in connects via /api/wrangler/oauth; only disconnection is
   // accepted through this generic input endpoint.
   if (input.wranglerOauth !== undefined && input.wranglerOauth !== "") {
@@ -72,6 +92,8 @@ export function normalizeCredentialInput(
     value: {
       llmKeys,
       ...(cloudflareToken !== undefined ? { cloudflareToken } : {}),
+      ...(supabaseToken !== undefined ? { supabaseToken } : {}),
+      ...(convexToken !== undefined ? { convexToken } : {}),
       ...(input.wranglerOauth !== undefined ? { wranglerOauth: "" as const } : {}),
     },
   };

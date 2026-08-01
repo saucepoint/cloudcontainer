@@ -42,6 +42,12 @@ export function renderMotd(opts: {
           ? "(token installed)"
           : "— configure manually in this terminal"
     }`,
+    `  ${mark(Boolean(credentials.supabaseToken))} supabase ${
+      credentials.supabaseToken ? "(token installed)" : "— configure manually in this terminal"
+    }`,
+    `  ${mark(Boolean(credentials.convexToken))} convex ${
+      credentials.convexToken ? "(CLI signed in)" : "— configure manually in this terminal"
+    }`,
     `  ${mark(sshKeyCount > 0)} ssh keys (${sshKeyCount})`,
     "",
     `  dashboard: ${dashboardUrl}`,

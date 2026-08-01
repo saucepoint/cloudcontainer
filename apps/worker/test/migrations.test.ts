@@ -187,3 +187,44 @@ describe("0011 free-tier memory migration", () => {
       .toEqual({ ram_allocated_mb: 5632 });
   });
 });
+
+describe("0012 developer service token migration", () => {
+  it("adds encrypted Supabase and Convex slots without rebuilding credential rows", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 1, 1);
+      INSERT INTO credentials_encrypted (user_id, cloudflare_token)
+      VALUES ('user-1', 'existing-ciphertext');
+    `);
+
+    db.exec(migration("0012_developer_service_tokens.sql"));
+
+    const columns = db.prepare("PRAGMA table_info(credentials_encrypted)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toContain("supabase_token");
+    expect(columns.map((column) => column.name)).toContain("convex_token");
+    expect(db.prepare(
+      "SELECT cloudflare_token, supabase_token, convex_token FROM credentials_encrypted",
+    ).get()).toEqual({
+      cloudflare_token: "existing-ciphertext",
+      supabase_token: null,
+      convex_token: null,
+    });
+  });
+});

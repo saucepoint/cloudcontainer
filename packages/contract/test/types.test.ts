@@ -205,6 +205,8 @@ describe("aggregate request budgets", () => {
         vercel_ai_gateway: fill,
       },
       cloudflareToken: fill.repeat(INPUT_LIMITS.cloudflareTokenBytes / fill.length),
+      supabaseToken: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
+      convexToken: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
       wranglerOauth: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
       githubToken: fill.repeat(INPUT_LIMITS.tokenBytes / fill.length),
       githubLogin: fill.repeat(256 / fill.length),

@@ -13,15 +13,20 @@
  *   user pastes the (unreachable) localhost URL from the address bar and the
  *   Worker completes the code exchange. Tokens land in the container as
  *   wrangler's config/default.toml; wrangler refreshes them itself from there.
+ * - Convex: the CLI's browser-token flow. The user pastes the short-lived
+ *   authorization token from dashboard.convex.dev, and the Worker exchanges
+ *   it for the personal access token stored by the CLI.
  *
- * All three reuse public, secret-less client ids exactly as the corresponding
- * CLIs do (same approach as the Codex flow; see codexauth.ts for rationale).
- * Attempts are single-use rows in oauth_states, bound to the signing-in user.
+ * The provider flows reuse public, secret-less clients exactly as the
+ * corresponding CLIs do (same approach as the Codex flow; see codexauth.ts for
+ * rationale). Code- and device-based attempts use single-use oauth_states rows
+ * bound to the signing-in user.
  */
 import { Hono } from "hono";
 import {
   CLAUDE_OAUTH_AGENTS,
   CLAUDE_OAUTH_PROVIDERS,
+  INPUT_LIMITS,
   type ClaudeOauthAgent,
   type WranglerOauth,
   WranglerOauthSchema,
@@ -78,6 +83,11 @@ const WRANGLER_SCOPES = [
   "pipelines:write",
   "offline_access",
 ];
+
+// -- Convex CLI browser-token flow --------------------------------------------
+
+const CONVEX_AUTHORIZE_URL = "https://dashboard.convex.dev/auth";
+const CONVEX_PERSONAL_TOKEN_URL = "https://api.convex.dev/v1/create_personal_access_token";
 
 // -- PKCE helpers ---------------------------------------------------------------
 
@@ -357,6 +367,55 @@ export const subscriptionRoutes = new Hono<AppContext>()
     await upsertCredentials(c.env, c.get("user").id, {
       wranglerOauth: JSON.stringify(wranglerOauth),
     });
+    await pushCredentialsToContainer(c.env, c.get("user").id);
+    return c.json({ status: "connected" });
+  })
+
+  // ------------------------------------------------------------------ convex
+  .post("/api/convex/oauth/start", requireUser, requireCredentialSetup, (c) => {
+    return c.json({ authorizeUrl: CONVEX_AUTHORIZE_URL });
+  })
+
+  .post("/api/convex/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
+    const body = await readJsonBody<{ authorizationToken?: unknown }>(c);
+    const authorizationToken = typeof body?.authorizationToken === "string"
+      ? body.authorizationToken.trim()
+      : "";
+    if (!authorizationToken) {
+      return c.json({ error: "paste the token Convex showed you after signing in" }, 400);
+    }
+    if (authorizationToken.length > INPUT_LIMITS.tokenBytes) {
+      return c.json({ error: "Convex authorization token is too large" }, 400);
+    }
+
+    let personalToken = "";
+    try {
+      const res = await fetch(CONVEX_PERSONAL_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${authorizationToken}`,
+          "content-type": "application/json",
+          "convex-client": "workbench-control-plane",
+        },
+        body: JSON.stringify({ name: "usebench.dev workbench" }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) throw new Error(`convex personal token endpoint ${res.status}`);
+      const json = (await res.json()) as { accessToken?: unknown };
+      if (
+        typeof json.accessToken !== "string" ||
+        !json.accessToken ||
+        json.accessToken.length > INPUT_LIMITS.tokenBytes
+      ) {
+        throw new Error("convex personal token response malformed");
+      }
+      personalToken = json.accessToken;
+    } catch (err) {
+      logFailure("convex_oauth_finish_failed", err);
+      return c.json({ error: "Convex sign-in failed — start over and try again" }, 502);
+    }
+
+    await upsertCredentials(c.env, c.get("user").id, { convexToken: personalToken });
     await pushCredentialsToContainer(c.env, c.get("user").id);
     return c.json({ status: "connected" });
   });

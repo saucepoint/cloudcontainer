@@ -401,6 +401,40 @@ export const OnboardingPage: FC<{
           </label>
           <input id="cloudflare-token" type="password" name="cloudflareToken" autocomplete="off" />
         </details>
+        <details>
+          <summary>Connect Supabase</summary>
+          <label for="supabase-token">
+            Paste a personal or OAuth access token. You can{" "}
+            <a href="https://supabase.com/dashboard/account/tokens" target="_blank" rel="noreferrer">
+              create one in Supabase
+            </a>
+            . It will be available to the Supabase CLI as <code>SUPABASE_ACCESS_TOKEN</code>.
+          </label>
+          <input id="supabase-token" type="password" name="supabaseToken" autocomplete="off" />
+        </details>
+        <details>
+          <summary>Connect Convex</summary>
+          <div class="provider-head">
+            <button type="button" id="convex-signin" class="btn secondary">
+              Sign in with Convex
+            </button>
+            <span
+              id="convex-connected"
+              class="ok"
+              style="display:none"
+              role="status"
+              aria-live="polite"
+            >
+              ✓ Convex connected — CLI signed in
+            </span>
+          </div>
+          <div id="convex-flow" role="status" aria-live="polite"></div>
+          <label for="convex-token">
+            or paste a personal access token from an existing CLI login. It will sign in the Convex
+            CLI for this workbench.
+          </label>
+          <input id="convex-token" type="password" name="convexToken" autocomplete="off" />
+        </details>
       </div>
 
       <button id="go" class="btn primary create-workbench-btn" type="submit">

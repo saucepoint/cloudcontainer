@@ -156,7 +156,12 @@ describe("provision command construction", () => {
   it("unseals credentials in memory and writes them 0600 — never into argv", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
-      { llmKeys: { anthropic: "CANARY-anthropic-abc123" }, cloudflareToken: "CANARY-cf-xyz" },
+      {
+        llmKeys: { anthropic: "CANARY-anthropic-abc123" },
+        cloudflareToken: "CANARY-cf-xyz",
+        supabaseToken: "CANARY-supabase",
+        convexToken: "CANARY-convex",
+      },
       hostKeys.publicKey,
     );
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
@@ -165,7 +170,11 @@ describe("provision command construction", () => {
     const envWrite = calls.find((c) => c.stdin?.includes("ANTHROPIC_API_KEY"));
     expect(envWrite?.stdin).toContain("CANARY-anthropic-abc123");
     expect(envWrite?.stdin).toContain("CLOUDFLARE_API_TOKEN");
+    expect(envWrite?.stdin).toContain("SUPABASE_ACCESS_TOKEN");
     expect(envWrite?.args.join(" ")).toContain("chmod 0600");
+    const convexConfig = calls.find((call) => call.stdin?.includes('"accessToken": "CANARY-convex"'));
+    expect(convexConfig?.args.join(" ")).toContain("/home/dev/.convex/config.json");
+    expect(convexConfig?.args.join(" ")).toContain("chmod 0600");
     // Secrets hygiene: credential values never appear in command arguments.
     for (const c of calls) {
       expect(c.args.join(" ")).not.toContain("CANARY-");
@@ -835,6 +844,33 @@ describe("provision command construction", () => {
     const writes = calls.filter((call) => call.stdin?.includes("CANARY-new-wr-access"));
     expect(writes).toHaveLength(1);
     expect(writes[0]?.args.join(" ")).toContain(".wrangler/config/default.toml");
+  });
+
+  it("preserves a local Convex login for an unchanged dashboard token", async () => {
+    const calls: Call[] = [];
+    const convexToken = "CANARY-stale-convex";
+    const marker = managedState({ convex: { fingerprint: fingerprint(convexToken) } });
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls, (args) => {
+        const command = args.at(-1) ?? "";
+        if (command.includes("credential-state.json") && command.includes("printf 'present")) {
+          return marker;
+        }
+        if (command.includes("/etc/workbench-agents")) return "claude\n";
+        if (command.includes(".convex/config.json") && command.includes("echo present")) {
+          return "present\n";
+        }
+        return "";
+      })),
+      makeConfig(),
+    );
+
+    await provisioner.run(refreshCredentialsRequest(sealJson(
+      { convexToken },
+      hostKeys.publicKey,
+    )));
+
+    expect(calls.some((call) => call.stdin?.includes(convexToken))).toBe(false);
   });
 
   it("removes authorized_keys entirely on the no-key path (fail closed)", async () => {

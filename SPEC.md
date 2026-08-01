@@ -23,8 +23,8 @@ only two product decisions after authentication:
    with World ID or an administrator invite; and
 2. choose one or more coding agents.
 
-SSH keys, model credentials, GitHub, and Cloudflare credentials are optional
-during onboarding. Model, GitHub, and Cloudflare credentials must be chosen
+SSH keys, model credentials, GitHub, Cloudflare, Supabase, and Convex credentials are optional
+during onboarding. Model, GitHub, Cloudflare, Supabase, and Convex credentials must be chosen
 before the server is created; later changes use manual terminal commands. SSH
 key management unlocks only after a successful build. The provisioning request
 returns immediately and the dashboard explains every intermediate state.
@@ -67,7 +67,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 1. Create a ready-to-use coding environment in minutes.
 2. Connect from a terminal or let a local coding agent enroll an SSH key.
-3. Choose optional model, GitHub, and Cloudflare credentials during setup, then
+3. Choose optional model, GitHub, Cloudflare, Supabase, and Convex credentials during setup, then
    use terminal commands for later changes.
 4. Stop, start, rebuild, or destroy the environment with clear data-loss
    boundaries.
@@ -89,7 +89,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
   provisioned limit is intentionally different from the presented allocation.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
-- Optional SSH key, enrollment-token flow, model credentials, Cloudflare token,
+- Optional SSH key, enrollment-token flow, model credentials, Cloudflare, Supabase, and Convex tokens,
   Codex subscription sign-in, and optional GitHub App integration with
   repository selection and automatic cloning.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
@@ -165,7 +165,9 @@ Claude Code, Codex, and OpenCode. All other fields are visibly optional:
   or Vercel AI Gateway API key;
 - per-agent Claude subscription sign-in for Claude Code, Pi, and OpenCode;
 - per-agent ChatGPT-plan sign-in for Codex, Pi, and OpenCode;
-- Cloudflare API token; and
+- Cloudflare API token;
+- Supabase personal or OAuth access token;
+- Convex personal access token; and
 - GitHub App authorization and repositories to clone, when configured.
 
 Agent choices include a plain-language description without recommending one.
@@ -423,6 +425,13 @@ the upstream flow changes. In-shell login remains the recovery path.
 ### Optional developer integrations
 
 - A scoped Cloudflare API token is validated before storage.
+- Supabase personal and OAuth bearer tokens are validated through the
+  Management API and exported as `SUPABASE_ACCESS_TOKEN` for the CLI.
+- Convex sign-in opens the CLI's browser-token page and exchanges its
+  short-lived authorization token for a personal access token. A personal token
+  may also be pasted directly; it is validated through the CLI authorization
+  endpoint. The resulting token is installed in `~/.convex/config.json`, and an
+  unchanged dashboard token never overwrites a newer local Convex login.
 - A GitHub App flow is shown only when its client ID, client secret, and valid
   public-page slug form a complete install-capable configuration. One
   **Connect or update GitHub** action opens the App installation chooser for a
@@ -461,13 +470,15 @@ the upstream flow changes. In-shell login remains the recovery path.
   fingerprint is unchanged. A changed grant replaces only that provider, and
   removing a previously managed grant clears only its managed store. Existing
   homes without fingerprints adopt their local credentials during rollout.
+- Convex uses the same fingerprint reconciliation rule so a later GitHub token
+  refresh cannot replace a manually updated Convex CLI login.
 - Every Claude and ChatGPT sign-in is bound to its intended agent and stored in
   a distinct encrypted credential slot. The daemon installs it only into that
   agent's auth store; it never seeds one OAuth credential into multiple
   independent clients. Each ChatGPT store has its own rotation fingerprint,
   and independently authenticated local stores are preserved during rollout.
 - SSH key changes use sync-keys and are available only while the server is
-  Ready. Model, GitHub, and Cloudflare credentials are selected during setup;
+  Ready. Model, GitHub, Cloudflare, Supabase, and Convex credentials are selected during setup;
   the dashboard does not modify them after a server row exists. Later changes
   require manual terminal commands.
 - Presence APIs return booleans or account labels, never stored secret values.
