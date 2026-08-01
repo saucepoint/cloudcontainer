@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
 import {
+  AccountPage,
   LandingPage,
   NotFoundPage,
   OnboardingPage,
@@ -174,17 +175,36 @@ describe("account eligibility verification", () => {
   });
 });
 
-describe("passkey security page", () => {
-  it("encourages users to add a backup passkey", () => {
-    const security = String(SecurityPage({
+describe("account page", () => {
+  it("uses plain passkey copy and includes credential and account deletion controls", () => {
+    const account = String(AccountPage({
       passkeyCount: 1,
       continueHref: "/dashboard",
       welcome: false,
+      containerStatus: "running",
+      hasCredentials: true,
+      worldIdVerified: true,
     }));
-    expect(security).toContain('src="/security.js"');
+    expect(account).toContain("<title>Account — usebench.dev</title>");
+    expect(account).toContain('href="/account">Account</a>');
+    expect(account).toContain('src="/security.js"');
     expect(securityClient).toContain("authClient.passkey.addPasskey");
-    expect(security).toContain("This account uses passkeys to sign in");
-    expect(security).toContain("Add another passkey");
+    expect(account).toContain("Add a backup passkey for faster logins");
+    expect(account).toContain("Add another passkey");
+    expect(account).not.toContain("public credential");
+    expect(account).toContain("Delete saved credentials");
+    expect(account).toContain("OAuth tokens, API tokens");
+    expect(account).toContain("Delete account");
+    expect(account).toContain("Destroy your workbench first");
+    expect(account).toContain("Deleting a World-ID verified account will <strong>NOT allow you to re-verify with World ID</strong>");
+    expect(account).toContain('disabled=""');
+  });
+
+  it("wires destructive actions to authenticated endpoints", () => {
+    expect(securityClient).toContain('requestJson("/api/credentials", { method: "DELETE" })');
+    expect(securityClient).toContain('requestJson("/api/account/delete", { method: "POST" })');
+    expect(securityClient).toContain("Delete saved credentials?");
+    expect(securityClient).toContain("Delete account?");
   });
 });
 
