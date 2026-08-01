@@ -81,6 +81,14 @@ export async function currentContainerView(
 export async function credentialsView(env: Bindings, userId: string) {
   const row = await getCredentialsRow(env, userId);
   const llm = decryptLlmKeys(env, row);
+  const authTokens = await env.DB.prepare(
+    `SELECT 1 AS present FROM auth_accounts
+     WHERE user_id = ?
+       AND (access_token IS NOT NULL OR refresh_token IS NOT NULL OR id_token IS NOT NULL)
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<{ present: number }>();
   // Presence only — credential values never leave the control plane.
   return {
     llm: Object.fromEntries(Object.keys(llm).map((key) => [key, true])),
@@ -90,5 +98,13 @@ export async function credentialsView(env: Bindings, userId: string) {
     wrangler: Boolean(row?.wrangler_oauth),
     github: row?.github_login ?? (row?.github_token ? "connected" : null),
     githubAvailable: githubConfigured(env),
+    hasCredentials: Boolean(
+      row?.github_token
+      || row?.github_refresh_token
+      || row?.cloudflare_token
+      || row?.wrangler_oauth
+      || Object.keys(llm).length
+      || authTokens,
+    ),
   };
 }

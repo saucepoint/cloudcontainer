@@ -10,6 +10,7 @@ import {
   requireUser,
 } from "./auth.js";
 import {
+  deleteStoredCredentials,
   upsertCredentials,
   validateCloudflareToken,
   validateConvexToken,
@@ -80,6 +81,15 @@ async function validateDeveloperTokens(
   );
   return results.find((result) => result !== null) ?? null;
 }
+
+const deleteCredentials = async (c: Parameters<typeof requireUser>[0]) => {
+  const userId = c.get("user").id;
+  await deleteStoredCredentials(c.env, userId);
+  // Send an empty snapshot to a running workbench so the host does not retain
+  // credentials that have already been removed from D1.
+  await pushCredentialsToContainer(c.env, userId);
+  return c.json({ ok: true });
+};
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -273,6 +283,9 @@ export const apiRoutes = new Hono<AppContext>()
   .get("/api/credentials", requireUser, async (c) => {
     return c.json(await credentialsView(c.env, c.get("user").id));
   })
+  .delete("/api/credentials", requireUser, deleteCredentials)
+  // Keep a POST form for clients that do not issue DELETE requests.
+  .post("/api/credentials/delete", requireUser, deleteCredentials)
   .post("/api/credentials", requireUser, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<CredentialInput>(c);
     if (!body) return c.json({ error: "bad request" }, 400);

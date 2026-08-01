@@ -82,39 +82,81 @@ export const VerificationPage: FC<{ worldIdAvailable: boolean }> = ({ worldIdAva
   </Layout>
 );
 
-export const SecurityPage: FC<{
+export const AccountPage: FC<{
   passkeyCount: number;
   continueHref: string;
   welcome: boolean;
-}> = ({ passkeyCount, continueHref, welcome }) => (
-  <Layout title="Account security" loggedIn>
-    <h1>{welcome ? "Your account is ready." : "Account security."}</h1>
-    <p class="lead">
-      This account uses passkeys to sign in. Add another passkey from a second device or password manager if you want a backup.
-    </p>
-    <section class="card" aria-labelledby="passkeys-heading">
-      <div class="card-head">
-        <h2 id="passkeys-heading">Passkeys</h2>
-        <span id="passkey-count" class="badge running">
-          {passkeyCount} {passkeyCount === 1 ? "passkey" : "passkeys"}
-        </span>
-      </div>
-      <p class="muted">
-        Your fingerprint, face, or device PIN stays on your device. usebench.dev stores only the public credential needed to verify sign-in.
-      </p>
-      <button id="add-passkey-btn" class="btn primary" type="button">
-        {passkeyCount > 0 ? "Add another passkey" : "Add a passkey"} →
-      </button>
-      <p id="passkey-setup-status" class="muted" role="status" aria-live="polite"></p>
-    </section>
-    <div class="row">
-      <a id="security-continue" class="btn primary" href={continueHref}>
-        {welcome && passkeyCount === 0 ? "Skip for now" : "Continue"} →
-      </a>
-    </div>
-    <script type="module" src="/security.js"></script>
-  </Layout>
-);
+  containerStatus?: string | null;
+  hasCredentials?: boolean;
+  worldIdVerified?: boolean;
+}> = ({
+  passkeyCount,
+  continueHref,
+  welcome,
+  containerStatus = null,
+  hasCredentials = false,
+  worldIdVerified = false,
+}) => {
+  const containerMustBeDestroyed = containerStatus !== null && containerStatus !== "waitlisted";
+  return (
+    <Layout title="Account" loggedIn>
+      <h1>{welcome ? "Your account is ready." : "Account."}</h1>
+      <p class="lead">Manage passkeys and credentials for your account.</p>
+      <section class="card" aria-labelledby="passkeys-heading">
+        <div class="card-head">
+          <h2 id="passkeys-heading">Passkeys</h2>
+          <span id="passkey-count" class="badge running">
+            {passkeyCount} {passkeyCount === 1 ? "passkey" : "passkeys"}
+          </span>
+        </div>
+        <p class="muted">
+          Add a backup passkey for faster logins
+        </p>
+        <button id="add-passkey-btn" class="btn primary" type="button">
+          {passkeyCount > 0 ? "Add another passkey" : "Add a passkey"} →
+        </button>
+        <p id="passkey-setup-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
+      <section class="card" aria-labelledby="credentials-heading">
+        <h2 id="credentials-heading">Saved credentials</h2>
+        <p class="muted">
+          Remove OAuth tokens, API tokens, and other credentials saved for your workbench. Values are never shown here.
+        </p>
+        {!hasCredentials ? <p class="muted">No saved credentials.</p> : null}
+        <button id="delete-credentials-btn" class="btn danger" type="button" disabled={!hasCredentials}>
+          Delete saved credentials
+        </button>
+        <p id="credentials-delete-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
+      <section class="card" aria-labelledby="delete-account-heading">
+        <h2 id="delete-account-heading">Delete account</h2>
+        <button id="delete-account-btn" class="btn danger" type="button" disabled={containerMustBeDestroyed}>
+          Delete account
+        </button>
+        <p class="muted hint">
+          {containerMustBeDestroyed
+            ? "Destroy your workbench first. When deletion finishes, you can delete the account."
+            : "Permanently deletes your account, credentials, and keys."}
+        </p>
+        {worldIdVerified ? (
+          <p class="muted hint">Deleting a World-ID verified account will <strong>NOT allow you to re-verify with World ID</strong>.</p>
+        ) : null}
+        <p id="account-delete-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
+      {welcome ? (
+        <div class="row">
+          <a id="security-continue" class="btn primary" href={continueHref}>
+            {welcome && passkeyCount === 0 ? "Skip for now" : "Continue"} →
+          </a>
+        </div>
+      ) : null}
+      <script type="module" src="/security.js"></script>
+    </Layout>
+  );
+};
+
+// Kept as an export for callers that still use the old implementation name.
+export const SecurityPage = AccountPage;
 
 const SigninProvider: FC<{
   id: string;

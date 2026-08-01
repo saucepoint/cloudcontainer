@@ -686,6 +686,39 @@ describe("credentials endpoint", () => {
     expect(JSON.stringify(body)).not.toContain("CANARY-");
   });
 
+  it("hard deletes stored credentials and cached OAuth tokens", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    await upsertCredentials(env, user.id, {
+      llmKeys: { openai: "CANARY-api-key" },
+      cloudflareToken: "CANARY-cloudflare-token",
+      wranglerOauth: '{"oauth_token":"CANARY-oauth-token"}',
+    });
+    await env.DB.prepare(
+      `INSERT INTO auth_accounts
+         (id, user_id, account_id, provider_id, access_token, refresh_token, id_token, created_at, updated_at)
+       VALUES ('account-1', 'user-1', 'provider-account', 'google', 'CANARY-access', 'CANARY-refresh', 'CANARY-id', ?, ?)`,
+    ).bind(Date.now(), Date.now()).run();
+    await env.DB.prepare(
+      "INSERT INTO oauth_states (state, user_id, created_at, expires_at) VALUES ('oauth-state', 'user-1', ?, ?)",
+    ).bind(Date.now(), Date.now() + 60_000).run();
+
+    const res = await app().request("/api/credentials", { method: "DELETE", headers }, env);
+
+    expect(res.status).toBe(200);
+    expect(await env.DB.prepare("SELECT * FROM credentials_encrypted WHERE user_id = 'user-1'").first()).toBeNull();
+    expect(await env.DB.prepare("SELECT * FROM oauth_states WHERE user_id = 'user-1'").first()).toBeNull();
+    expect(await env.DB.prepare(
+      "SELECT access_token, refresh_token, id_token, provider_id FROM auth_accounts WHERE user_id = 'user-1'",
+    ).first()).toEqual({
+      access_token: null,
+      refresh_token: null,
+      id_token: null,
+      provider_id: "google",
+    });
+  });
+
   it("rejects unknown providers, non-text values, oversized secrets, and pasted OAuth-only credentials", async () => {
     const { env } = makeEnv();
     const headers = await login(env, await seedUser(env));
