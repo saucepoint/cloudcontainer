@@ -25,6 +25,7 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
           <header class="site">
             <a class="logo" href={loggedIn ? "/dashboard" : "/"}>
               work<span class="logo-bench">bench</span>
+              <span class="logo-beta">beta</span>
             </a>
             {loggedIn ? (
               <nav class="row flush" aria-label="Account">

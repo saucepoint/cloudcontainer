@@ -46,6 +46,7 @@ describe("compiled page clients", () => {
   for (const [name, render] of pages) {
     it(`${name} uses external modules without inline behavior`, () => {
       const html = String(render());
+      expect(html).toContain('class="logo-beta">beta</span>');
       expect(html).toContain(`<script type="module" src="/${name}.js"></script>`);
       expect(inlineScriptsOf(html)).toEqual([]);
       expect(html).not.toContain("onclick=");
