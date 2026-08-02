@@ -83,6 +83,11 @@ code, pre { font-family: var(--mono); }
   background: var(--accent); color: #fff; text-decoration: none; }
 .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); text-decoration: none; }
 .btn.secondary { background: transparent; color: var(--accent); }
+.account-link { position: relative; }
+.account-link.has-notifications::after { content: attr(data-notification-count); position: absolute; top: -0.35rem; right: -0.45rem;
+  display: inline-flex; min-width: 1.05rem; height: 1.05rem; align-items: center; justify-content: center;
+  padding: 0 0.2rem; border: 2px solid var(--paper); border-radius: 999px; background: var(--danger);
+  color: #fff; font-family: var(--mono); font-size: 0.62rem; font-weight: 700; line-height: 1; text-decoration: none; }
 .btn.danger { background: transparent; color: var(--danger); }
 .btn.danger:hover { background: var(--danger-soft); }
 .btn.danger-solid { padding: 0.45rem 0.95rem; border: 1px solid var(--danger);
@@ -151,6 +156,21 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .badge.provisioning::before, .badge.destroying::before, .badge.upgrade_pending::before { background: #b88a12; }
 .badge.error, .badge.suspended { color: var(--danger); }
 .badge.error::before, .badge.suspended::before { background: var(--danger); }
+.badge.notification-count { color: var(--danger); }
+.badge.notification-count::before { background: var(--danger); }
+.notification-list { display: grid; gap: 0.75rem; }
+.notification { padding: 0.85rem 1rem; border-left: 3px solid var(--line-strong); background: var(--surface); }
+.notification.unread { border-left-color: var(--danger); background: var(--danger-soft); }
+.notification-head { display: flex; gap: 0.75rem; align-items: baseline; justify-content: space-between; }
+.notification h3 { margin: 0; font-size: 0.98rem; }
+.notification.unread h3 { font-weight: 700; }
+.notification-message { margin: 0.35rem 0 0; white-space: pre-line; }
+.notification-meta { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 0.55rem; }
+.notification-meta .btn { min-height: auto; font-size: 0.8rem; }
+.notification-unread { color: var(--danger); font-family: var(--mono); font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.notification-severity { color: var(--muted); font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.notification-severity.warning { color: var(--warn); }
+.notification-severity.critical { color: var(--danger); }
 pre.ssh { margin: 0.65rem 0; padding: 0.8rem 0.9rem; background: var(--surface); color: var(--ink);
   border: 0; border-left: 3px solid var(--line-strong); border-radius: 0 var(--radius) var(--radius) 0;
   font-family: var(--mono); font-size: 0.86rem; overflow-x: auto; }
@@ -261,6 +281,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .agents { grid-template-columns: 1fr; }
   .agent label { min-height: auto; }
   .card-head { align-items: flex-start; flex-wrap: wrap; }
+  .account-link.has-notifications::after { top: -0.2rem; right: -0.3rem; }
   .command-row, .device-flow-code { grid-template-columns: 1fr; }
   .command-row .btn, .device-flow-code .btn { justify-self: start; }
   .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }

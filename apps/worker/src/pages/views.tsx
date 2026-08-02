@@ -6,6 +6,7 @@ import {
   type Agent,
   type LlmProvider,
 } from "@workbench/contract";
+import type { NotificationView } from "../notifications.js";
 import { ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
@@ -65,8 +66,11 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   </Layout>
 );
 
-export const VerificationPage: FC<{ worldIdAvailable: boolean }> = ({ worldIdAvailable }) => (
-  <Layout title="Verify your account" loggedIn>
+export const VerificationPage: FC<{
+  worldIdAvailable: boolean;
+  notificationCount?: number;
+}> = ({ worldIdAvailable, notificationCount = 0 }) => (
+  <Layout title="Verify your account" loggedIn notificationCount={notificationCount}>
     <h1>Verify your account.</h1>
     <p class="lead">
       The free tier is limited to one account per person. {worldIdAvailable
@@ -89,6 +93,8 @@ export const AccountPage: FC<{
   containerStatus?: string | null;
   hasCredentials?: boolean;
   worldIdVerified?: boolean;
+  notifications?: NotificationView[];
+  unreadNotificationCount?: number;
 }> = ({
   passkeyCount,
   continueHref,
@@ -96,12 +102,63 @@ export const AccountPage: FC<{
   containerStatus = null,
   hasCredentials = false,
   worldIdVerified = false,
+  notifications = [],
+  unreadNotificationCount = notifications.filter((notification) => notification.readAt === null).length,
 }) => {
   const containerMustBeDestroyed = containerStatus !== null && containerStatus !== "waitlisted";
   return (
-    <Layout title="Account" loggedIn>
+    <Layout title="Account" loggedIn notificationCount={unreadNotificationCount}>
       <h1>{welcome ? "Your account is ready." : "Account."}</h1>
-      <p class="lead">Manage passkeys and credentials for your account.</p>
+      <p class="lead">Manage passkeys, credentials, and notifications for your account.</p>
+      <section id="notifications" class="card" aria-labelledby="notifications-heading" data-unread-count={unreadNotificationCount}>
+        <div class="card-head">
+          <h2 id="notifications-heading">Notifications</h2>
+          {unreadNotificationCount > 0 ? (
+            <span class="badge notification-count">
+              {unreadNotificationCount} unread
+            </span>
+          ) : <span class="muted">All caught up</span>}
+        </div>
+        {notifications.length > 0 ? (
+          <div class="notification-list" role="list">
+            {notifications.map((notification) => {
+              const unread = notification.readAt === null;
+              return (
+                <article
+                  class={`notification${unread ? " unread" : ""}`}
+                  data-notification-id={notification.id}
+                  role="listitem"
+                >
+                  <div class="notification-head">
+                    <h3>{notification.title}</h3>
+                    <span class={`notification-severity ${notification.severity}`}>{notification.severity}</span>
+                  </div>
+                  {unread ? <span class="notification-unread" data-notification-new>New</span> : null}
+                  <p class="notification-message">{notification.message}</p>
+                  <div class="notification-meta">
+                    <time class="muted" dateTime={new Date(notification.createdAt).toISOString()}>
+                      {new Date(notification.createdAt).toISOString().slice(0, 10)}
+                    </time>
+                    {unread ? (
+                      <button class="btn secondary" type="button" data-notification-read={notification.id}>
+                        Mark as read
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : <p class="muted">No notifications.</p>}
+        {unreadNotificationCount > 0 ? (
+          <div class="row">
+            <button id="mark-notifications-read" class="btn secondary" type="button">
+              Mark all as read
+            </button>
+          </div>
+        ) : null}
+        <p id="notifications-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
       <section class="card" aria-labelledby="passkeys-heading">
         <div class="card-head">
           <h2 id="passkeys-heading">Passkeys</h2>
@@ -322,8 +379,9 @@ export const NotFoundPage: FC = () => (
 
 export const OnboardingPage: FC<{
   githubAvailable?: boolean;
-}> = ({ githubAvailable = false }) => (
-  <Layout title="Set up" loggedIn>
+  notificationCount?: number;
+}> = ({ githubAvailable = false, notificationCount = 0 }) => (
+  <Layout title="Set up" loggedIn notificationCount={notificationCount}>
     <h1>Set up a workbench.</h1>
     <p class="notice">
       Configure your workbench with agents, models, and credentials. After it is provisioned, changes require

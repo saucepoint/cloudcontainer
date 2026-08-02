@@ -34,6 +34,12 @@ import {
 } from "./jobs.js";
 import { startProvision } from "./placement.js";
 import { readJsonBody } from "./http.js";
+import {
+  markAllNotificationsRead,
+  markNotificationRead,
+  notificationsForUser,
+  unreadNotificationCount,
+} from "./notifications.js";
 import { allowedUserOps } from "./state.js";
 import {
   insertSshKey,
@@ -201,6 +207,25 @@ export const apiRoutes = new Hono<AppContext>()
       sshKeysView(c.env, userId),
     ]);
     return c.json({ container, keys });
+  })
+
+  // ---------------------------------------------------------- notifications
+  .get("/api/notifications", requireUser, async (c) => {
+    const userId = c.get("user").id;
+    const [notifications, unreadCount] = await Promise.all([
+      notificationsForUser(c.env, userId),
+      unreadNotificationCount(c.env, userId),
+    ]);
+    c.header("cache-control", "no-store");
+    return c.json({ notifications, unreadCount });
+  })
+  .post("/api/notifications/:id/read", requireUser, async (c) => {
+    await markNotificationRead(c.env, c.get("user").id, c.req.param("id"));
+    return c.json({ ok: true });
+  })
+  .post("/api/notifications/read-all", requireUser, async (c) => {
+    await markAllNotificationsRead(c.env, c.get("user").id);
+    return c.json({ ok: true });
   })
 
   // ------------------------------------------------------------------ actions

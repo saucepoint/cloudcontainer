@@ -605,6 +605,8 @@ operations synchronize keys and credentials.
 | oauth_states | Short-lived, user-bound authorization attempts |
 | waitlist | One row per user; requested_at ordering and admitted_at audit |
 | port_quarantine | Host/port composite identity; 30-day hold |
+| notifications | Global in-app announcements with optional expiry; no secret payloads |
+| notification_reads | One read marker per notification and user; cascades on account deletion |
 
 ---
 

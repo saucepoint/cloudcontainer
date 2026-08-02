@@ -9,6 +9,7 @@ import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { credentialsView } from "./container-view.js";
+import { notificationsForUser, unreadNotificationCount } from "./notifications.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { AccountPage, LandingPage, NotFoundPage, OnboardingPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
@@ -41,18 +42,28 @@ app.get("/", async (c) => {
 });
 
 app.get("/onboarding", requireUser, async (c) => {
-  const container = await getContainerForUser(c.env, c.get("user").id);
+  const userId = c.get("user").id;
+  const [container, notificationCount] = await Promise.all([
+    getContainerForUser(c.env, userId),
+    unreadNotificationCount(c.env, userId),
+  ]);
   if (container) return c.redirect("/dashboard");
   return c.html(
-    <OnboardingPage githubAvailable={githubConfigured(c.env)} />,
+    <OnboardingPage
+      githubAvailable={githubConfigured(c.env)}
+      notificationCount={notificationCount}
+    />,
   );
 });
 
-app.get("/dashboard", requireUser, (c) => c.html(<DashboardPage />));
+app.get("/dashboard", requireUser, async (c) => {
+  const notificationCount = await unreadNotificationCount(c.env, c.get("user").id);
+  return c.html(<DashboardPage notificationCount={notificationCount} />);
+});
 
 const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
   const user = c.get("user");
-  const [passkeys, container, credentials] = await Promise.all([
+  const [passkeys, container, credentials, notifications, notificationCount] = await Promise.all([
     c.env.DB.prepare(
       "SELECT COUNT(*) AS count FROM passkey WHERE user_id = ?",
     )
@@ -60,6 +71,8 @@ const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
       .first<{ count: number }>(),
     getContainerForUser(c.env, user.id),
     credentialsView(c.env, user.id),
+    notificationsForUser(c.env, user.id),
+    unreadNotificationCount(c.env, user.id),
   ]);
   return c.html(
     <AccountPage
@@ -69,6 +82,8 @@ const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
       containerStatus={container?.status ?? null}
       hasCredentials={credentials.hasCredentials}
       worldIdVerified={user.verification_method === "world_id"}
+      notifications={notifications}
+      unreadNotificationCount={notificationCount}
     />,
   );
 };

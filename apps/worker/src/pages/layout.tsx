@@ -1,11 +1,21 @@
 import type { Child, FC } from "hono/jsx";
 import { PAGE_STYLES } from "./styles.js";
 
-export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }> = ({
+export const Layout: FC<{
+  title?: string;
+  loggedIn?: boolean;
+  notificationCount?: number;
+  children?: Child;
+}> = ({
   title,
   loggedIn,
+  notificationCount = 0,
   children,
-}) => (
+}) => {
+  const unreadLabel = notificationCount === 1
+    ? "1 unread notification"
+    : `${notificationCount} unread notifications`;
+  return (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -29,7 +39,14 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
             </a>
             {loggedIn ? (
               <nav class="row flush" aria-label="Account">
-                <a class="btn secondary" href="/account">Account</a>
+                <a
+                  class={`btn secondary account-link${notificationCount > 0 ? " has-notifications" : ""}`}
+                  aria-label={notificationCount > 0 ? `Account, ${unreadLabel}` : "Account"}
+                  {...(notificationCount > 0
+                    ? { "data-notification-count": notificationCount > 99 ? "99+" : String(notificationCount) }
+                    : {})}
+                  href="/account"
+                >Account</a>
                 <form method="post" action="/auth/logout" class="flush">
                   <button class="btn secondary" type="submit">
                     Sign out
@@ -45,4 +62,5 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
       <script type="module" src="/ui.js"></script>
     </body>
   </html>
-);
+  );
+};

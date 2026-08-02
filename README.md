@@ -202,6 +202,22 @@ its intended recipient through a private channel. The recipient first signs in
 or creates a passkey account, then redeems the code on the verification screen.
 The redemption and account eligibility update occur in one D1 batch.
 
+### Account notifications
+
+Administrators can publish a global notification before planned maintenance,
+including a container-destruction warning. Notifications appear on the Account
+button as an unread badge and remain available on the Account page until each
+user marks them read. Use the same bearer secret as invite generation:
+
+    curl -fsS https://usebench.dev/api/admin/notifications \
+      -H "Authorization: Bearer $INVITE_ADMIN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"title":"Scheduled system upgrade","message":"Your container will be destroyed during the system upgrade. Export anything you need before the maintenance window.","severity":"critical"}'
+
+The supported severities are `info`, `warning`, and `critical`. Set
+`expiresAt` to a future Unix timestamp in milliseconds when an announcement
+should stop appearing.
+
 For optional GitHub repository access, register a public GitHub App and set all
 of `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `GITHUB_APP_SLUG`.
 The production App is named `usebench.dev` and uses the slug `usebench-dev`.

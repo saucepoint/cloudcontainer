@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { AppContext, Bindings } from "./types.js";
 import { utf8 } from "@workbench/contract";
 import { hashInviteCode, randomInviteCode } from "./invites.js";
+import { createNotification, NOTIFICATION_SEVERITIES, type NotificationSeverity } from "./notifications.js";
+import { readJsonBody } from "./http.js";
 
 async function secretMatches(provided: string, expected: string): Promise<boolean> {
   const [providedHash, expectedHash] = await Promise.all([
@@ -26,6 +28,10 @@ async function secretMatches(provided: string, expected: string): Promise<boolea
 
 function bearerToken(header: string | undefined): string {
   return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+}
+
+function isNotificationSeverity(value: unknown): value is NotificationSeverity {
+  return typeof value === "string" && NOTIFICATION_SEVERITIES.some((severity) => severity === value);
 }
 
 async function createInvite(env: Bindings, secret: string): Promise<string> {
@@ -57,4 +63,44 @@ export const adminRoutes = new Hono<AppContext>().post("/api/admin/invites", asy
   const code = await createInvite(c.env, c.env.INVITE_ADMIN_SECRET);
   c.header("cache-control", "no-store");
   return c.json({ code }, 201);
+}).post("/api/admin/notifications", async (c) => {
+  if (!c.env.INVITE_ADMIN_SECRET) return c.notFound();
+  const provided = bearerToken(c.req.header("authorization"));
+  if (!(await secretMatches(provided, c.env.INVITE_ADMIN_SECRET))) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const body = await readJsonBody<{
+    title?: unknown;
+    message?: unknown;
+    severity?: unknown;
+    expiresAt?: unknown;
+  }>(c);
+  const title = typeof body?.title === "string" ? body.title.trim() : "";
+  const message = typeof body?.message === "string" ? body.message.trim() : "";
+  const severity = body?.severity ?? "info";
+  if (title.length < 1 || title.length > 160) {
+    return c.json({ error: "title must be between 1 and 160 characters" }, 400);
+  }
+  if (message.length < 1 || message.length > 4_000) {
+    return c.json({ error: "message must be between 1 and 4000 characters" }, 400);
+  }
+  if (!isNotificationSeverity(severity)) {
+    return c.json({ error: "severity must be info, warning, or critical" }, 400);
+  }
+  if (
+    body?.expiresAt !== undefined &&
+    (typeof body.expiresAt !== "number" || !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now())
+  ) {
+    return c.json({ error: "expiresAt must be a future millisecond timestamp" }, 400);
+  }
+
+  const notification = await createNotification(c.env, {
+    title,
+    message,
+    severity,
+    expiresAt: typeof body?.expiresAt === "number" ? body.expiresAt : null,
+  });
+  c.header("cache-control", "no-store");
+  return c.json({ notification }, 201);
 });
