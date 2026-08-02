@@ -619,8 +619,9 @@ describe("interface foundation", () => {
 
   it("accents bench in the workbench wordmark and groups compact landing auth actions", () => {
     const html = String(LandingPage({ devAuth: false }));
-    expect(html).toContain('work<span class="logo-bench">bench</span>');
+    expect(html).toContain('class="logo-wordmark">work<span class="logo-bench">bench</span></span>');
     expect(html).toContain(".logo-bench { color: var(--accent); }");
+    expect(html).toContain(".logo-beta { padding: 0.15rem 0.35rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface);");
     expect(html).toContain(".auth-provider-list { display: grid; width: min(100%, 25rem);");
     expect(html).toContain("border: 1px solid var(--line); border-radius: var(--radius);");
     expect(html).toContain(".auth-provider { width: min(100%, 18rem); justify-self: center;");

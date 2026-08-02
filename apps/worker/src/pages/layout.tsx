@@ -24,7 +24,7 @@ export const Layout: FC<{ title?: string; loggedIn?: boolean; children?: Child }
         <div class="wrap">
           <header class="site">
             <a class="logo" href={loggedIn ? "/dashboard" : "/"}>
-              work<span class="logo-bench">bench</span>
+              <span class="logo-wordmark">work<span class="logo-bench">bench</span></span>
               <span class="logo-beta">beta</span>
             </a>
             {loggedIn ? (

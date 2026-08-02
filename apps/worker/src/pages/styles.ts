@@ -53,8 +53,8 @@ header.site { min-height: 70px; display: flex; align-items: center; justify-cont
   font-size: 0.96rem; font-weight: 700; letter-spacing: -0.025em; text-decoration: none; }
 .logo:hover { text-decoration: none; }
 .logo-bench { color: var(--accent); }
-.logo-beta { padding: 0.15rem 0.35rem; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent);
-  font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em; line-height: 1; }
+.logo-beta { padding: 0.15rem 0.35rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface);
+  color: var(--muted); font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em; line-height: 1; }
 main { display: block; }
 h1 { max-width: 700px; margin: 0 0 0.65rem; font-size: clamp(2rem, 7vw, 4.2rem);
   font-weight: 600; letter-spacing: -0.04em; line-height: 0.98; }
