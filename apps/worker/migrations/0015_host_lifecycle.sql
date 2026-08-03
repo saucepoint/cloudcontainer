@@ -46,8 +46,9 @@ ALTER TABLE containers ADD COLUMN rehome_placement_class TEXT
   CHECK (rehome_placement_class IN ('budget', 'regular', 'dedicated'));
 ALTER TABLE containers ADD COLUMN rehome_requested_at INTEGER;
 
--- `containers.cpu` is the advertised plan value (1/2). Host capacity and
--- Incus enforcement reserve the actual value (2/3), so repair legacy totals.
+-- `containers.cpu` is the advertised plan value (1/2). At this migration's
+-- release point, host capacity and Incus enforcement reserved 2/3, so repair
+-- legacy totals. Migration 0016 updates free-tier allocations to 1.
 UPDATE hosts
 SET vcpu_allocated = COALESCE((
   SELECT SUM(CASE c.tier WHEN 'free' THEN 2 WHEN 'paid' THEN 3 ELSE 0 END)

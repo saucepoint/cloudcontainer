@@ -42,7 +42,7 @@ const base = { jobId: "j-1", containerId: "c-1" };
 describe("tier capacities", () => {
   it("gives the free tier 1.5 GiB RAM, 1 GiB swap, and 5 GiB disk", () => {
     expect(TIERS.free.cpu).toBe(1);
-    expect(TIERS.free.provisionedCpu).toBe(2);
+    expect(TIERS.free.provisionedCpu).toBe(1);
     expect(TIERS.free.ramMb).toBe(1536);
     expect(TIERS.free.swapMb).toBe(1024);
     expect(TIERS.free.diskGb).toBe(5);
@@ -115,7 +115,7 @@ describe("HostRegistrationSchema", () => {
       ...host,
       daemonPublicKey: "c2hvcnQ=",
     }).success).toBe(false);
-    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 13 }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 20 }).success).toBe(false);
     expect(HostRegistrationSchema.safeParse({
       ...host,
       ramTotalMb: 65536,
@@ -149,7 +149,7 @@ describe("HostRegistrationSchema", () => {
     expect(HostRegistrationSchema.safeParse(cpuConstrained).success).toBe(true);
     expect(HostRegistrationSchema.safeParse({
       ...cpuConstrained,
-      maxTenants: 3,
+      maxTenants: 5,
     }).success).toBe(false);
   });
 

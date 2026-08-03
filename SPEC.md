@@ -622,7 +622,7 @@ Placement requires all of the following at reservation time:
 
 - an exact host-class match and, for dedicated, an exact assigned-user match;
 - a free tenant slot below `max_tenants`;
-- enough actual vCPU reservation capacity (2 free, 3 paid/dedicated), distinct
+- enough actual vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
   from the advertised 1/2-vCPU plan value stored on the container;
 - enough non-reserved total system RAM;
 - enough registered disk capacity for both home and root quotas;
@@ -705,8 +705,8 @@ operations synchronize keys and credentials.
 - A dedicated restricted Incus project with aggregate CPU, memory, process,
   disk, and instance ceilings.
 - Public plan values remain free 1 vCPU and paid/dedicated 2 vCPU. Incus limits
-  and host scheduler reservations deliberately include one vCPU of headroom:
-  free uses 2 vCPU and paid/dedicated use 3 vCPU. Free has hard 1.5 GiB memory,
+  and host scheduler reservations use the enforced class values: free uses 1
+  vCPU and paid/dedicated use 3 vCPU. Free has hard 1.5 GiB memory,
   1 GiB swap, and 5 GiB each for home and root; paid/dedicated have hard 4 GiB
   memory, swap disabled, and 8 GiB each for home and root. Every class also has
   a 1024-process ceiling and an isolated unprivileged idmap.

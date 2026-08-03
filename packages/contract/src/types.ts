@@ -117,7 +117,7 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 export const TIERS = {
   // `cpu` is the public plan value. `provisionedCpu` is both the Incus limit
   // and the amount reserved from a host's independently registered capacity.
-  free: { cpu: 1, provisionedCpu: 2, ramMb: 1536, swapMb: 1024, diskGb: 5 },
+  free: { cpu: 1, provisionedCpu: 1, ramMb: 1536, swapMb: 1024, diskGb: 5 },
   paid: { cpu: 2, provisionedCpu: 3, ramMb: 4096, swapMb: 0, diskGb: 8 },
 } as const;
 export type Tier = keyof typeof TIERS;

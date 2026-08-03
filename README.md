@@ -286,8 +286,9 @@ The one-time `0014_host_fleet.sql` rollout deliberately leaves every legacy
 host draining until its class policy and daemon have been deployed, audited,
 probed, and explicitly reactivated through the fleet controller. See the
 control-plane rollout in the runbook before applying it.
-`0015_host_lifecycle.sql` adds generation history and orderly re-home state and
-repairs host CPU accounting to the actual 2/3-vCPU reservations.
+`0015_host_lifecycle.sql` adds generation history and orderly re-home state.
+`0016_free_tier_cpu.sql` repairs host CPU accounting to the actual 1/3-vCPU
+reservations.
 
 If apps/daemon, packages/contract, its dependencies, the systemd unit, or host
 infrastructure changed, use the fleet controller and the compatibility order
@@ -335,7 +336,7 @@ Host classes are enforced end to end:
 
 | Host class | Eligible account | Advertised / enforced shape | Tenant ceiling |
 |---|---|---|---|
-| budget | free only | 1 / 2 vCPU, 1536 MiB RAM, 1 GiB swap, 5+5 GiB disk | calculated per host |
+| budget | free only | 1 / 1 vCPU, 1536 MiB RAM, 1 GiB swap, 5+5 GiB disk | calculated per host |
 | regular | paid only | 2 / 3 vCPU, 4096 MiB RAM, swap disabled, 8+8 GiB disk | calculated per host |
 | dedicated | one assigned paid account | paid shape | exactly one |
 

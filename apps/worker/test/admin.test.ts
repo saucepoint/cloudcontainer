@@ -646,7 +646,7 @@ describe("fleet administration", () => {
     const { env } = fleetEnv();
     await seedUser(env, "user-1", "free");
     await seedHost(env, {
-      vcpu_allocated: 2,
+      vcpu_allocated: 1,
       ram_allocated_mb: 1536,
       disk_allocated_gb: 10,
     });

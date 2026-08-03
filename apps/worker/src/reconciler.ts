@@ -288,7 +288,7 @@ async function placeWaitlistedContainer(
                SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
              )
              AND h.vcpu_capacity - h.vcpu_allocated >= CASE containers.tier
-               WHEN 'free' THEN 2 WHEN 'paid' THEN 3 ELSE 2147483647 END
+               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= containers.ram_mb
              AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?

@@ -30,7 +30,7 @@ class to another.
 
 | Host class | Account plan | Advertised CPU | Incus/host reservation | RAM | Swap | Home + root disk | Maximum tenants |
 |---|---|---:|---:|---:|---:|---:|---:|
-| `budget` | `free` | 1 vCPU | 2 vCPU | 1536 MiB | 1024 MiB | 5 + 5 GiB | calculated |
+| `budget` | `free` | 1 vCPU | 1 vCPU | 1536 MiB | 1024 MiB | 5 + 5 GiB | calculated |
 | `regular` | `paid` | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | calculated |
 | `dedicated` | `dedicated` paid account | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | exactly 1 |
 
@@ -60,9 +60,9 @@ dedicated account assignment in the same D1 reservation transaction.
 Capacity belongs to the individual host row, not the class. For example,
 budget hosts registered with 4 vCPU/8 GiB and 8 vCPU/16 GiB are supported in
 the same pool and yield different ceilings. At the default 4x CPU policy, the
-4-vCPU budget host has 16 reservation units (eight CPU slots) but only 5120 MiB
+4-vCPU budget host has 16 reservation units (16 CPU slots) but only 5120 MiB
 of allocatable RAM (three RAM slots), so RAM binds at three tenants. The
-8-vCPU/16-GiB budget host has 32 reservation units (16 CPU slots) and 13312 MiB
+8-vCPU/16-GiB budget host has 32 reservation units (32 CPU slots) and 13312 MiB
 of allocatable RAM (eight RAM slots), so RAM binds at eight. An independent
 8-vCPU/16-GiB regular host has ten CPU slots but three RAM slots and therefore
 binds at three. These examples assume disk, swap, and ID maps do not impose a
@@ -176,7 +176,7 @@ have both been audited. Review the migration preflight before admitting new
 accounts.
 
 Migration `0015_host_lifecycle.sql` adds host generations/history and pending
-re-home targets, then repairs `vcpu_allocated` from the actual 2/3-vCPU tier
+re-home targets, then repairs `vcpu_allocated` from the historical 2/3-vCPU tier
 reservations while leaving each container's advertised 1/2-vCPU value intact.
 It is expand-only; Worker rollback does not remove these fields.
 

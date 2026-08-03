@@ -13,7 +13,7 @@ tests, and `SPEC.md` together.
 
 | Pool | Test accounts | Required placement | Advertised / enforced CPU and other limits |
 |---|---|---|---|
-| budget | at least two free plus one overflow | free only | 1 / 2 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home and root |
+| budget | at least two free plus one overflow | free only | 1 / 1 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home and root |
 | regular | at least two paid plus one overflow | paid only | 2 / 3 vCPU, 4096 MiB RAM, no swap, 8 GiB home and root |
 | dedicated | two dedicated-entitled accounts and one shared paid account | only the assigned account; exactly one tenant | paid limits |
 
@@ -48,7 +48,7 @@ For the class under test, independently compute:
 
     ram_reserve_mb = max(3072, ceil(ram_total_mb * 8 / 100), configured_higher_reserve)
     vcpu_capacity = online_host_vcpus * vcpu_overcommit  # integer 1..4; default 4
-    cpu_slots = floor(vcpu_capacity / provisioned_tenant_cpu)  # 2 free, 3 paid
+    cpu_slots = floor(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 3 paid
     ram_slots = floor((ram_total_mb - ram_reserve_mb) / tenant_ram_mb)
     disk_slots = floor(safe_disk_gb / (2 * tenant_disk_gb))
     swap_slots = floor(host_swap_mb / tenant_swap_mb)  # budget only
@@ -156,7 +156,7 @@ configured swap. The workload may be killed inside the tenant, but the host and
 neighboring SSH sessions must stay responsive with no host OOM event.
 
 Run CPU stress in every tenant simultaneously. Each must remain bounded to its
-exact enforced allowance (2 free, 3 paid/dedicated) even though the UI advertises
+exact enforced allowance (1 free, 3 paid/dedicated), while the UI advertises
 1/2 vCPU and the host has an explicit aggregate vCPU overcommit ceiling.
 
 ## Health, drain, and controller release tests

@@ -44,7 +44,7 @@ describe("buildJobRequest", () => {
     expect(request.op).toBe("provision");
     if (request.op !== "provision") throw new Error("unreachable");
     expect(request.spec.sshPort).toBe(30500);
-    expect(request.spec.cpu).toBe(2);
+    expect(request.spec.cpu).toBe(1);
     expect(request.sshKeys).toEqual(["ssh-ed25519 AAAA k"]);
     expect(JSON.stringify(request)).not.toContain("CANARY-"); // sealed, not plaintext
 
@@ -456,7 +456,7 @@ describe("refreshJob", () => {
   it("destroy success quarantines the port, releases host accounting, and drops the row", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
     await seedContainer(env, { status: "running" });
     await env.DB.prepare(
       "INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES ('user-1', 1, 2)",
@@ -486,7 +486,7 @@ describe("refreshJob", () => {
   it("keeps destroy retryable when an atomic finalization step fails", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
+    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
     await seedContainer(env, { status: "destroying" });
     await env.DB.prepare(
       `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
@@ -516,7 +516,7 @@ describe("refreshJob", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first();
-    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
     expect((await env.DB.prepare("SELECT * FROM port_quarantine").all()).results).toHaveLength(0);
   });
 
@@ -554,7 +554,7 @@ describe("refreshJob", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
+    expect(host).toEqual({ vcpu_allocated: 3, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
   });
 
   it("renews the D1 lease when the daemon reports a running heartbeat", async () => {
@@ -769,7 +769,7 @@ describe("startProvision", () => {
       ram_allocated_mb: number;
       disk_allocated_gb: number;
     }>();
-    expect(host?.vcpu_allocated).toBe(2);
+    expect(host?.vcpu_allocated).toBe(1);
     expect(host?.ram_allocated_mb).toBe(1536);
     expect(host?.disk_allocated_gb).toBe(10);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
@@ -968,7 +968,7 @@ describe("startProvision", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
+    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
     expect(daemon.submitted).toHaveLength(1);
   });
 });

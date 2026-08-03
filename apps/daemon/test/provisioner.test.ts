@@ -128,8 +128,8 @@ describe("provision command construction", () => {
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContainEqual(expect.stringContaining("storage volume create default home-workbench-aaaaaa size=5GiB"));
     const init = flat.find((f) => f.startsWith("init workbench-base workbench-aaaaaa"));
-    expect(init).toContain("limits.cpu=2");
-    expect(init).toContain("limits.cpu.allowance=200%");
+    expect(init).toContain("limits.cpu=1");
+    expect(init).toContain("limits.cpu.allowance=100%");
     expect(init).toContain("limits.memory=1536MiB");
     expect(init).toContain("limits.memory.enforce=hard");
     expect(init).toContain("limits.memory.swap=1024MiB");
@@ -1114,8 +1114,8 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "free", cpu: 1, ramMb: 1536, diskGb: 5, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=1");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=100%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1024MiB");
     expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1024MiB"))
       .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=1536MiB"));
