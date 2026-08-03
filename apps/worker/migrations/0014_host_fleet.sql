@@ -36,10 +36,12 @@ WHERE EXISTS (
   WHERE c.host_id = hosts.id AND c.tier = 'paid'
 );
 
--- Existing machines have not yet had the class-specific Incus policy or the
--- class-reporting daemon applied. Quarantine every legacy row until hostctl
--- deploys, audits, probes, and explicitly reactivates it.
-UPDATE hosts SET status = 'draining';
+-- Existing serviceable machines have not yet had the class-specific Incus
+-- policy or class-reporting daemon applied. Quarantine them until hostctl
+-- deploys, audits, probes, and explicitly reactivates them. Preserve retired
+-- identities: turning a dead generation back into draining would make it a
+-- daemon deployment target and discard the meaning of its lifecycle state.
+UPDATE hosts SET status = 'draining' WHERE status <> 'dead';
 
 -- The management address is operational metadata, not a credential. Existing
 -- hosts default to their tenant-facing SSH hostname and can be corrected while

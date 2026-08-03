@@ -259,7 +259,9 @@ describe("0014 host fleet migration", () => {
          status, joined_at)
       VALUES
         ('legacy-host', '192.0.2.10', 'legacy.test', 'https://legacy.test', 'pub',
-         8192, 2048, 12, 100, 'active', 1);
+         8192, 2048, 12, 100, 'active', 1),
+        ('retired-host', '192.0.2.11', 'retired.test', 'https://retired.test', 'pub',
+         8192, 2048, 12, 100, 'dead', 1);
       INSERT INTO containers
         (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb,
          status, created_at)
@@ -285,6 +287,8 @@ describe("0014 host fleet migration", () => {
       management_user: "root",
       daemon_version: null,
     });
+    expect(db.prepare("SELECT status FROM hosts WHERE id = 'retired-host'").get())
+      .toEqual({ status: "dead" });
     expect(db.prepare("SELECT id, placement_class FROM containers ORDER BY id").all())
       .toEqual([
         { id: "assigned-container", placement_class: "regular" },
