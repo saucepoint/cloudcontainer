@@ -343,9 +343,10 @@ Host classes are enforced end to end:
 Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
 remainder is tenant RAM. Its CPU reservation capacity defaults to four times
 the detected online vCPU count, and an operator may select a lower multiplier
-from 1 through 4. The calculated tenant ceiling is the minimum of
-class-adjusted vCPU, non-reserved RAM, safe disk, swap where required, and
-available isolated ID maps, so either RAM or vCPU can be the binding resource.
+from 1 through 4. CPU tenant capacity is rounded up after dividing by the
+class reservation, while RAM permits 1.25x oversubscription and is also rounded
+up. The calculated tenant ceiling is the minimum of those CPU/RAM limits plus
+safe disk, swap where required, and available isolated ID maps.
 The scheduler rechecks that ceiling and all resource counters transactionally.
 Every host registers its own numbers, so two budget hosts (for example 4
 vCPU/8 GiB and 8 vCPU/16 GiB) can have different ceilings, independent of an

@@ -624,10 +624,13 @@ describe("pickHost (scheduler §10)", () => {
     expect((await pickHost(env, request()))?.id).toBe("big");
   });
 
-  it("respects the upgrade-headroom reserve", async () => {
+  it("allows the rounded 1.25x RAM reservation ceiling", async () => {
     const { env } = makeEnv();
-    // 5120 total, 3072 reserved, 1024 allocated -> only 1024 non-reserved free.
+    // 5120 total, 3072 reserved -> 2048 allocatable RAM and a rounded
+    // 1.25x ceiling of two 1536 MiB tenant reservations.
     await seedHost(env, { ram_total_mb: 5120, ram_reserve_mb: 3072, ram_allocated_mb: 1024 });
+    expect(await pickHost(env, request())).not.toBeNull();
+    await env.DB.prepare("UPDATE hosts SET ram_allocated_mb = 3072 WHERE id = 'host-1'").run();
     expect(await pickHost(env, request())).toBeNull();
   });
 
@@ -717,9 +720,9 @@ describe("pickHost (scheduler §10)", () => {
       max_tenants: 2,
       vcpu_allocated: 6,
     });
-    expect(await pickHost(env, request({ hostType: "regular", cpu: 3 }))).toBeNull();
-    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 3 WHERE id = 'host-1'").run();
     expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("host-1");
+    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 9 WHERE id = 'host-1'").run();
+    expect(await pickHost(env, request({ hostType: "regular", cpu: 3 }))).toBeNull();
   });
 
   it("enforces tenant ceilings and dedicated account assignment", async () => {

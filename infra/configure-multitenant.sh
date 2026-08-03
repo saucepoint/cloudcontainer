@@ -137,8 +137,8 @@ incus project set "$PROJECT_NAME" restricted.snapshots=block
 incus project set "$PROJECT_NAME" restricted.networks.access="$NETWORK_NAME"
 incus project set "$PROJECT_NAME" restricted.storage-pools.access="$POOL_NAME"
 incus project set "$PROJECT_NAME" limits.containers="$TENANT_SLOTS"
-incus project set "$PROJECT_NAME" limits.cpu="$VCPU_CAPACITY"
-incus project set "$PROJECT_NAME" limits.memory="${RAM_CAPACITY_MB}MiB"
+incus project set "$PROJECT_NAME" limits.cpu="$CPU_LIMIT"
+incus project set "$PROJECT_NAME" limits.memory="${RAM_LIMIT_MB}MiB"
 incus project set "$PROJECT_NAME" limits.processes="$(( TENANT_SLOTS * TENANT_PROCESS_LIMIT ))"
 incus project set "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}=${DISK_GB}GiB"
 
@@ -216,4 +216,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: type=$HOST_TYPE tier=$TENANT_TIER project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"
+echo "Incus tenant policy: type=$HOST_TYPE tier=$TENANT_TIER project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$CPU_LIMIT ram=${RAM_LIMIT_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"

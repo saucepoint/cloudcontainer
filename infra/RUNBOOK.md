@@ -41,8 +41,8 @@ Bootstrap computes a conservative ceiling from the actual host:
     safe_disk = floor(storage_pool_bytes * DISK_CAPACITY_PERCENT / 100)
 
     max_tenants = min(
-      floor(vcpu_capacity / class_provisioned_vcpu),
-      floor((total_system_ram - ram_reserve) / class_ram),
+      ceil(vcpu_capacity / class_provisioned_vcpu),
+      ceil((total_system_ram - ram_reserve) * 1.25 / class_ram),
       floor(safe_disk / (class_home_disk + class_root_disk)),
       floor(host_swap / class_swap) when class_swap is nonzero,
       available isolated 65,536-ID maps after one image-build map
@@ -60,16 +60,16 @@ dedicated account assignment in the same D1 reservation transaction.
 Capacity belongs to the individual host row, not the class. For example,
 budget hosts registered with 4 vCPU/8 GiB and 8 vCPU/16 GiB are supported in
 the same pool and yield different ceilings. At the default 4x CPU policy, the
-4-vCPU budget host has 16 reservation units (16 CPU slots) but only 5120 MiB
-of allocatable RAM (three RAM slots), so RAM binds at three tenants. The
+4-vCPU budget host has 16 reservation units (16 CPU slots) and 5120 MiB of
+allocatable RAM (five 1.25x RAM slots), so RAM binds at five tenants. The
 8-vCPU/16-GiB budget host has 32 reservation units (32 CPU slots) and 13312 MiB
-of allocatable RAM (eight RAM slots), so RAM binds at eight. An independent
-8-vCPU/16-GiB regular host has ten CPU slots but three RAM slots and therefore
-binds at three. These examples assume disk, swap, and ID maps do not impose a
-lower safety ceiling.
+of allocatable RAM (twelve 1.25x RAM slots), so RAM binds at twelve. An
+independent 8-vCPU/16-GiB regular host has eleven CPU slots and five RAM slots
+and therefore binds at five. These examples assume disk, swap, and ID maps do
+not impose a lower safety ceiling.
 
 CPU can bind instead: a 4-vCPU/16-GiB budget host configured with
-`--vcpu-overcommit 1` has two CPU slots but eight RAM slots. The registered
+`--vcpu-overcommit 1` has four CPU slots but eleven RAM slots. The registered
 `max_tenants` is always the minimum, never a promise that every dimension will
 be exhausted equally.
 

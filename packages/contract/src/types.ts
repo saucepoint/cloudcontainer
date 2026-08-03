@@ -129,6 +129,47 @@ export type HostType = z.infer<typeof HostTypeSchema>;
 export const MIN_HOST_RAM_RESERVE_MB = 3072;
 export const HOST_RAM_RESERVE_PERCENT = 8;
 export const MAX_HOST_VCPU_OVERCOMMIT = 4;
+export const HOST_RAM_OVERCOMMIT = 1.25;
+export const HOST_RAM_OVERCOMMIT_NUMERATOR = 5;
+export const HOST_RAM_OVERCOMMIT_DENOMINATOR = 4;
+
+export function cpuTenantCeiling(vcpuCapacity: number, tier: Tier): number {
+  return Math.ceil(vcpuCapacity / TIERS[tier].provisionedCpu);
+}
+
+export function ramTenantCeiling(
+  ramTotalMb: number,
+  ramReserveMb: number,
+  tier: Tier,
+): number {
+  return Math.ceil(
+    ((ramTotalMb - ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR) /
+      (HOST_RAM_OVERCOMMIT_DENOMINATOR * TIERS[tier].ramMb),
+  );
+}
+
+export function hostCpuRamTenantCeiling(
+  capacity: { ramTotalMb: number; ramReserveMb: number; vcpuCapacity: number },
+  tier: Tier,
+): number {
+  return Math.min(
+    cpuTenantCeiling(capacity.vcpuCapacity, tier),
+    ramTenantCeiling(capacity.ramTotalMb, capacity.ramReserveMb, tier),
+  );
+}
+
+/** Logical resource reservations allowed by the rounded tenant ceilings. */
+export function cpuReservationCeiling(vcpuCapacity: number, tier: Tier): number {
+  return cpuTenantCeiling(vcpuCapacity, tier) * TIERS[tier].provisionedCpu;
+}
+
+export function ramReservationCeiling(
+  ramTotalMb: number,
+  ramReserveMb: number,
+  tier: Tier,
+): number {
+  return ramTenantCeiling(ramTotalMb, ramReserveMb, tier) * TIERS[tier].ramMb;
+}
 
 export function minimumHostRamReserveMb(ramTotalMb: number): number {
   return Math.max(
@@ -252,10 +293,10 @@ export const HostRegistrationSchema = z
         message: "only dedicated hosts can be assigned to one account",
       });
     }
-    const tier = host.hostType === "budget" ? TIERS.free : TIERS.paid;
+    const tierName = host.hostType === "budget" ? "free" : "paid";
+    const tier = TIERS[tierName];
     const resourceCeiling = Math.min(
-      Math.floor(host.vcpuCapacity / tier.provisionedCpu),
-      Math.floor((host.ramTotalMb - host.ramReserveMb) / tier.ramMb),
+      hostCpuRamTenantCeiling(host, tierName),
       Math.floor(host.diskTotalGb / (tier.diskGb * 2)),
     );
     if (host.maxTenants > resourceCeiling) {

@@ -18,6 +18,9 @@ import {
   GithubReposSchema,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
+  HOST_RAM_OVERCOMMIT,
+  HOST_RAM_OVERCOMMIT_DENOMINATOR,
+  HOST_RAM_OVERCOMMIT_NUMERATOR,
   HOST_RAM_RESERVE_PERCENT,
   HOST_TYPES,
   LLM_PROVIDERS,
@@ -26,7 +29,10 @@ import {
   MIN_HOST_RAM_RESERVE_MB,
   TIERS,
   SERVICE_PLANS,
+  cpuTenantCeiling,
+  hostCpuRamTenantCeiling,
   minimumHostRamReserveMb,
+  ramTenantCeiling,
 } from "../src/types.js";
 
 const spec = {
@@ -72,6 +78,19 @@ describe("tier capacities", () => {
     expect(minimumHostRamReserveMb(38401)).toBe(3073);
     expect(minimumHostRamReserveMb(65536)).toBe(5243);
     expect(MAX_HOST_VCPU_OVERCOMMIT).toBe(4);
+    expect(HOST_RAM_OVERCOMMIT).toBe(1.25);
+    expect(HOST_RAM_OVERCOMMIT_NUMERATOR).toBe(5);
+    expect(HOST_RAM_OVERCOMMIT_DENOMINATOR).toBe(4);
+  });
+
+  it("rounds up CPU and 1.25x RAM tenant ceilings", () => {
+    expect(cpuTenantCeiling(16, "paid")).toBe(6);
+    expect(ramTenantCeiling(8192, 3072, "free")).toBe(5);
+    expect(hostCpuRamTenantCeiling({
+      ramTotalMb: 8192,
+      ramReserveMb: 3072,
+      vcpuCapacity: 16,
+    }, "free")).toBe(5);
   });
 });
 
@@ -115,7 +134,7 @@ describe("HostRegistrationSchema", () => {
       ...host,
       daemonPublicKey: "c2hvcnQ=",
     }).success).toBe(false);
-    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 20 }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 25 }).success).toBe(false);
     expect(HostRegistrationSchema.safeParse({
       ...host,
       ramTotalMb: 65536,
@@ -130,12 +149,12 @@ describe("HostRegistrationSchema", () => {
       ramReserveMb: 3072,
       vcpuCapacity: 16,
       diskTotalGb: 100,
-      maxTenants: 3,
+      maxTenants: 5,
     };
     expect(HostRegistrationSchema.safeParse(ramConstrained).success).toBe(true);
     expect(HostRegistrationSchema.safeParse({
       ...ramConstrained,
-      maxTenants: 4,
+      maxTenants: 6,
     }).success).toBe(false);
 
     const cpuConstrained = {
@@ -144,7 +163,7 @@ describe("HostRegistrationSchema", () => {
       ramReserveMb: 3072,
       vcpuCapacity: 4,
       diskTotalGb: 100,
-      maxTenants: 2,
+      maxTenants: 4,
     };
     expect(HostRegistrationSchema.safeParse(cpuConstrained).success).toBe(true);
     expect(HostRegistrationSchema.safeParse({

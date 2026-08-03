@@ -622,9 +622,9 @@ Placement requires all of the following at reservation time:
 
 - an exact host-class match and, for dedicated, an exact assigned-user match;
 - a free tenant slot below `max_tenants`;
-- enough actual vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
+- enough rounded vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
   from the advertised 1/2-vCPU plan value stored on the container;
-- enough non-reserved total system RAM;
+- enough rounded 1.25x non-reserved RAM capacity;
 - enough registered disk capacity for both home and root quotas;
 - a recent successful signed daemon stats response with no current failure;
 - a reported daemon release identity (legacy reduced stats never admit work);
@@ -637,7 +637,9 @@ hosts may therefore register 4 vCPU/8 GiB and 8 vCPU/16 GiB respectively, while
 a regular host may independently register 8 vCPU/16 GiB. Bootstrap derives
 each machine's tenant ceiling from its online-vCPU overcommit ceiling,
 allocatable RAM, safe storage fraction, swap where the class uses it,
-isolated-ID ranges, and class resource shape. The vCPU multiplier defaults to
+isolated-ID ranges, and class resource shape. CPU and RAM limits are rounded
+up after applying 4x CPU and 1.25x RAM oversubscription; the CPU/RAM ceiling
+is the smaller of those two limits. The vCPU multiplier defaults to
 the supported maximum of 4 and may be lowered per host. It reserves the larger
 of 3 GiB (3072 MiB) or a rounded-up eight percent of detected total system RAM;
 an operator may configure a larger reserve. One failed daemon health check

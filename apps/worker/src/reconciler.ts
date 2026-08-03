@@ -3,7 +3,12 @@
  * runs here so no state depends on a user or webhook happening to arrive.
  * Clock is injected for tests ("time never passes in tests", §18).
  */
-import { decryptJsonAtRest, HOST_TYPES } from "@workbench/contract";
+import {
+  decryptJsonAtRest,
+  HOST_RAM_OVERCOMMIT_DENOMINATOR,
+  HOST_RAM_OVERCOMMIT_NUMERATOR,
+  HOST_TYPES,
+} from "@workbench/contract";
 import { daemonStats } from "./daemon.js";
 import {
   cpuReservation,
@@ -287,9 +292,18 @@ async function placeWaitlistedContainer(
              AND h.max_tenants > (
                SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
              )
-             AND h.vcpu_capacity - h.vcpu_allocated >= CASE containers.tier
-               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END
-             AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= containers.ram_mb
+             AND h.vcpu_allocated + CASE containers.tier
+               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END <=
+               ((h.vcpu_capacity + CASE containers.tier
+                 WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END - 1)
+                / CASE containers.tier
+                    WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END)
+               * CASE containers.tier
+                   WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END
+             AND h.ram_allocated_mb + containers.ram_mb <=
+               (((h.ram_total_mb - h.ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
+                 + (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * containers.ram_mb) - 1)
+                / (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * containers.ram_mb)) * containers.ram_mb
              AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0

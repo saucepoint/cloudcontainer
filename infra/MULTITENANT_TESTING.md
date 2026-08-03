@@ -48,8 +48,8 @@ For the class under test, independently compute:
 
     ram_reserve_mb = max(3072, ceil(ram_total_mb * 8 / 100), configured_higher_reserve)
     vcpu_capacity = online_host_vcpus * vcpu_overcommit  # integer 1..4; default 4
-    cpu_slots = floor(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 3 paid
-    ram_slots = floor((ram_total_mb - ram_reserve_mb) / tenant_ram_mb)
+    cpu_slots = ceil(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 3 paid
+    ram_slots = ceil((ram_total_mb - ram_reserve_mb) * 1.25 / tenant_ram_mb)
     disk_slots = floor(safe_disk_gb / (2 * tenant_disk_gb))
     swap_slots = floor(host_swap_mb / tenant_swap_mb)  # budget only
     idmap_slots = floor(min(root_subuid_count, root_subgid_count) / 65536) - 1  # explicit ranges only
@@ -73,10 +73,10 @@ reactivates only when that host began active.
 
 Register two budget shapes independently, for example 4 vCPU/8 GiB and
 8 vCPU/16 GiB, plus an 8-vCPU/16-GiB regular host. At the default 4x policy,
-their CPU/RAM slot counts are 8/3, 16/8, and 10/3 respectively, before disk,
-swap, and ID-map ceilings. RAM must therefore bind these examples at 3, 8, and
-3 tenants. Also test a CPU-bound shape: a 4-vCPU/16-GiB budget host with
-`--vcpu-overcommit 1` has 2 CPU slots and 8 RAM slots. Confirm the scheduler
+their CPU/RAM slot counts are 16/5, 32/12, and 11/5 respectively, before disk,
+swap, and ID-map ceilings. RAM must therefore bind these examples at 5, 12, and
+5 tenants. Also test a CPU-bound shape: a 4-vCPU/16-GiB budget host with
+`--vcpu-overcommit 1` has 4 CPU slots and 11 RAM slots. Confirm the scheduler
 scores every host's own CPU, allocatable RAM, disk, and `max_tenants` instead
 of applying a class-wide machine size.
 

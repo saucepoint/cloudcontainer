@@ -50,6 +50,8 @@ fi
 
 HOST_TYPE="${HOST_TYPE:-budget}"
 MAX_VCPU_OVERCOMMIT=4
+HOST_RAM_OVERCOMMIT_NUMERATOR=5
+HOST_RAM_OVERCOMMIT_DENOMINATOR=4
 MIN_HOST_RAM_RESERVE_MB=3072
 HOST_RAM_RESERVE_PERCENT=8
 VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-$MAX_VCPU_OVERCOMMIT}"
@@ -159,8 +161,12 @@ calculate_host_capacity() {
   fi
   DISK_GB=$(( POOL_TOTAL_BYTES * DISK_CAPACITY_PERCENT / 100 / 1073741824 ))
 
-  RAM_SLOTS=$(( RAM_CAPACITY_MB / TENANT_RAM_MB ))
-  CPU_SLOTS=$(( VCPU_CAPACITY / TENANT_CPU ))
+  RAM_SLOTS=$((
+    (RAM_CAPACITY_MB * HOST_RAM_OVERCOMMIT_NUMERATOR \
+      + HOST_RAM_OVERCOMMIT_DENOMINATOR * TENANT_RAM_MB - 1) \
+    / (HOST_RAM_OVERCOMMIT_DENOMINATOR * TENANT_RAM_MB)
+  ))
+  CPU_SLOTS=$(( (VCPU_CAPACITY + TENANT_CPU - 1) / TENANT_CPU ))
   DISK_SLOTS=$(( DISK_GB / TENANT_DISK_RESERVATION_GB ))
   TENANT_SLOTS=$RAM_SLOTS
   if (( CPU_SLOTS < TENANT_SLOTS )); then TENANT_SLOTS=$CPU_SLOTS; fi
@@ -196,6 +202,11 @@ calculate_host_capacity() {
     echo "   cpu=$CPU_SLOTS ram=$RAM_SLOTS disk=$DISK_SLOTS swap=$SWAP_SLOTS idmap=$IDMAP_SLOTS" >&2
     return 1
   fi
+
+  # Incus project limits cover the logical reservations admitted by the final
+  # tenant ceiling. RAM slots already include the 1.25x host overcommit.
+  CPU_LIMIT=$(( TENANT_SLOTS * TENANT_CPU ))
+  RAM_LIMIT_MB=$(( TENANT_SLOTS * TENANT_RAM_MB ))
 
   # One distinct 65,536-ID range per tenant plus the trusted image-build map.
   IDMAP_REQUIRED=$(( (TENANT_SLOTS + 1) * 65536 ))

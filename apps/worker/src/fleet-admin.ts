@@ -1,7 +1,12 @@
 import {
   ContainerRehomeSchema,
+  HOST_RAM_OVERCOMMIT_DENOMINATOR,
+  HOST_RAM_OVERCOMMIT_NUMERATOR,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
+  hostCpuRamTenantCeiling,
+  cpuReservationCeiling,
+  ramReservationCeiling,
   SERVICE_PLANS,
   TIERS,
   type HostCapacity,
@@ -115,10 +120,10 @@ function capacityError(
   capacity: HostCapacity,
   hostType = host.host_type,
 ): string | null {
-  const tier = hostType === "budget" ? TIERS.free : TIERS.paid;
+  const tierName = hostType === "budget" ? "free" : "paid";
+  const tier = TIERS[tierName];
   const resourceCeiling = Math.min(
-    Math.floor(capacity.vcpuCapacity / tier.provisionedCpu),
-    Math.floor((capacity.ramTotalMb - capacity.ramReserveMb) / tier.ramMb),
+    hostCpuRamTenantCeiling(capacity, tierName),
     Math.floor(capacity.diskTotalGb / (tier.diskGb * 2)),
   );
   if (capacity.maxTenants > resourceCeiling) {
@@ -130,10 +135,16 @@ function capacityError(
   if (capacity.maxTenants < host.tenant_count) {
     return "tenant ceiling is below the current tenant count";
   }
-  if (capacity.vcpuCapacity < host.vcpu_allocated) {
+  if (cpuReservationCeiling(capacity.vcpuCapacity, tierName) < host.vcpu_allocated) {
     return "vCPU capacity is below the current reservation";
   }
-  if (capacity.ramTotalMb - capacity.ramReserveMb < host.ram_allocated_mb) {
+  if (
+    ramReservationCeiling(
+      capacity.ramTotalMb,
+      capacity.ramReserveMb,
+      tierName,
+    ) < host.ram_allocated_mb
+  ) {
     return "RAM capacity is below the current reservation";
   }
   if (capacity.diskTotalGb < host.disk_allocated_gb) {
@@ -561,13 +572,18 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
       return c.json({ error: "a dead host cannot be returned to service in place" }, 409);
     }
     if (requestedStatus === "active") {
+      const tierName = host.host_type === "budget" ? "free" : "paid";
       if (host.host_type === "dedicated" && !host.dedicated_user_id) {
         return c.json({ error: "assign a dedicated account before activation" }, 409);
       }
       if (
         host.tenant_count > host.max_tenants ||
-        host.vcpu_allocated > host.vcpu_capacity ||
-        host.ram_allocated_mb > host.ram_total_mb - host.ram_reserve_mb ||
+        host.vcpu_allocated > cpuReservationCeiling(host.vcpu_capacity, tierName) ||
+        host.ram_allocated_mb > ramReservationCeiling(
+          host.ram_total_mb,
+          host.ram_reserve_mb,
+          tierName,
+        ) ||
         host.disk_allocated_gb > host.disk_total_gb
       ) {
         return c.json({ error: "registered capacity does not cover existing reservations" }, 409);
@@ -604,8 +620,15 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
            AND consecutive_failures = 0 AND daemon_version IS NOT NULL
            AND reported_ram_total_mb IS NOT NULL
            AND reported_cpu_logical IS NOT NULL
-           AND vcpu_allocated <= vcpu_capacity
-           AND ram_allocated_mb <= ram_total_mb - ram_reserve_mb
+           AND vcpu_allocated <=
+             ((vcpu_capacity + CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END - 1)
+              / CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END)
+             * CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END
+           AND ram_allocated_mb <=
+             ((((ram_total_mb - ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
+                + (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END) - 1)
+               / (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END))
+              * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END)
            AND disk_allocated_gb <= disk_total_gb
            AND max_tenants >= (SELECT COUNT(*) FROM containers WHERE host_id = hosts.id)
            AND (host_type <> 'dedicated' OR dedicated_user_id IS NOT NULL)`,

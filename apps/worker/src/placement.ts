@@ -1,4 +1,6 @@
 import {
+  HOST_RAM_OVERCOMMIT_DENOMINATOR,
+  HOST_RAM_OVERCOMMIT_NUMERATOR,
   SERVICE_PLANS,
   TIERS,
   type Agent,
@@ -92,20 +94,27 @@ export async function startProvision(
     try {
       results = (await env.DB.batch([
         env.DB.prepare(
-          `INSERT INTO containers
+          `WITH request(cpu, ram_mb, disk_gb, ram_overcommit_num, ram_overcommit_den) AS (
+             VALUES (?, ?, ?, ?, ?)
+           )
+           INSERT INTO containers
              (id, user_id, host_id, ssh_port, agents, github_repos, tier,
               placement_class, cpu, ram_mb, disk_gb, status, created_at)
            SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
-           FROM hosts h
+           FROM hosts h, request r
            WHERE h.id = ? AND h.status = 'active'
              AND h.host_type = ?
              AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?)
              AND h.max_tenants > (
                SELECT COUNT(*) FROM containers existing WHERE existing.host_id = h.id
              )
-             AND h.vcpu_capacity - h.vcpu_allocated >= ?
-             AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
-             AND h.disk_total_gb - h.disk_allocated_gb >= ?
+             AND h.vcpu_allocated + r.cpu <=
+               ((h.vcpu_capacity + r.cpu - 1) / r.cpu) * r.cpu
+             AND h.ram_allocated_mb + r.ram_mb <=
+               (((h.ram_total_mb - h.ram_reserve_mb) * r.ram_overcommit_num
+                 + (r.ram_overcommit_den * r.ram_mb) - 1)
+                / (r.ram_overcommit_den * r.ram_mb)) * r.ram_mb
+             AND h.disk_total_gb - h.disk_allocated_gb >= r.disk_gb
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
              AND h.daemon_version IS NOT NULL
@@ -113,6 +122,11 @@ export async function startProvision(
              AND h.reported_cpu_logical IS NOT NULL
            ON CONFLICT(host_id, ssh_port) DO NOTHING`,
         ).bind(
+          reservedCpu,
+          tier.ramMb,
+          reservedDiskGb,
+          HOST_RAM_OVERCOMMIT_NUMERATOR,
+          HOST_RAM_OVERCOMMIT_DENOMINATOR,
           containerId,
           user.id,
           port,
@@ -127,9 +141,6 @@ export async function startProvision(
           host.id,
           placementClass,
           user.id,
-          reservedCpu,
-          tier.ramMb,
-          reservedDiskGb,
           heartbeatCutoff,
         ),
         env.DB.prepare(

@@ -1,4 +1,10 @@
-import { TIERS, type HostType, type Tier } from "@workbench/contract";
+import {
+  HOST_RAM_OVERCOMMIT_DENOMINATOR,
+  HOST_RAM_OVERCOMMIT_NUMERATOR,
+  TIERS,
+  type HostType,
+  type Tier,
+} from "@workbench/contract";
 import type { Bindings, HostRow } from "./types.js";
 
 /** Home and disposable rootfs each receive the advertised disk cap. */
@@ -27,9 +33,9 @@ export interface PlacementRequest {
 
 /**
  * Select an eligible host with the most complete placements still available
- * across its tenant, CPU, RAM, and disk ceilings. Dedicated hosts additionally
- * require an explicit account assignment. The caller must repeat every check
- * in its write transaction before reserving the host.
+ * across its tenant, rounded CPU/RAM, and disk ceilings. Dedicated hosts
+ * additionally require an explicit account assignment. The caller must repeat
+ * every check in its write transaction before reserving the host.
  */
 export async function pickHost(
   env: Bindings,
@@ -42,8 +48,10 @@ export async function pickHost(
      WHERE h.status = 'active'
        AND h.host_type = ?1
        AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?2)
-       AND h.vcpu_capacity - h.vcpu_allocated >= ?3
-       AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?4
+       AND h.vcpu_allocated + ?3 <=
+         ((h.vcpu_capacity + ?3 - 1) / ?3) * ?3
+       AND h.ram_allocated_mb + ?4 <=
+         (((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
        AND h.disk_total_gb - h.disk_allocated_gb >= ?5
        AND h.max_tenants > (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id)
        AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?6
@@ -54,8 +62,13 @@ export async function pickHost(
        AND h.id NOT IN (SELECT value FROM json_each(?7))
      ORDER BY MIN(
                 h.max_tenants - (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
-                CAST((h.vcpu_capacity - h.vcpu_allocated) / ?3 AS INTEGER),
-                CAST((h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb) / ?4 AS INTEGER),
+                CAST((
+                  (((h.vcpu_capacity + ?3 - 1) / ?3) * ?3 - h.vcpu_allocated) / ?3
+                ) AS INTEGER),
+                CAST((
+                  ((((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
+                    - h.ram_allocated_mb) / ?4
+                ) AS INTEGER),
                 CAST((h.disk_total_gb - h.disk_allocated_gb) / ?5 AS INTEGER)
               ) DESC,
               (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
@@ -70,6 +83,8 @@ export async function pickHost(
       request.diskGb,
       now() - HOST_HEARTBEAT_MAX_AGE_MS,
       JSON.stringify(excludedHostIds),
+      HOST_RAM_OVERCOMMIT_NUMERATOR,
+      HOST_RAM_OVERCOMMIT_DENOMINATOR,
     )
     .first<HostRow>();
 }

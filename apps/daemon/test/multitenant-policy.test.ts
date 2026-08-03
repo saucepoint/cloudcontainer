@@ -69,7 +69,7 @@ describe("restricted tenant project policy", () => {
     expect(auditPolicy).toContain('"$TENANT_CPU"');
   });
 
-  it("reserves 3 GiB or rounded-up 8% RAM and caps online-vCPU overcommit at 4x", () => {
+  it("rounds up 4x CPU and 1.25x RAM tenant ceilings", () => {
     const values = execFileSync(
       "bash",
       [
@@ -101,6 +101,9 @@ printf '%s %s %s %s %s\n' \
     expect(values).toBe("3072 3073 5243 4 4");
     expect(hostPolicy).toContain("HOST_VCPU_COUNT=$(nproc)");
     expect(hostPolicy).toContain("VCPU_CAPACITY=$(( HOST_VCPU_COUNT * VCPU_OVERCOMMIT ))");
+    expect(hostPolicy).toContain("HOST_RAM_OVERCOMMIT_NUMERATOR=5");
+    expect(hostPolicy).toContain("HOST_RAM_OVERCOMMIT_DENOMINATOR=4");
+    expect(hostPolicy).toContain("CPU_SLOTS=$(( (VCPU_CAPACITY + TENANT_CPU - 1) / TENANT_CPU ))");
     expect(hostController).toContain("MAX_VCPU_OVERCOMMIT=4");
     expect(hostController).toContain("Reservations per online host vCPU (default/max: 4)");
   });
@@ -112,6 +115,10 @@ printf '%s %s %s %s %s\n' \
     expect(capacityReport).toContain('calculate_host_capacity "$POOL_NAME"');
     expect(hostController).toContain("refresh_host_capacity");
     expect(hostController).toContain("'{capacity: $capacity}'");
+    expect(configurePolicy).toContain('limits.cpu="$CPU_LIMIT"');
+    expect(configurePolicy).toContain('limits.memory="${RAM_LIMIT_MB}MiB"');
+    expect(auditPolicy).toContain('"$CPU_LIMIT"');
+    expect(auditPolicy).toContain('"${RAM_LIMIT_MB}MiB"');
   });
 
   it("uses project-aware REST URLs for raw Incus instance queries", () => {
