@@ -232,6 +232,7 @@ printf 'WB_DAEMON_VERSION=%s\n' "$DAEMON_VERSION" > /etc/workbench/release.env
 cp "$REPO_DIR/apps/daemon/systemd/workbench-daemon.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now workbench-daemon
+systemctl restart workbench-daemon
 
 echo "== [6/6] register host =="
 IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
