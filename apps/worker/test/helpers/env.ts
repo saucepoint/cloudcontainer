@@ -119,13 +119,18 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
 
 // -- seed rows -------------------------------------------------------------------
 
-export async function seedUser(env: Bindings, id = "user-1"): Promise<UserRow> {
+export async function seedUser(
+  env: Bindings,
+  id = "user-1",
+  subscriptionStatus = "free",
+): Promise<UserRow> {
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO users
-       (id, name, email, email_verified, verified_at, verification_method, created_at, updated_at)
-     VALUES (?, 'Test user', ?, 1, ?, 'development', ?, ?)`,
-  ).bind(id, `${id}@example.test`, now, now, now).run();
+       (id, name, email, email_verified, subscription_status, verified_at,
+        verification_method, created_at, updated_at)
+     VALUES (?, 'Test user', ?, 1, ?, ?, 'development', ?, ?)`,
+  ).bind(id, `${id}@example.test`, subscriptionStatus, now, now, now).run();
   const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
   if (!row) throw new Error("seedUser failed");
   return row;
@@ -153,7 +158,7 @@ export async function seedHost(
     ram_total_mb: 65536,
     ram_allocated_mb: 0,
     ram_reserve_mb: 16384,
-    vcpu_capacity: 72,
+    vcpu_capacity: 64,
     vcpu_allocated: 0,
     disk_total_gb: 1000,
     disk_allocated_gb: 0,
@@ -161,20 +166,37 @@ export async function seedHost(
     joined_at: Date.now(),
     last_seen_at: Date.now(),
     consecutive_failures: 0,
+    host_type: "budget",
+    max_tenants: 32,
+    dedicated_user_id: null,
+    management_hostname: "host-1.workbench.test",
+    management_port: 22,
+    management_user: "root",
+    daemon_version: "test-release",
+    reported_ram_total_mb: 65536,
+    reported_cpu_logical: 16,
+    generation: 1,
+    retired_at: null,
     ...overrides,
   };
   await env.DB.prepare(
     `INSERT INTO hosts (id, ipv4, ipv6, ssh_hostname, daemon_endpoint, daemon_cert_fp, daemon_pubkey,
        ram_total_mb, ram_allocated_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
-       disk_total_gb, disk_allocated_gb, status, joined_at, last_seen_at, consecutive_failures)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       disk_total_gb, disk_allocated_gb, status, joined_at, last_seen_at, consecutive_failures,
+       host_type, max_tenants, dedicated_user_id, management_hostname, management_port,
+       management_user, daemon_version, reported_ram_total_mb, reported_cpu_logical,
+       generation, retired_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       host.id, host.ipv4, host.ipv6, host.ssh_hostname, host.daemon_endpoint,
       host.daemon_cert_fp, host.daemon_pubkey, host.ram_total_mb, host.ram_allocated_mb,
       host.ram_reserve_mb, host.vcpu_capacity, host.vcpu_allocated, host.disk_total_gb,
       host.disk_allocated_gb, host.status, host.joined_at, host.last_seen_at,
-      host.consecutive_failures,
+      host.consecutive_failures, host.host_type, host.max_tenants, host.dedicated_user_id,
+      host.management_hostname, host.management_port, host.management_user, host.daemon_version,
+      host.reported_ram_total_mb, host.reported_cpu_logical,
+      host.generation, host.retired_at,
     )
     .run();
   return host;
@@ -192,8 +214,9 @@ export async function seedContainer(
     agents: JSON.stringify(["claude"]),
     github_repos: "[]",
     tier: "free",
+    placement_class: "budget",
     cpu: 1,
-    ram_mb: 2048,
+    ram_mb: 1536,
     disk_gb: 5,
     status: "running",
     status_detail: null,
@@ -201,18 +224,26 @@ export async function seedContainer(
     suspended_at: null,
     created_at: Date.now(),
     last_upgraded_at: null,
+    rehome_tier: null,
+    rehome_placement_class: null,
+    rehome_requested_at: null,
     ...overrides,
   };
   await env.DB.prepare(
-    `INSERT INTO containers (id, user_id, host_id, ssh_port, agents, tier, cpu, ram_mb, disk_gb,
-       status, status_detail, host_key_fingerprints, suspended_at, created_at, last_upgraded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO containers (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+       cpu, ram_mb, disk_gb, status, status_detail, host_key_fingerprints, suspended_at,
+       created_at, last_upgraded_at, rehome_tier, rehome_placement_class,
+       rehome_requested_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       container.id, container.user_id, container.host_id, container.ssh_port,
-      container.agents, container.tier, container.cpu, container.ram_mb, container.disk_gb,
+      container.agents, container.tier, container.placement_class, container.cpu,
+      container.ram_mb, container.disk_gb,
       container.status, container.status_detail, container.host_key_fingerprints,
       container.suspended_at, container.created_at, container.last_upgraded_at,
+      container.rehome_tier, container.rehome_placement_class,
+      container.rehome_requested_at,
     )
     .run();
   return container;

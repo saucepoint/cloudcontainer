@@ -1085,4 +1085,20 @@ describe("account deletion (U8)", () => {
     expect(res.status).toBe(200);
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
+
+  it("drops a hostless ineligible-plan error after forced host evacuation", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, {
+      status: "error",
+      status_detail: "account plan is ineligible; update it before re-homing",
+      host_id: null,
+      ssh_port: null,
+    });
+    const headers = await login(env, user);
+
+    const res = await app().request("/api/account/delete", { method: "POST", headers }, env);
+    expect(res.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = 'user-1'").first()).toBeNull();
+  });
 });

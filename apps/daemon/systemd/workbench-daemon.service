@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 Environment=WB_DAEMON_CONFIG=/etc/workbench/daemon.json
+EnvironmentFile=-/etc/workbench/release.env
 WorkingDirectory=/opt/workbench/apps/daemon
 ExecStart=/usr/bin/node /opt/workbench/node_modules/.bin/tsx src/index.ts
 Restart=always

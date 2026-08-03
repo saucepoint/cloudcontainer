@@ -12,6 +12,7 @@
     "dev:worker": "npm run dev -w apps/worker",
     "dev:daemon": "npm run dev -w apps/daemon",
     "create:invite": "npm run invite:create -w apps/worker --",
+    "hostctl": "bash ./infra/hostctl.sh",
     "deploy": "bash ./deploy.sh",
     "deploy:worker": "npm run deploy -w apps/worker",
     "deploy:dry-run": "bash ./deploy.sh --dry-run"

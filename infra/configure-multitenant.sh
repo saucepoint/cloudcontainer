@@ -5,33 +5,25 @@
 # instances already exist.
 set -euo pipefail
 
-POOL_NAME="${POOL_NAME:-default}"
-PROJECT_NAME="${PROJECT_NAME:-workbench}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DAEMON_CONFIG="${WB_DAEMON_CONFIG:-/etc/workbench/daemon.json}"
+if [[ -f "$DAEMON_CONFIG" ]]; then
+  POOL_NAME="${POOL_NAME:-$(jq -er '.storagePool // "default"' "$DAEMON_CONFIG")}"
+  PROJECT_NAME="${PROJECT_NAME:-$(jq -er '.project // "workbench"' "$DAEMON_CONFIG")}"
+else
+  POOL_NAME="${POOL_NAME:-default}"
+  PROJECT_NAME="${PROJECT_NAME:-workbench}"
+fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
-DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
-VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-3}"
-TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
-TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
-HOST_RAM_RESERVE_MB=2048
-TENANT_RAM_MB=1536
-TENANT_SWAP_MB=1024
+if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
+  HOST_TYPE=$(jq -er '.hostType // "budget"' "$DAEMON_CONFIG")
+fi
+: "${HOST_TYPE:?HOST_TYPE is required when daemon.json is unavailable}"
+# shellcheck source=infra/host-policy.sh
+source "$SCRIPT_DIR/host-policy.sh"
 
-if ! [[ "$DISK_CAPACITY_PERCENT" =~ ^[0-9]+$ ]] || \
-  (( DISK_CAPACITY_PERCENT < 1 || DISK_CAPACITY_PERCENT > 90 )); then
-  echo "!! DISK_CAPACITY_PERCENT must be an integer from 1 through 90"
-  exit 1
-fi
-if ! [[ "$VCPU_OVERCOMMIT" =~ ^[0-9]+$ ]] || \
-  (( VCPU_OVERCOMMIT < 1 || VCPU_OVERCOMMIT > 8 )); then
-  echo "!! VCPU_OVERCOMMIT must be an integer from 1 through 8"
-  exit 1
-fi
-if ! [[ "$TENANT_PROCESS_LIMIT" =~ ^[0-9]+$ ]] || (( TENANT_PROCESS_LIMIT < 64 )); then
-  echo "!! TENANT_PROCESS_LIMIT must be an integer of at least 64"
-  exit 1
-fi
 if ! incus query /1.0 | jq -e \
   '(.metadata.api_extensions // .api_extensions) | index("instance_memory_swap_bytes") != null' >/dev/null; then
   echo "!! Incus must support byte-valued limits.memory.swap (instance_memory_swap_bytes)"
@@ -60,58 +52,25 @@ incus network show "$NETWORK_NAME" >/dev/null 2>&1 || incus network create "$NET
 incus network set "$NETWORK_NAME" ipv4.firewall=true
 incus network set "$NETWORK_NAME" ipv6.firewall=true
 incus profile show default >/dev/null 2>&1 || incus profile create default
-if ! incus profile device get default root path >/dev/null 2>&1; then
+DEFAULT_ROOT_POOL=$(incus profile device get default root pool 2>/dev/null || true)
+if [[ -z "$DEFAULT_ROOT_POOL" ]]; then
   incus profile device add default root disk path=/ pool="$POOL_NAME"
+elif [[ "$DEFAULT_ROOT_POOL" != "$POOL_NAME" ]]; then
+  echo "!! image-build profile root uses pool $DEFAULT_ROOT_POOL instead of $POOL_NAME"
+  exit 1
 fi
-if ! incus profile device get default eth0 network >/dev/null 2>&1; then
+DEFAULT_NETWORK=$(incus profile device get default eth0 network 2>/dev/null || true)
+if [[ -z "$DEFAULT_NETWORK" ]]; then
   incus profile device add default eth0 nic network="$NETWORK_NAME" name=eth0
-fi
-
-RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-# Register all detected physical RAM and retain a fixed 2 GiB host reserve.
-# The scheduler allocates ram_total_mb - ram_reserve_mb.
-RAM_TOTAL_MB=$RAM_MB
-RAM_RESERVE=$HOST_RAM_RESERVE_MB
-RAM_CAPACITY_MB=$(( RAM_TOTAL_MB - RAM_RESERVE ))
-PHYSICAL_CORES=0
-if command -v lscpu >/dev/null; then
-  PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET 2>/dev/null | awk -F, '
-    !/^#/ { seen[$1 "," $2] = 1 }
-    END { print length(seen) }
-  ' || true)
-fi
-if [[ -z "$PHYSICAL_CORES" || "$PHYSICAL_CORES" -lt 1 ]]; then
-  PHYSICAL_CORES=$(nproc)
-fi
-VCPU_CAPACITY=$(( PHYSICAL_CORES * VCPU_OVERCOMMIT ))
-POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" | \
-  jq -er '.metadata.space.total // .space.total')
-DISK_GB=$(( POOL_TOTAL_BYTES * DISK_CAPACITY_PERCENT / 100 / 1073741824 ))
-
-# The current service tier is 1 vCPU, 1.5 GiB RAM, 1 GiB swap, and 5 GiB each
-# for root/home. Swap is capped per tenant by the daemon and must also exist on
-# the host in sufficient aggregate capacity.
-RAM_SLOTS=$(( RAM_CAPACITY_MB / TENANT_RAM_MB ))
-CPU_SLOTS=$VCPU_CAPACITY
-DISK_SLOTS=$(( DISK_GB / 10 ))
-TENANT_SLOTS=$RAM_SLOTS
-(( CPU_SLOTS < TENANT_SLOTS )) && TENANT_SLOTS=$CPU_SLOTS
-(( DISK_SLOTS < TENANT_SLOTS )) && TENANT_SLOTS=$DISK_SLOTS
-if [[ "$TENANT_SLOTS" -lt 1 ]]; then
-  echo "!! host has no complete tenant slot after reserves (cpu=$CPU_SLOTS ram=$RAM_SLOTS disk=$DISK_SLOTS)"
+elif [[ "$DEFAULT_NETWORK" != "$NETWORK_NAME" ]]; then
+  echo "!! image-build profile eth0 uses network $DEFAULT_NETWORK instead of $NETWORK_NAME"
   exit 1
 fi
-SWAP_TOTAL_MB=$(awk '/SwapTotal/ { print int($2 / 1024) }' /proc/meminfo)
-SWAP_REQUIRED_MB=$(( TENANT_SLOTS * TENANT_SWAP_MB ))
-if (( SWAP_TOTAL_MB < SWAP_REQUIRED_MB )); then
-  echo "!! host swap is too small for $TENANT_SLOTS tenant slots"
-  echo "   need at least ${SWAP_REQUIRED_MB}MiB; found ${SWAP_TOTAL_MB}MiB"
-  exit 1
-fi
+
+calculate_host_capacity "$POOL_NAME"
 
 # Isolated containers need a distinct 65,536-ID range. Reserve one additional
 # range for the ordinary default map used by trusted image-build containers.
-IDMAP_REQUIRED=$(( (TENANT_SLOTS + 1) * 65536 ))
 if [[ -s /etc/subuid || -s /etc/subgid ]]; then
   SUBUID_TOTAL=$(awk -F: '$1 == "root" { total += int($3 / 65536) * 65536 } END { print total + 0 }' /etc/subuid 2>/dev/null || true)
   SUBGID_TOTAL=$(awk -F: '$1 == "root" { total += int($3 / 65536) * 65536 } END { print total + 0 }' /etc/subgid 2>/dev/null || true)
@@ -130,6 +89,30 @@ if ! incus project show "$PROJECT_NAME" >/dev/null 2>&1; then
     --config features.networks=false \
     --config features.profiles=true \
     --config features.storage.volumes=true
+fi
+
+# Refuse unknown, mixed-class, or over-capacity contents before changing
+# aggregate or per-instance limits.
+EXISTING_TENANTS=0
+while IFS= read -r name; do
+  [[ -n "$name" ]] || continue
+  EXISTING_TENANTS=$(( EXISTING_TENANTS + 1 ))
+  CURRENT_ID=$(incus --project "$PROJECT_NAME" config get \
+    "$name" user.workbench.id 2>/dev/null || true)
+  if [[ -z "$CURRENT_ID" ]]; then
+    echo "!! $name has no Workbench control-plane identity; refusing to mutate it"
+    exit 1
+  fi
+  CURRENT_TIER=$(incus --project "$PROJECT_NAME" config get \
+    "$name" user.workbench.tier 2>/dev/null || true)
+  if [[ -n "$CURRENT_TIER" && "$CURRENT_TIER" != "$TENANT_TIER" ]]; then
+    echo "!! $name belongs to tier $CURRENT_TIER, not $TENANT_TIER; host classes cannot be mixed"
+    exit 1
+  fi
+done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
+if (( EXISTING_TENANTS > TENANT_SLOTS )); then
+  echo "!! project has $EXISTING_TENANTS tenants but this host now supports only $TENANT_SLOTS"
+  exit 1
 fi
 
 # Restricted-project defaults block raw LXC config, nesting, privileged
@@ -167,7 +150,7 @@ elif [[ "$TENANT_ROOT_POOL" != "$POOL_NAME" ]]; then
   echo "!! tenant profile root uses pool $TENANT_ROOT_POOL instead of $POOL_NAME"
   exit 1
 fi
-incus --project "$PROJECT_NAME" profile device set default root size=5GiB
+incus --project "$PROJECT_NAME" profile device set default root size="${TENANT_DISK_GB}GiB"
 TENANT_NETWORK=$(incus --project "$PROJECT_NAME" profile device get default eth0 network 2>/dev/null || true)
 if [[ -z "$TENANT_NETWORK" ]]; then
   incus --project "$PROJECT_NAME" profile device add default eth0 nic \
@@ -182,15 +165,44 @@ incus --project "$PROJECT_NAME" profile device set default eth0 security.ipv6_fi
 incus --project "$PROJECT_NAME" profile device set default eth0 security.port_isolation=true
 incus --project "$PROJECT_NAME" profile device set default eth0 limits.max="$TENANT_NETWORK_LIMIT"
 
-# This release has only free tenants. Reconcile existing instances as part of
-# the drained host-policy rollout so D1 accounting and live cgroup limits do
-# not diverge until a later rebuild.
+# Reconcile existing instances while the host is drained. Host classes never
+# mix service tiers, so the class policy is the source of truth for every
+# instance in this project.
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
-  # Add swap before lowering RAM so a live tenant never passes through a
-  # transient 1.5 GiB memory-only ceiling.
-  incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap="${TENANT_SWAP_MB}MiB"
+  incus --project "$PROJECT_NAME" config set "$name" limits.cpu="$TENANT_CPU"
+  incus --project "$PROJECT_NAME" config set "$name" limits.cpu.allowance="$(( TENANT_CPU * 100 ))%"
+  # Add swap before a RAM downgrade; raise RAM before removing swap.
+  if (( TENANT_SWAP_MB > 0 )); then
+    incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap="${TENANT_SWAP_MB}MiB"
+  fi
   incus --project "$PROJECT_NAME" config set "$name" limits.memory="${TENANT_RAM_MB}MiB"
+  incus --project "$PROJECT_NAME" config set "$name" limits.memory.enforce=hard
+  if (( TENANT_SWAP_MB == 0 )); then
+    incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap=false
+  fi
+  incus --project "$PROJECT_NAME" config set "$name" limits.processes="$TENANT_PROCESS_LIMIT"
+  incus --project "$PROJECT_NAME" config set "$name" boot.autostart=last-state
+  incus --project "$PROJECT_NAME" config set "$name" boot.autorestart=false
+  incus --project "$PROJECT_NAME" config set "$name" security.privileged=false
+  incus --project "$PROJECT_NAME" config set "$name" security.idmap.isolated=true
+  incus --project "$PROJECT_NAME" config set "$name" security.nesting=false
+  incus --project "$PROJECT_NAME" config set "$name" user.workbench.tier="$TENANT_TIER"
+
+  if incus --project "$PROJECT_NAME" query "/1.0/instances/${name}" | \
+    jq -e '.metadata.devices.root != null' >/dev/null; then
+    incus --project "$PROJECT_NAME" config device set "$name" root size="${TENANT_DISK_GB}GiB"
+  else
+    incus --project "$PROJECT_NAME" config device override "$name" root size="${TENANT_DISK_GB}GiB"
+  fi
+  HOME_POOL=$(incus --project "$PROJECT_NAME" config device get "$name" home pool 2>/dev/null || true)
+  HOME_SOURCE=$(incus --project "$PROJECT_NAME" config device get "$name" home source 2>/dev/null || true)
+  if [[ "$HOME_POOL" != "$POOL_NAME" || -z "$HOME_SOURCE" ]]; then
+    echo "!! $name has no managed home volume in pool $POOL_NAME"
+    exit 1
+  fi
+  incus --project "$PROJECT_NAME" storage volume set \
+    "$POOL_NAME" "$HOME_SOURCE" size="${TENANT_DISK_GB}GiB"
 done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
 
 # Prevent unprivileged tenants from enumerating host scheduler/cgroup names or
@@ -203,4 +215,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED"
+echo "Incus tenant policy: type=$HOST_TYPE tier=$TENANT_TIER project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$VCPU_CAPACITY ram=${RAM_CAPACITY_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"

@@ -18,15 +18,17 @@ import { Incus, realExec } from "./incus.js";
 import { JobConflictError, JobRunner } from "./jobs.js";
 import { Provisioner } from "./provisioner.js";
 
-const VERSION = "0.1.0";
+const DEFAULT_VERSION = process.env.WB_DAEMON_VERSION?.trim() || "development";
 
 export function buildApp(opts: {
   config: ReturnType<typeof loadConfig>;
   incus: Incus;
   runner: JobRunner;
   now?: () => number;
+  version?: string;
 }) {
   const { config, incus, runner } = opts;
+  const version = opts.version ?? DEFAULT_VERSION;
   const nonces = new MemoryNonceStore(opts.now);
   const app = new Hono<{ Variables: { rawBody: string } }>();
 
@@ -59,7 +61,12 @@ export function buildApp(opts: {
   });
 
   app.get("/health", (c) => {
-    const res = HealthResponseSchema.parse({ ok: true, hostId: config.hostId, version: VERSION });
+    const res = HealthResponseSchema.parse({
+      ok: true,
+      hostId: config.hostId,
+      hostType: config.hostType,
+      version,
+    });
     return c.json(res);
   });
 
@@ -67,6 +74,8 @@ export function buildApp(opts: {
     const containers = await incus.list();
     const res: StatsResponse = {
       hostId: config.hostId,
+      hostType: config.hostType,
+      version,
       containers: containers
         .filter((ct) => ct.config["user.workbench.id"])
         .map((ct) => ({

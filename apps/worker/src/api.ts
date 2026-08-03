@@ -24,15 +24,17 @@ import {
   verifyGithubRepositories,
 } from "./github.js";
 import {
+  ContainerPlacementConflictError,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
   getHost,
+  HostJobAdmissionError,
   latestJob,
   latestLifecycleJob,
   LifecycleJobConflictError,
 } from "./jobs.js";
-import { startProvision } from "./placement.js";
+import { ProvisioningNotAllowedError, startProvision } from "./placement.js";
 import { readJsonBody } from "./http.js";
 import {
   markAllNotificationsRead,
@@ -48,7 +50,7 @@ import {
   sshSetupReady,
   validPubkey,
 } from "./ssh.js";
-import type { AppContext } from "./types.js";
+import type { AppContext, ContainerRow } from "./types.js";
 
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
@@ -186,10 +188,18 @@ export const apiRoutes = new Hono<AppContext>()
       });
     }
 
-    const container = await startProvision(c.env, user, {
-      agents,
-      githubRepos,
-    });
+    let container: ContainerRow;
+    try {
+      container = await startProvision(c.env, user, {
+        agents,
+        githubRepos,
+      });
+    } catch (error) {
+      if (error instanceof ProvisioningNotAllowedError) {
+        return c.json({ error: "This account is not currently eligible to provision a workbench." }, 409);
+      }
+      throw error;
+    }
     const job = await latestJob(c.env, container.id);
     return c.json({ container: await containerView(c.env, container, job) }, 202);
   })
@@ -246,7 +256,13 @@ export const apiRoutes = new Hono<AppContext>()
         const job = await enqueueJob(c.env, retryOp, container, host);
         return c.json({ job: { id: job.id, status: job.status } }, 202);
       } catch (error) {
+        if (error instanceof HostJobAdmissionError) {
+          return c.json({ error: "This host is temporarily unavailable for maintenance." }, 409);
+        }
         if (error instanceof LifecycleJobConflictError) {
+          return c.json({ error: error.message }, 409);
+        }
+        if (error instanceof ContainerPlacementConflictError) {
           return c.json({ error: error.message }, 409);
         }
         throw error;
@@ -265,7 +281,13 @@ export const apiRoutes = new Hono<AppContext>()
       const job = await enqueueJob(c.env, op as JobOp, container, host);
       return c.json({ job: { id: job.id, status: job.status } }, 202);
     } catch (error) {
+      if (error instanceof HostJobAdmissionError) {
+        return c.json({ error: "This host is temporarily unavailable for maintenance." }, 409);
+      }
       if (error instanceof LifecycleJobConflictError) {
+        return c.json({ error: error.message }, 409);
+      }
+      if (error instanceof ContainerPlacementConflictError) {
         return c.json({ error: error.message }, 409);
       }
       throw error;
@@ -411,7 +433,8 @@ export const apiRoutes = new Hono<AppContext>()
     // guarded cleanup is a no-op; a later failure rolls the whole purge back.
     const results = (await c.env.DB.batch([
       c.env.DB.prepare(
-        "DELETE FROM containers WHERE user_id = ? AND host_id IS NULL AND status = 'waitlisted'",
+        `DELETE FROM containers WHERE user_id = ? AND host_id IS NULL
+         AND status IN ('waitlisted','error')`,
       ).bind(user.id),
       c.env.DB.prepare(
         `DELETE FROM credentials_encrypted WHERE user_id = ?

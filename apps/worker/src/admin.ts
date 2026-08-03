@@ -1,34 +1,9 @@
 import { Hono } from "hono";
 import type { AppContext, Bindings } from "./types.js";
-import { utf8 } from "@workbench/contract";
 import { hashInviteCode, randomInviteCode } from "./invites.js";
+import { bearerToken, secretMatches } from "./admin-auth.js";
 import { createNotification, NOTIFICATION_SEVERITIES, type NotificationSeverity } from "./notifications.js";
 import { readJsonBody } from "./http.js";
-
-async function secretMatches(provided: string, expected: string): Promise<boolean> {
-  const [providedHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", utf8(provided)),
-    crypto.subtle.digest("SHA-256", utf8(expected)),
-  ]);
-  const { timingSafeEqual } = crypto.subtle;
-  if (typeof timingSafeEqual === "function") {
-    return timingSafeEqual.call(crypto.subtle, providedHash, expectedHash);
-  }
-
-  // Node's WebCrypto test runtime does not expose Cloudflare's timingSafeEqual.
-  // Both inputs are fixed-length hashes and the fallback never exits early.
-  const left = new Uint8Array(providedHash);
-  const right = new Uint8Array(expectedHash);
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
-  }
-  return difference === 0;
-}
-
-function bearerToken(header: string | undefined): string {
-  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-}
 
 function isNotificationSeverity(value: unknown): value is NotificationSeverity {
   return typeof value === "string" && NOTIFICATION_SEVERITIES.some((severity) => severity === value);

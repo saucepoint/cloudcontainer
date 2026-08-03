@@ -1,8 +1,14 @@
+import { TIERS, type HostType, type Tier } from "@workbench/contract";
 import type { Bindings, HostRow } from "./types.js";
 
 /** Home and disposable rootfs each receive the advertised disk cap. */
 export function diskReservationGb(homeDiskGb: number): number {
   return homeDiskGb * 2;
+}
+
+/** Host accounting uses the real Incus CPU limit, not the public plan label. */
+export function cpuReservation(tier: Tier): number {
+  return TIERS[tier].provisionedCpu;
 }
 
 /** Placement requires a recent positive daemon heartbeat. */
@@ -11,36 +17,57 @@ export const HOST_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
 /** Repeated failures quarantine a host before admitting more tenants. */
 export const HOST_FAILURE_THRESHOLD = 3;
 
+export interface PlacementRequest {
+  userId: string;
+  hostType: HostType;
+  cpu: number;
+  ramMb: number;
+  diskGb: number;
+}
+
 /**
- * Select the healthy host with the most free, non-reserved RAM. The caller
- * must repeat the capacity check in its write transaction before reserving it.
+ * Select an eligible host with the most complete placements still available
+ * across its tenant, CPU, RAM, and disk ceilings. Dedicated hosts additionally
+ * require an explicit account assignment. The caller must repeat every check
+ * in its write transaction before reserving the host.
  */
 export async function pickHost(
   env: Bindings,
-  cpu: number,
-  ramMb: number,
-  diskGb: number,
+  request: PlacementRequest,
   now: () => number = Date.now,
   excludedHostIds: readonly string[] = [],
 ): Promise<HostRow | null> {
   return env.DB.prepare(
-    `SELECT * FROM hosts
-     WHERE status = 'active'
-       AND vcpu_capacity - vcpu_allocated >= ?
-       AND ram_total_mb - ram_reserve_mb - ram_allocated_mb >= ?
-       AND disk_total_gb - disk_allocated_gb >= ?
-       AND last_seen_at IS NOT NULL AND last_seen_at >= ?
-       AND consecutive_failures = 0
-       AND id NOT IN (SELECT value FROM json_each(?))
-     ORDER BY ram_total_mb - ram_reserve_mb - ram_allocated_mb DESC,
-              vcpu_capacity - vcpu_allocated DESC,
-              id
+    `SELECT h.* FROM hosts h
+     WHERE h.status = 'active'
+       AND h.host_type = ?1
+       AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?2)
+       AND h.vcpu_capacity - h.vcpu_allocated >= ?3
+       AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?4
+       AND h.disk_total_gb - h.disk_allocated_gb >= ?5
+       AND h.max_tenants > (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id)
+       AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?6
+       AND h.consecutive_failures = 0
+       AND h.daemon_version IS NOT NULL
+       AND h.reported_ram_total_mb IS NOT NULL
+       AND h.reported_cpu_logical IS NOT NULL
+       AND h.id NOT IN (SELECT value FROM json_each(?7))
+     ORDER BY MIN(
+                h.max_tenants - (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
+                CAST((h.vcpu_capacity - h.vcpu_allocated) / ?3 AS INTEGER),
+                CAST((h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb) / ?4 AS INTEGER),
+                CAST((h.disk_total_gb - h.disk_allocated_gb) / ?5 AS INTEGER)
+              ) DESC,
+              (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
+              h.id
      LIMIT 1`,
   )
     .bind(
-      cpu,
-      ramMb,
-      diskGb,
+      request.hostType,
+      request.userId,
+      request.cpu,
+      request.ramMb,
+      request.diskGb,
       now() - HOST_HEARTBEAT_MAX_AGE_MS,
       JSON.stringify(excludedHostIds),
     )

@@ -2,9 +2,9 @@
 
 **Status:** Normative current-release specification
 
-**Version:** 5.0
+**Version:** 6.0
 
-**Date:** 2026-07-24
+**Date:** 2026-08-01
 **Product:** Beginner-friendly, preconfigured remote environments for agentic coding
 
 This document describes the product that is intended to ship now. Anything
@@ -82,11 +82,14 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 - Better Auth account management with Google, GitHub, and passkey sign-in.
 - World ID proof-of-human or single-use administrator-invite eligibility verification.
-- One free environment per account.
-- Free resources, as presented in the web interface: 1 vCPU, 1536 MiB RAM,
-  1024 MiB swap, a 5 GiB persistent home volume, and a 5 GiB disposable root filesystem.
-  The daemon provisions a 2-vCPU Incus limit for developer experience; this
-  provisioned limit is intentionally different from the presented allocation.
+- One environment per account.
+- A free tier with 1 vCPU, 1536 MiB RAM, 1024 MiB swap, a 5 GiB persistent
+  home volume, and a 5 GiB disposable root filesystem. The public 1-vCPU plan
+  is backed by an enforced and reserved 2-vCPU Incus allowance.
+- An operator-entitled paid tier with 2 vCPU, 4096 MiB RAM, no configured swap,
+  an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
+  The public 2-vCPU plan is backed by an enforced and reserved 3-vCPU allowance.
+  Stripe and self-service upgrades are not part of this release.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
 - Optional SSH key, enrollment-token flow, model credentials, Cloudflare, Supabase, and Convex tokens,
@@ -98,26 +101,32 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Dashboard status, a key-gated SSH command and host-key fingerprints,
   post-ready key management, read-only credential presence, lifecycle controls,
   and account deletion.
-- One deployed control-plane Worker and one small development Incus host.
+- One deployed control-plane Worker and a D1-registered fleet of heterogeneous
+  Incus hosts. Budget hosts accept only free accounts, regular hosts accept
+  only paid accounts, and a dedicated host accepts only its assigned paid
+  account and has exactly one tenant slot.
+- An authenticated fleet controller for host onboarding, registration,
+  drain/probe/state operations, destructive host evacuation and container
+  re-homing, class changes, generation replacement, deregistration, policy
+  audit, and sequential daemon rollout.
 
 ### Explicitly not in the current release
 
-- Paid plans, Stripe, email notifications, dunning, or paid upgrades.
+- Stripe, self-service paid upgrades, email notifications, or dunning.
 - Backups, snapshot replication, restore after host loss, or live migration.
 - A web terminal or browser IDE.
 - More than one environment per account.
-- Multi-region placement or automatic host creation.
+- Multi-region placement, automatic host creation, or automatic evacuation.
 - Docker-in-container or nested virtualization.
 - Hardware-VM isolation.
 - Guaranteed availability or support response times.
 
 ### Roadmap, not a commitment
 
-- A paid tier with 2 vCPU, 4096 MiB RAM, 8 GiB home and root disks, in-place
-  resource upgrades, Stripe, email, and a documented grace/export policy.
+- Self-service paid upgrades, Stripe, email, and a documented grace/export
+  policy.
 - Encrypted production storage, replicated backups, and restore tooling.
-- Multiple production hosts, draining and capacity automation, and regional
-  placement.
+- Regional placement, automated capacity acquisition, and host evacuation.
 - mTLS or private connectivity to host daemons.
 - Per-container bandwidth shaping, sustained-CPU abuse controls, and richer
   telemetry.
@@ -151,9 +160,11 @@ not an authentication credential: the account must already have a valid Better
 Auth session before redeeming it. Unverified sessions cannot access onboarding,
 the dashboard, or workbench APIs.
 
-The current service is free and needs no credit card. The landing page also
-states that the environment is a shared-kernel cloud container. Account security
-allows authenticated users to add backup passkeys at any time.
+Public signup is free and needs no credit card. Paid and dedicated service are
+operator-entitled until billing exists; the browser cannot self-assert a paid
+placement class. The landing page also states that the environment is a
+shared-kernel cloud container. Account security allows authenticated users to
+add backup passkeys at any time.
 
 ### 4.2 Configure and launch
 
@@ -193,10 +204,15 @@ does not wait for Incus or package installation.
   optional setup.
 - The reconciler admits waitlisted users automatically in FIFO order by
   requested_at, then container created_at, with user_id as the final
-  deterministic tie-breaker.
+  deterministic tie-breaker within each independent placement pool. A full
+  budget pool does not block regular paid admission, and each account-bound
+  dedicated host is its own pool.
 - Admission reserves host RAM, disk, and an SSH port before it marks the
   waitlist row admitted and enqueues the provision job. A failed reservation
   must leave the user waitlisted rather than oversubscribe a host.
+- The requested host class is persisted with the container row when it first
+  waitlists; a later account-field change cannot silently move that request to
+  another infrastructure class.
 - The dashboard explains that admission is automatic and keeps checking without
   requiring a reload.
 - Success shows the exact SSH command and SSH host-key fingerprints once an
@@ -503,6 +519,7 @@ tokens reduce but do not remove this inherent risk.
 | Host daemon | Hono on Node.js 22 under systemd |
 | Runtime | Incus system containers through the host-local CLI/socket |
 | Storage | Per-environment Incus custom home volume on the host storage pool |
+| Fleet operations | `infra/hostctl.sh` using the secret-authenticated Worker fleet API and management SSH |
 
 There is no separate Cloudflare Pages application in the current release.
 
@@ -529,6 +546,48 @@ daemon_cert_fp field is informational; the Worker does not pin it.
 Credential payloads are independently sealed to the host, so TLS is not the
 only protection for user secrets.
 
+### Fleet administration
+
+The `/api/admin/hosts` API is absent unless `FLEET_ADMIN_SECRET` is configured
+and otherwise requires that separate high-entropy bearer secret, compared as
+fixed-size hashes in constant time. It accepts validated public bootstrap
+metadata, lists non-secret operational state, performs signed daemon probes,
+updates conservative capacity only for drained hosts without active jobs or
+below-reservation reductions, and controls draining/active/dead state. New
+hosts are always inserted as draining. Activation requires a recent valid probe
+and zero current failures; a dedicated host additionally requires an eligible
+assigned dedicated account.
+An empty drained host may change class only together with a fresh capacity
+report and a new signed probe. An evacuated dead ID may be replaced as a new
+generation, or deregistered, while immutable history retains the old class,
+capacity, release, and hardware telemetry. No raw D1 mutation is required.
+A forced dead transition is a manual disaster action: it fails active jobs,
+quarantines ports, detaches desired container rows, clears the dedicated
+assignment and allocation counters, reconciles eligible accounts to their
+current service plans, and returns them to the appropriate FIFO. It does not
+copy host-local home data, so the failed machine must first be isolated.
+A fleet-introducing migration also drains every legacy host until its inferred
+class policy and daemon release have been deployed and explicitly verified.
+A signed administrator probe requires explicit class, release identity, and
+CPU hardware telemetry, and rejects a wrong host ID/class or a RAM/vCPU
+registration that exceeds the daemon's hardware report. The background
+reconciler alone tolerates omitted new fields during a rolling interval. The API never returns a host
+credential private key because no such key leaves the host.
+
+`infra/hostctl.sh` is the supported mutation client. It discovers management
+targets from D1, never copies local secrets or environment files, and deploys
+hosts sequentially: drain and atomically fence new daemon jobs, require zero
+active jobs, back up the old release and host configuration, copy
+the clean checkout, install locked production dependencies, restart, audit,
+probe the exact Git commit release, then restore hosts that began active. Any
+failure and any host that began draining or unhealthy remains draining.
+The same controller can orderly re-home one container by confirming data loss,
+destroying its old Incus instance, then atomically applying the account's
+current service plan and waitlisting it for exact-class placement. Unsupported
+subscription values are rejected before mutation. Existing placements remain
+on their persisted tier and class until this explicit operation, so a billing
+field change alone cannot make ordinary lifecycle traffic diverge mid-job.
+
 ### Asynchronous jobs and convergence
 
 D1 jobs contain identifiers, operation, status, timestamps, and a sanitized
@@ -553,15 +612,42 @@ also match.
 
 ### Placement
 
-Only active, recently healthy hosts receive new environments. Placement
-requires enough vCPU reservation capacity, enough unallocated disk for both
-the home and root quotas, and enough non-reserved RAM. One failed daemon health
-check immediately pauses new placement; three consecutive failures mark the
-host unhealthy, and a later valid signed stats response recovers it. Hosts
-retain a fixed 2 GiB RAM reserve so future operations are not scheduled against
-every available byte. CPU/RAM/disk accounting, port assignment, and FIFO
-admission must be committed together so concurrent reconciler runs cannot
-double-allocate capacity.
+Only active, recently healthy hosts in the request's exact host class receive
+new environments. The account service plan maps `free` to `budget`, `paid` to
+`regular`, and operator-entitled `dedicated` to an account-bound `dedicated`
+host while retaining paid resource limits. Dedicated hosts have `max_tenants =
+1`; other hosts receive a bootstrap-calculated ceiling.
+
+Placement requires all of the following at reservation time:
+
+- an exact host-class match and, for dedicated, an exact assigned-user match;
+- a free tenant slot below `max_tenants`;
+- enough actual vCPU reservation capacity (2 free, 3 paid/dedicated), distinct
+  from the advertised 1/2-vCPU plan value stored on the container;
+- enough non-reserved total system RAM;
+- enough registered disk capacity for both home and root quotas;
+- a recent successful signed daemon stats response with no current failure;
+- a reported daemon release identity (legacy reduced stats never admit work);
+  and
+- an available, non-quarantined SSH port on that host.
+
+Every host row carries its own independent CPU, RAM, reserve, disk, and tenant
+ceilings; class selects the tenant shape, not a fixed host shape. Two budget
+hosts may therefore register 4 vCPU/8 GiB and 8 vCPU/16 GiB respectively, while
+a regular host may independently register 8 vCPU/16 GiB. Bootstrap derives
+each machine's tenant ceiling from its online-vCPU overcommit ceiling,
+allocatable RAM, safe storage fraction, swap where the class uses it,
+isolated-ID ranges, and class resource shape. The vCPU multiplier defaults to
+the supported maximum of 4 and may be lowered per host. It reserves the larger
+of 3 GiB (3072 MiB) or a rounded-up eight percent of detected total system RAM;
+an operator may configure a larger reserve. One failed daemon health check
+immediately pauses new placement; three consecutive failures mark an active host unhealthy, and
+a later valid signed stats response recovers it. Draining hosts continue to be
+probed and reconciled but receive neither a new tenant nor a new daemon job;
+already-started jobs remain pollable, and key/credential edits defer to the
+next full start snapshot. CPU/RAM/disk accounting,
+tenant-ceiling checks, port assignment, and FIFO admission are committed
+together so concurrent requests cannot double-allocate capacity.
 
 ---
 
@@ -597,8 +683,9 @@ operations synchronize keys and credentials.
 | invite_redemptions | One permanent redemption per invite; user link clears on account deletion |
 | world_id_nullifiers | Canonical decimal nullifier unique per action; user link clears on deletion |
 | ssh_keys | Multiple public keys per user; never private keys |
-| containers | user_id unique; at most one environment per account; selected GitHub repositories are non-secret JSON metadata |
-| hosts | Capacity, status, SSH hostname, daemon endpoint, and X25519 public key |
+| containers | user_id unique; at most one environment per account; persisted tier/class plus nullable re-home target applied only after old-instance destruction; selected GitHub repositories are non-secret JSON metadata |
+| hosts | Current host generation and class, independent conservative CPU/RAM/disk and tenant ceilings, allocation counters, health/release telemetry, management address, SSH hostname, daemon endpoint, X25519 public key, optional dedicated-account assignment, and retirement time |
+| host_history | Immutable class, capacity, release, and hardware snapshot for each retired host ID/generation |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
 | enrollment_tokens | Hash only; one-hour expiry; single use |
@@ -617,12 +704,12 @@ operations synchronize keys and credentials.
 - Public-key-only SSH and unique per-environment host keys.
 - A dedicated restricted Incus project with aggregate CPU, memory, process,
   disk, and instance ceilings.
-- Per-tenant 2-vCPU provisioned allowance, hard 1.5 GiB memory with a 1 GiB
-  swap ceiling,
-  1024-process ceiling, isolated unprivileged idmap, a 5 GiB home-volume
-  quota, and a 5 GiB root-disk quota. The web interface intentionally
-  presents the free tier as 1 vCPU; host accounting continues to reserve that
-  presented allocation alongside both disks.
+- Public plan values remain free 1 vCPU and paid/dedicated 2 vCPU. Incus limits
+  and host scheduler reservations deliberately include one vCPU of headroom:
+  free uses 2 vCPU and paid/dedicated use 3 vCPU. Free has hard 1.5 GiB memory,
+  1 GiB swap, and 5 GiB each for home and root; paid/dedicated have hard 4 GiB
+  memory, swap disabled, and 8 GiB each for home and root. Every class also has
+  a 1024-process ceiling and an isolated unprivileged idmap.
 - No nesting, privileged containers, or Docker-in-container support. The
   restricted project permits low-level configuration only for the daemon-owned
   bounded swap limit; tenant users have no Incus API access.
@@ -645,14 +732,14 @@ The account-delete control is disabled while a real host environment exists.
 The user first destroys the environment, then confirms account deletion.
 Deletion purges credentials, SSH keys, Better Auth accounts/sessions/passkeys,
 enrollment tokens, OAuth state, waitlist state, and the user row. A hostless
-waitlisted row can be removed as part of deletion. Used-invite redemptions and
+waitlisted or ineligible error row can be removed as part of deletion. Used-invite redemptions and
 World ID nullifiers remain with a cleared user link so neither can be reused.
 
 ### Current operational limitations
 
-- The deployed host is a small development VPS with a 20 GiB file-backed,
-  unencrypted ZFS pool. Its registered capacity fits only one current free
-  environment after reserve. It is not a production storage design.
+- The fleet can contain a small development budget host with file-backed,
+  unencrypted ZFS. Such a host must remain explicitly classified and is not a
+  production storage design; production hosts require encrypted real ZFS.
 - There are no backups. Host or pool loss means permanent user-data loss.
 - The daemon endpoint is public and currently relies on TLS plus signed
   requests; unsolicited probes are expected and are rejected.
@@ -661,6 +748,9 @@ World ID nullifiers remain with a cleared user link so neither can be reused.
 - The current Certbot deploy hook restarts the daemon, so an uncoordinated
   renewal can lose an active in-memory job.
 - There is no automated alerting, SLO reporting, or tested disaster recovery.
+- Fleet releases are operator-triggered and sequential. The controller does
+  not create machines, evacuate tenants, wait indefinitely for active jobs, or
+  make an unhealthy host active.
 - GitHub integration is absent when its application credentials are unset.
 - The local development login is intentionally disabled in deployed environments.
 - Agent packages and fallback installers currently resolve the latest npm
@@ -686,7 +776,7 @@ See infra/RUNBOOK.md.
 | Secret hygiene | No credential values in job rows, errors, Worker logs, or daemon logs |
 | SSH | Public-key only; no authorized key means no access |
 | Accessibility | Core flows satisfy the requirements in section 4.5 |
-| Availability | Best effort; one host and no failover |
+| Availability | Best effort across the registered fleet; no automatic failover, evacuation, or live migration |
 | Data durability | No backup guarantee in the current release |
 | Compatibility | Current Chrome, Firefox, Safari, and Edge; responsive phone and desktop layouts |
 
@@ -720,7 +810,10 @@ Current automated coverage includes:
   one-time redemption races, v4-only World ID user-signal binding, remote
   verification, and permanent nullifier uniqueness;
 - state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
+  host-class isolation, dedicated assignment, heterogeneous capacity ceilings,
   and reconciler logic;
+- authenticated host registration/probe/state APIs, daemon release telemetry,
+  and fleet-controller release ordering;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
   deletion, and external-call validation;
 - Codex device-flow state and authorization binding;
@@ -745,10 +838,12 @@ public release, an operator must record:
 9. stop, start, rebuild with /home/dev preserved, and destroy;
 10. forced provision failure and retry;
 11. automatic FIFO waitlist admission;
-12. host reboot/autostart and daemon reconciliation;
-13. port-25 and connection-rate enforcement;
-14. keyboard-only and screen-reader status/error checks; and
-15. deployment and rollback using infra/RUNBOOK.md.
+12. budget, regular, and account-bound dedicated placement, including
+    cross-pool waitlist progress and each host's calculated final slot;
+13. host reboot/autostart and daemon reconciliation while active and draining;
+14. port-25 and connection-rate enforcement;
+15. keyboard-only and screen-reader status/error checks; and
+16. one fleet-controller daemon rollout and rollback using infra/RUNBOOK.md.
 
 Manual results are release evidence; they must not be described as automated
 coverage.
@@ -780,7 +875,8 @@ manual checks above have been completed for affected areas.
    a one-hour, single-use enrollment token can add a public key and allow SSH.
 6. **Waitlist:** insufficient capacity produces a clear waitlisted state.
    Capacity release admits users automatically in deterministic FIFO order
-   without double allocation.
+   within the matching pool without double allocation; one exhausted class or
+   dedicated account does not block an independent class/account pool.
 7. **Dashboard efficiency:** initial load uses one aggregate request. Only the
    container view polls during transitional or waitlisted states using
    non-overlapping five-second or thirty-second schedules; one timeout is
@@ -802,8 +898,10 @@ manual checks above have been completed for affected areas.
 12. **Account deletion:** a user can destroy their environment and then purge
     account data; a hostless waitlist entry does not trap the account.
 13. **Operations:** remote migrations are current, the daemon and Worker can be
-    deployed and verified independently, and the documented rollback path has
-    been exercised for any release that changes their shared contract.
+    deployed and verified independently, every active host reports the intended
+    daemon release, host onboarding begins draining and requires a signed probe,
+    and the documented fleet rollback path has been exercised for any release
+    that changes the shared contract.
 
 ---
 

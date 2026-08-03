@@ -24,6 +24,7 @@ const hostKeys = generateX25519Keypair();
 function makeConfig(): DaemonConfig {
   return {
     hostId: "host-1",
+    hostType: "budget",
     listenPort: 8443,
     workerRpcPublicKey: generateEd25519Keypair().publicKey,
     x25519PrivateKey: hostKeys.privateKey,
@@ -98,6 +99,20 @@ describe("naming", () => {
 });
 
 describe("provision command construction", () => {
+  it("rejects a tier that does not match the daemon host class", async () => {
+    const incus = new Incus(fakeExec([]));
+    const budget = new Provisioner(incus, makeConfig());
+    const freeRequest = provisionRequest();
+    const paidRequest: Extract<JobRequest, { op: "provision" }> = {
+      ...freeRequest,
+      spec: { ...freeRequest.spec, tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8 },
+    };
+    await expect(budget.run(paidRequest)).rejects.toThrow("not allowed on a budget host");
+
+    const regular = new Provisioner(incus, { ...makeConfig(), hostType: "regular" });
+    await expect(regular.run(freeRequest)).rejects.toThrow("not allowed on a regular host");
+  });
+
   it("creates volume, init with limits, home + ssh proxy devices, and starts", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(
@@ -128,6 +143,7 @@ describe("provision command construction", () => {
     expect(init).not.toContain("security.idmap.size");
     expect(init).toContain("security.nesting=false");
     expect(init).toContain("user.workbench.id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    expect(init).toContain("user.workbench.tier=free");
     expect(flat).toContain(
       "config device override workbench-aaaaaa root size=5GiB",
     );
@@ -1067,7 +1083,10 @@ describe("resize / destroy", () => {
 
   it("resize raises cgroup limits and grows the home volume", async () => {
     const calls: Call[] = [];
-    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    const provisioner = new Provisioner(
+      new Incus(fakeExec(calls)),
+      { ...makeConfig(), hostType: "regular" },
+    );
     await provisioner.run({
       op: "resize",
       jobId: "j",
@@ -1075,8 +1094,8 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=3");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=300%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory=4096MiB");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=false");
     expect(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"))
@@ -1085,7 +1104,7 @@ describe("resize / destroy", () => {
     expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
   });
 
-  it("keeps the provisioned CPU floor when the presented tier has one vCPU", async () => {
+  it("keeps the Incus CPU limit equal to the scheduler reservation", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
     await provisioner.run({

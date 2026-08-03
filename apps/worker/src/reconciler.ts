@@ -3,11 +3,11 @@
  * runs here so no state depends on a user or webhook happening to arrive.
  * Clock is injected for tests ("time never passes in tests", §18).
  */
-import { decryptJsonAtRest } from "@workbench/contract";
+import { decryptJsonAtRest, HOST_TYPES } from "@workbench/contract";
 import { daemonStats } from "./daemon.js";
 import {
+  cpuReservation,
   diskReservationGb,
-  HOST_FAILURE_THRESHOLD,
   HOST_HEARTBEAT_MAX_AGE_MS,
   pickHost,
 } from "./capacity.js";
@@ -20,8 +20,10 @@ import {
 import {
   enqueueJob,
   getHost,
+  HostJobAdmissionError,
   refreshJob,
 } from "./jobs.js";
+import { recordHostFailure, recordHostStats } from "./host-health.js";
 import { allocatePort, NoFreePortsError } from "./ports.js";
 import { LIFECYCLE_OPS } from "./state.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
@@ -182,26 +184,49 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
 
 /** FIFO admission when host capacity returns. Placement re-checks capacity. */
 async function admitWaitlistedContainers(env: Bindings, now: () => number): Promise<void> {
-  const waiting = await env.DB.prepare(
-    `SELECT c.* FROM containers c
-     JOIN waitlist w ON w.user_id = c.user_id
-     WHERE c.status = 'waitlisted' AND c.host_id IS NULL AND w.admitted_at IS NULL
-     ORDER BY w.requested_at, c.created_at, c.user_id
-     LIMIT 20`,
-  ).all<ContainerRow>();
+  // Bound work per class instead of globally. Otherwise twenty older free
+  // entries could hide a paid entry from this Cron pass even though the pools
+  // have independent capacity.
+  const waitingByClass = await Promise.all(HOST_TYPES.map((hostType) =>
+    env.DB.prepare(
+      `SELECT c.* FROM containers c
+       JOIN waitlist w ON w.user_id = c.user_id
+       WHERE c.status = 'waitlisted' AND c.host_id IS NULL
+         AND c.placement_class = ? AND w.admitted_at IS NULL
+       ORDER BY w.requested_at, c.created_at, c.user_id
+       LIMIT 20`,
+    )
+      .bind(hostType)
+      .all<ContainerRow>()));
+  const waiting = waitingByClass.flatMap((result) => result.results);
 
-  for (const container of waiting.results) {
+  // Capacity pools are independent. A full budget pool must not block a paid
+  // regular account that appears later in the global FIFO list. Dedicated
+  // hosts are account-bound, so each assigned account is its own pool.
+  const blockedPlacementClasses = new Set<string>();
+  for (const container of waiting) {
+    const placementPool = container.placement_class === "dedicated"
+      ? `dedicated:${container.user_id}`
+      : container.placement_class;
+    if (blockedPlacementClasses.has(placementPool)) continue;
     const hostsWithoutPorts: string[] = [];
     while (true) {
       const host = await pickHost(
         env,
-        container.cpu,
-        container.ram_mb,
-        diskReservationGb(container.disk_gb),
+        {
+          userId: container.user_id,
+          hostType: container.placement_class,
+          cpu: cpuReservation(container.tier),
+          ramMb: container.ram_mb,
+          diskGb: diskReservationGb(container.disk_gb),
+        },
         now,
         hostsWithoutPorts,
       );
-      if (!host) return;
+      if (!host) {
+        blockedPlacementClasses.add(placementPool);
+        break;
+      }
       let admitted: ContainerRow | null;
       try {
         admitted = await placeWaitlistedContainer(env, container, host, now());
@@ -210,16 +235,28 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
         hostsWithoutPorts.push(host.id);
         continue;
       }
-      if (!admitted) break;
+      if (!admitted) {
+        blockedPlacementClasses.add(placementPool);
+        break;
+      }
       try {
         await enqueueJob(env, "provision", admitted, host);
       } catch (error) {
+        const statusDetail = error instanceof HostJobAdmissionError
+          ? "host entered maintenance before provisioning could be queued"
+          : "provisioning could not be queued";
         await env.DB.prepare(
-          "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
+          "UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?",
         )
-          .bind(admitted.id)
+          .bind(statusDetail, admitted.id)
           .run();
-        throw error;
+        console.error(JSON.stringify({
+          event: "waitlist_dispatch_failed",
+          containerId: admitted.id,
+          hostId: host.id,
+          error: error instanceof Error ? error.message : "job dispatch failed",
+        }));
+        blockedPlacementClasses.add(placementPool);
       }
       break;
     }
@@ -245,11 +282,20 @@ async function placeWaitlistedContainer(
          AND EXISTS (
            SELECT 1 FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
-             AND h.vcpu_capacity - h.vcpu_allocated >= containers.cpu
+             AND h.host_type = containers.placement_class
+             AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = containers.user_id)
+             AND h.max_tenants > (
+               SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
+             )
+             AND h.vcpu_capacity - h.vcpu_allocated >= CASE containers.tier
+               WHEN 'free' THEN 2 WHEN 'paid' THEN 3 ELSE 2147483647 END
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= containers.ram_mb
              AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
+             AND h.daemon_version IS NOT NULL
+             AND h.reported_ram_total_mb IS NOT NULL
+             AND h.reported_cpu_logical IS NOT NULL
          )`,
     ).bind(
       host.id,
@@ -265,7 +311,7 @@ async function placeWaitlistedContainer(
            disk_allocated_gb = disk_allocated_gb + ?
        WHERE id = ? AND changes() = 1`,
     ).bind(
-      container.cpu,
+      cpuReservation(container.tier),
       container.ram_mb,
       diskReservationGb(container.disk_gb),
       host.id,
@@ -334,7 +380,7 @@ async function expireSuspendedContainers(env: Bindings, now: () => number): Prom
 /** D1 <-> host drift detection via daemon `stats` (§10). */
 async function correctDrift(env: Bindings, now: () => number): Promise<void> {
   const hosts = await env.DB.prepare(
-    "SELECT * FROM hosts WHERE status IN ('active','unhealthy')",
+    "SELECT * FROM hosts WHERE status IN ('active','draining','unhealthy')",
   ).all<HostRow>();
   await runBounded(hosts.results, 3, async (host) => {
     // Snapshot rows and their monotonic lifecycle version before host I/O.
@@ -357,27 +403,10 @@ async function correctDrift(env: Bindings, now: () => number): Promise<void> {
     try {
       stats = await daemonStats(env, host);
     } catch {
-      await env.DB.prepare(
-        `UPDATE hosts
-         SET consecutive_failures = consecutive_failures + 1,
-             status = CASE
-               WHEN status = 'active' AND consecutive_failures + 1 >= ? THEN 'unhealthy'
-               ELSE status
-             END
-         WHERE id = ? AND status IN ('active','unhealthy')`,
-      )
-        .bind(HOST_FAILURE_THRESHOLD, host.id)
-        .run();
+      await recordHostFailure(env, host.id);
       return; // containers keep their last known state
     }
-    await env.DB.prepare(
-      `UPDATE hosts
-       SET last_seen_at = ?, consecutive_failures = 0,
-           status = CASE WHEN status = 'unhealthy' THEN 'active' ELSE status END
-       WHERE id = ? AND status IN ('active','unhealthy')`,
-    )
-      .bind(now(), host.id)
-      .run();
+    await recordHostStats(env, host.id, stats, now());
     const actual = new Map(stats.containers.map((s) => [s.containerId, s.incusStatus]));
     // Rows with host capacity allocated: running/stopped must exist on the host;
     // provisioning rows may not yet have a container (job still in progress).
