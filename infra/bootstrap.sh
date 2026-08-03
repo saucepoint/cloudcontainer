@@ -3,7 +3,8 @@
 # Debian 12/13 machine (Hetzner dedicated or any dev box/VM). Idempotent-ish:
 # safe to re-run after fixing a failure.
 #
-# Usage:  HOST_ID=hetzner-fsn-1 WORKER_RPC_PUBLIC_KEY=<b64> bash infra/bootstrap.sh
+# Usage:  HOST_ID=budget-fsn-1 HOST_TYPE=budget \
+#         WORKER_RPC_PUBLIC_KEY=<b64> bash infra/bootstrap.sh
 #         (WORKER_RPC_PUBLIC_KEY prompted interactively if unset)
 #
 # What it does:
@@ -12,22 +13,22 @@
 #   3. Applies the nftables baseline: outbound port 25 blocked, per-source
 #      connection-rate limit for IPv4 and IPv6.
 #   4. Installs the daemon under /opt/workbench + systemd unit.
-#   5. Generates the daemon X25519 keypair and TLS cert; prints the SQL to
-#      register the host row in D1.
+#   5. Generates the daemon X25519 keypair and TLS cert, then writes public
+#      registration metadata for the fleet controller.
 set -euo pipefail
 
+: "${HOST_TYPE:?HOST_TYPE must be budget, regular, or dedicated}"
 HOST_ID="${HOST_ID:-host-$(hostname -s)}"
 DAEMON_PORT="${DAEMON_PORT:-8443}"
-POOL_NAME="${POOL_NAME:-default}"
-PROJECT_NAME="${PROJECT_NAME:-workbench}"
+POOL_NAME="${POOL_NAME:-}"
+PROJECT_NAME="${PROJECT_NAME:-}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 REPO_DIR="${REPO_DIR:-/opt/workbench}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"   # >0: create a file-backed zpool of this size (dev boxes)
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}" # dev-only escape hatch; dir cannot enforce quotas
-DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
-VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-3}"
-TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
-TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
+DAEMON_VERSION="${DAEMON_VERSION:-bootstrap}"
+# shellcheck source=infra/host-policy.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/host-policy.sh"
 
 echo "== [1/6] packages =="
 export DEBIAN_FRONTEND=noninteractive
@@ -42,6 +43,41 @@ if ! command -v node >/dev/null || [[ "$(node --version | cut -c2-3)" -lt 22 ]];
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y -qq nodejs
 fi
+
+if [[ -f /etc/workbench/daemon.json ]]; then
+  POOL_NAME="${POOL_NAME:-$(jq -er '.storagePool // "default"' /etc/workbench/daemon.json)}"
+  PROJECT_NAME="${PROJECT_NAME:-$(jq -er '.project // "workbench"' /etc/workbench/daemon.json)}"
+fi
+POOL_NAME="${POOL_NAME:-default}"
+PROJECT_NAME="${PROJECT_NAME:-workbench}"
+[[ "$HOST_ID" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || {
+  echo "!! HOST_ID must contain only lowercase letters, digits, and hyphens" >&2
+  exit 1
+}
+[[ "$DAEMON_PORT" =~ ^[0-9]+$ ]] && (( DAEMON_PORT >= 1 && DAEMON_PORT <= 65535 )) || {
+  echo "!! DAEMON_PORT must be an integer from 1 through 65535" >&2
+  exit 1
+}
+[[ "$POOL_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo "!! invalid POOL_NAME" >&2
+  exit 1
+}
+[[ "$PROJECT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo "!! invalid PROJECT_NAME" >&2
+  exit 1
+}
+[[ "$NETWORK_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo "!! invalid NETWORK_NAME" >&2
+  exit 1
+}
+[[ "$ZFS_LOOP_GB" =~ ^[0-9]+$ ]] || {
+  echo "!! ZFS_LOOP_GB must be a non-negative integer" >&2
+  exit 1
+}
+[[ "$DAEMON_VERSION" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || {
+  echo "!! DAEMON_VERSION contains unsupported characters" >&2
+  exit 1
+}
 
 echo "== [2/6] incus init + storage =="
 if ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
@@ -70,6 +106,15 @@ fi
 
 # Source the same policy entry point used to upgrade an existing drained host.
 # It leaves the calculated capacity variables available for D1 registration.
+# Persist non-secret per-host overrides so every later deploy and audit derives
+# the same ceilings instead of silently reverting to controller defaults.
+install -d -m 0755 /etc/workbench
+install -m 0644 /dev/null /etc/workbench/host-policy.env
+cat >/etc/workbench/host-policy.env <<EOF
+VCPU_OVERCOMMIT=${VCPU_OVERCOMMIT}
+DISK_CAPACITY_PERCENT=${DISK_CAPACITY_PERCENT}
+HOST_RAM_RESERVE_MB=${HOST_RAM_RESERVE_MB:-0}
+EOF
 # shellcheck source=infra/configure-multitenant.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/configure-multitenant.sh"
 
@@ -123,47 +168,101 @@ if [[ ! -f "$REPO_DIR/package.json" ]]; then
   echo "!! copy the repo to $REPO_DIR first (rsync -a --exclude node_modules ./ host:$REPO_DIR/) then re-run"
   exit 1
 fi
-(cd "$REPO_DIR" && npm install --omit=dev --workspaces --include-workspace-root >/dev/null)
+(cd "$REPO_DIR" && npm ci --omit=dev --workspaces --include-workspace-root >/dev/null)
 
 echo "== [5/6] keys + config =="
-if [[ ! -f /etc/workbench/daemon.json ]]; then
+if [[ -f /etc/workbench/daemon.json ]]; then
+  if ! jq -e --arg host_id "$HOST_ID" --arg host_type "$HOST_TYPE" \
+    '.hostId == $host_id and (.hostType // "budget") == $host_type' \
+    /etc/workbench/daemon.json >/dev/null; then
+    echo "!! existing daemon config belongs to another host ID or host type"
+    exit 1
+  fi
+else
   WORKER_PUB="${WORKER_RPC_PUBLIC_KEY:-}"
   [[ -n "$WORKER_PUB" ]] || read -rp "WORKER_RPC_PUBLIC_KEY (from scripts/genkeys.ts): " WORKER_PUB
+  [[ "$WORKER_PUB" =~ ^[A-Za-z0-9+/]{43}=$ ]] || {
+    echo "!! WORKER_RPC_PUBLIC_KEY must be a 32-byte base64 key" >&2
+    exit 1
+  }
   KEYS_JSON=$(cd "$REPO_DIR" && ./node_modules/.bin/tsx apps/daemon/scripts/genhostkey.ts)
   X25519_PRIV=$(echo "$KEYS_JSON" | jq -r .privateKey)
   X25519_PUB=$(echo "$KEYS_JSON" | jq -r .publicKey)
 
-  # Self-signed TLS for the daemon endpoint; the Worker additionally signs every
-  # request, and production should front this with mTLS (Workers mTLS binding).
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-    -keyout /etc/workbench/daemon.key -out /etc/workbench/daemon.crt \
-    -days 1825 -subj "/CN=${HOST_ID}" >/dev/null 2>&1
+  TLS_CERT_PATH="${TLS_CERT_PATH:-/etc/workbench/daemon.crt}"
+  TLS_KEY_PATH="${TLS_KEY_PATH:-/etc/workbench/daemon.key}"
+  if [[ -n "${TLS_CERT_PATH:-}" && -n "${TLS_KEY_PATH:-}" && \
+    -f "$TLS_CERT_PATH" && -f "$TLS_KEY_PATH" ]]; then
+    : # Use operator-provisioned trusted TLS material.
+  elif [[ "$TLS_CERT_PATH" == "/etc/workbench/daemon.crt" && \
+    "$TLS_KEY_PATH" == "/etc/workbench/daemon.key" ]]; then
+    # Development-only bootstrap certificate. A Worker probe will fail until
+    # the operator replaces it with a publicly trusted certificate.
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -keyout "$TLS_KEY_PATH" -out "$TLS_CERT_PATH" \
+      -days 30 -subj "/CN=${HOST_ID}" >/dev/null 2>&1
+  else
+    echo "!! TLS_CERT_PATH and TLS_KEY_PATH must both name existing host files"
+    exit 1
+  fi
 
-  cat >/etc/workbench/daemon.json <<EOF
-{
-  "hostId": "${HOST_ID}",
-  "listenPort": ${DAEMON_PORT},
-  "workerRpcPublicKey": "${WORKER_PUB}",
-  "x25519PrivateKey": "${X25519_PRIV}",
-  "baseImage": "workbench-base",
-  "storagePool": "${POOL_NAME}",
-  "project": "${PROJECT_NAME}",
-  "tlsCertPath": "/etc/workbench/daemon.crt",
-  "tlsKeyPath": "/etc/workbench/daemon.key"
-}
-EOF
-  chmod 600 /etc/workbench/daemon.json /etc/workbench/daemon.key
+  jq -n \
+    --arg hostId "$HOST_ID" \
+    --arg hostType "$HOST_TYPE" \
+    --argjson listenPort "$DAEMON_PORT" \
+    --arg workerRpcPublicKey "$WORKER_PUB" \
+    --arg x25519PrivateKey "$X25519_PRIV" \
+    --arg storagePool "$POOL_NAME" \
+    --arg project "$PROJECT_NAME" \
+    --arg tlsCertPath "$TLS_CERT_PATH" \
+    --arg tlsKeyPath "$TLS_KEY_PATH" \
+    '{hostId: $hostId, hostType: $hostType, listenPort: $listenPort,
+      workerRpcPublicKey: $workerRpcPublicKey,
+      x25519PrivateKey: $x25519PrivateKey, baseImage: "workbench-base",
+      storagePool: $storagePool, project: $project,
+      tlsCertPath: $tlsCertPath, tlsKeyPath: $tlsKeyPath}' \
+    > /etc/workbench/daemon.json
+  chmod 600 /etc/workbench/daemon.json "$TLS_KEY_PATH"
   echo "$X25519_PUB" > /etc/workbench/daemon.x25519.pub
 fi
+
+install -m 0644 /dev/null /etc/workbench/release.env
+printf 'WB_DAEMON_VERSION=%s\n' "$DAEMON_VERSION" > /etc/workbench/release.env
 
 cp "$REPO_DIR/apps/daemon/systemd/workbench-daemon.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now workbench-daemon
 
 echo "== [6/6] register host =="
-IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-CERT_FP=$(openssl x509 -in /etc/workbench/daemon.crt -noout -fingerprint -sha256 | cut -d= -f2)
+IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
+  { for (index = 1; index <= NF; index += 1) if ($index == "src") { print $(index + 1); exit } }
+')
+[[ -n "$IPV4" ]] || {
+  echo "!! could not detect the host's routed IPv4 address" >&2
+  exit 1
+}
+TLS_CERT_PATH=$(jq -r .tlsCertPath /etc/workbench/daemon.json)
+CERT_FP=$(openssl x509 -in "$TLS_CERT_PATH" -noout -fingerprint -sha256 | cut -d= -f2)
 X25519_PUB=$(cat /etc/workbench/daemon.x25519.pub)
+REGISTRATION_PATH=/etc/workbench/registration.json
+jq -n \
+  --arg id "$HOST_ID" \
+  --arg hostType "$HOST_TYPE" \
+  --arg ipv4 "$IPV4" \
+  --arg daemonCertFingerprint "$CERT_FP" \
+  --arg daemonPublicKey "$X25519_PUB" \
+  --argjson ramTotalMb "$RAM_TOTAL_MB" \
+  --argjson ramReserveMb "$RAM_RESERVE" \
+  --argjson vcpuCapacity "$VCPU_CAPACITY" \
+  --argjson diskTotalGb "$DISK_GB" \
+  --argjson maxTenants "$TENANT_SLOTS" \
+  '{id: $id, hostType: $hostType, ipv4: $ipv4,
+    daemonCertFingerprint: $daemonCertFingerprint,
+    daemonPublicKey: $daemonPublicKey, ramTotalMb: $ramTotalMb,
+    ramReserveMb: $ramReserveMb, vcpuCapacity: $vcpuCapacity,
+    diskTotalGb: $diskTotalGb, maxTenants: $maxTenants}' \
+  > "$REGISTRATION_PATH"
+chmod 0644 "$REGISTRATION_PATH"
 cat <<EOF
 
 ============================================================
@@ -172,27 +271,22 @@ Host bootstrapped. Next steps:
 1. Build the base image (one-off, ~5 min):
      bash $REPO_DIR/infra/build-image.sh
 
-2. Register this host in D1 (run from your repo checkout):
+2. Register this host through the fleet controller. Bootstrap metadata is at:
+     $REGISTRATION_PATH
 
-   npx wrangler d1 execute workbench --remote --command "
-   INSERT INTO hosts (id, ipv4, ssh_hostname, daemon_endpoint, daemon_cert_fp,
-     daemon_pubkey, ram_total_mb, ram_reserve_mb, vcpu_capacity,
-     disk_total_gb, status, joined_at, last_seen_at)
-   VALUES ('${HOST_ID}', '${IPV4}', '${IPV4}', 'https://${IPV4}:${DAEMON_PORT}',
-     '${CERT_FP}', '${X25519_PUB}', ${RAM_TOTAL_MB}, ${RAM_RESERVE}, ${VCPU_CAPACITY},
-     ${DISK_GB}, 'draining', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-     CAST(strftime('%s', 'now') AS INTEGER) * 1000);"
-
-   (set ssh_hostname to a DNS name if you have one)
+   The normal path is `npm run hostctl -- onboard ...`, which copies this
+   metadata to the control plane, probes the signed daemon endpoint, and only
+   activates the host after every check succeeds.
 
 3. IMPORTANT: a deployed Worker cannot fetch https://<ip> (Cloudflare
    error 1003) or a self-signed cert. Before real use, give the daemon a
    hostname + Let's Encrypt cert and update daemon_endpoint — see
    "Daemon endpoint TLS" in infra/RUNBOOK.md.
 
-4. After the signed health/stats checks pass, make the host eligible:
-     UPDATE hosts SET status = 'active' WHERE id = '${HOST_ID}';
+4. Do not activate the host with raw SQL. Use the controller probe and state
+   transition so an unverified host cannot receive a tenant.
 
+Class: ${HOST_TYPE}; tier: ${TENANT_TIER}; policy: ${WORKBENCH_POLICY_VERSION}.
 Capacity: ${TENANT_SLOTS} tenant(s), ${VCPU_CAPACITY} vCPU reservations,
 ${RAM_CAPACITY_MB} MiB allocatable RAM, ${DISK_GB} GiB safe pool capacity.
 ============================================================

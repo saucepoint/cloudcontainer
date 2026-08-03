@@ -22,10 +22,6 @@ import {
 } from "./incus.js";
 import { renderMotd } from "./motd.js";
 
-// The Worker’s `spec.cpu` is the public, presented allocation. Give every
-// environment two vCPUs on the host so interactive development stays snappy.
-const PROVISIONED_VCPU_FLOOR = 2;
-
 export class Provisioner {
   private credentialInstaller: CredentialInstaller;
 
@@ -37,6 +33,9 @@ export class Provisioner {
   }
 
   async run(request: JobRequest): Promise<ProvisionResult | null> {
+    if (request.op === "provision" || request.op === "rebuild" || request.op === "resize") {
+      this.validateHostTier(request.spec.tier);
+    }
     const name =
       request.op === "provision" || request.op === "rebuild"
         ? containerName(request.containerId)
@@ -48,7 +47,7 @@ export class Provisioner {
       case "start": {
         await this.ensureRunning(name);
         // Optional fields preserve compatibility with older Workers during a
-        // daemon-first rollout. Current Workers always send a full snapshot.
+        // mixed-version rollout. Current Workers always send a full snapshot.
         if (request.sshKeys && request.dashboardUrl) {
           const credentials = this.credentialInstaller.unseal(request.sealedCredentials);
           const agents = await this.agentsOf(name);
@@ -76,7 +75,7 @@ export class Provisioner {
       case "resize":
         await this.incus.setLimits(
           name,
-          this.provisionedCpu(request.spec.cpu),
+          TIERS[request.spec.tier].provisionedCpu,
           request.spec.ramMb,
           TIERS[request.spec.tier].swapMb,
         );
@@ -123,6 +122,13 @@ export class Provisioner {
     }
   }
 
+  private validateHostTier(tier: keyof typeof TIERS): void {
+    const expectedTier = this.config.hostType === "budget" ? "free" : "paid";
+    if (tier !== expectedTier) {
+      throw new Error(`job tier ${tier} is not allowed on a ${this.config.hostType} host`);
+    }
+  }
+
   /** Provision a disposable rootfs while preserving the managed home volume. */
   private async provision(
     request: Extract<JobRequest, { op: "provision" | "rebuild" }>,
@@ -149,7 +155,8 @@ export class Provisioner {
         this.config.baseImage,
         name,
         request.containerId,
-        this.provisionedCpu(spec.cpu),
+        spec.tier,
+        TIERS[spec.tier].provisionedCpu,
         spec.ramMb,
         TIERS[spec.tier].swapMb,
       );
@@ -201,10 +208,6 @@ export class Provisioner {
       }
       throw error;
     }
-  }
-
-  private provisionedCpu(presentedCpu: number): number {
-    return Math.max(PROVISIONED_VCPU_FLOOR, presentedCpu);
   }
 
   /** Keep lifecycle operations working for instances created with the old name format. */

@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const configurePolicy = readFileSync(
@@ -11,6 +13,25 @@ const auditPolicy = readFileSync(
   "utf8",
 );
 
+const hostPolicyUrl = new URL("../../../infra/host-policy.sh", import.meta.url);
+const hostPolicyPath = fileURLToPath(hostPolicyUrl);
+const hostPolicy = readFileSync(hostPolicyUrl, "utf8");
+
+const bootstrap = readFileSync(
+  new URL("../../../infra/bootstrap.sh", import.meta.url),
+  "utf8",
+);
+
+const hostController = readFileSync(
+  new URL("../../../infra/hostctl.sh", import.meta.url),
+  "utf8",
+);
+
+const capacityReport = readFileSync(
+  new URL("../../../infra/report-host-capacity.sh", import.meta.url),
+  "utf8",
+);
+
 describe("restricted tenant project policy", () => {
   it("allows the daemon-managed swap limit required by the free tier", () => {
     expect(configurePolicy).toContain(
@@ -19,5 +40,94 @@ describe("restricted tenant project policy", () => {
     expect(auditPolicy).toContain(
       'check_eq "tenant project allows low-level config for managed swap" "allow"',
     );
+  });
+
+  it("uses one class policy for bootstrap, configuration, and audit", () => {
+    expect(bootstrap).toContain("/host-policy.sh");
+    expect(configurePolicy).toContain("/host-policy.sh");
+    expect(auditPolicy).toContain("/host-policy.sh");
+    expect(hostPolicy).toContain("budget)");
+    expect(hostPolicy).toContain("regular)");
+    expect(hostPolicy).toContain("dedicated)");
+    expect(configurePolicy).toContain('calculate_host_capacity "$POOL_NAME"');
+    expect(auditPolicy).toContain('calculate_host_capacity "$POOL_NAME"');
+    expect(configurePolicy).toContain(".storagePool");
+    expect(auditPolicy).toContain(".storagePool");
+    expect(hostPolicy).toContain('if [[ "$HOST_TYPE" == "dedicated"');
+    expect(hostPolicy).toContain("TENANT_SLOTS=1");
+    expect(hostPolicy).toContain("IDMAP_SLOTS");
+    expect(hostPolicy).toContain("unsupported policy entry");
+  });
+
+  it("keeps the scheduler CPU reservation equal to the enforced class limit", () => {
+    expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=1");
+    expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=2");
+    expect(hostPolicy).toContain("TENANT_CPU=2");
+    expect(hostPolicy).toContain("TENANT_CPU=3");
+    expect(configurePolicy).toContain('limits.cpu="$TENANT_CPU"');
+    expect(configurePolicy).toContain("limits.memory.enforce=hard");
+    expect(auditPolicy).toContain('"$TENANT_CPU"');
+  });
+
+  it("reserves 3 GiB or rounded-up 8% RAM and caps online-vCPU overcommit at 4x", () => {
+    const values = execFileSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+source "$1"
+printf '%s %s %s %s %s\n' \
+  "$(minimum_host_ram_reserve_mb 8192)" \
+  "$(minimum_host_ram_reserve_mb 38401)" \
+  "$(minimum_host_ram_reserve_mb 65536)" \
+  "$VCPU_OVERCOMMIT" \
+  "$MAX_VCPU_OVERCOMMIT"`,
+        "host-policy-test",
+        hostPolicyPath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DISK_CAPACITY_PERCENT: "70",
+          HOST_RAM_RESERVE_MB: "0",
+          HOST_TYPE: "budget",
+          VCPU_OVERCOMMIT: "4",
+          WORKBENCH_HOST_POLICY_ENV: "/nonexistent/workbench-host-policy.env",
+        },
+      },
+    ).trim();
+
+    expect(values).toBe("3072 3073 5243 4 4");
+    expect(hostPolicy).toContain("HOST_VCPU_COUNT=$(nproc)");
+    expect(hostPolicy).toContain("VCPU_CAPACITY=$(( HOST_VCPU_COUNT * VCPU_OVERCOMMIT ))");
+    expect(hostController).toContain("MAX_VCPU_OVERCOMMIT=4");
+    expect(hostController).toContain("Reservations per online host vCPU (default/max: 4)");
+  });
+
+  it("checks local capacity and image availability before a host can return to service", () => {
+    expect(auditPolicy).toContain("EXPECTED_MAX_TENANTS");
+    expect(auditPolicy).toContain("calculated tenant ceiling covers the D1 registration");
+    expect(auditPolicy).toContain('image info "$BASE_IMAGE"');
+    expect(capacityReport).toContain('calculate_host_capacity "$POOL_NAME"');
+    expect(hostController).toContain("refresh_host_capacity");
+    expect(hostController).toContain("'{capacity: $capacity}'");
+  });
+
+  it("drains, backs up, probes, and verifies the release before reactivation", () => {
+    const drain = hostController.indexOf("Draining $host_id");
+    const identity = hostController.indexOf('remote_preflight "$hostname"', drain);
+    const backup = hostController.indexOf('remote_backup "$hostname"', identity);
+    const install = hostController.indexOf('remote_install "$hostname"', backup);
+    const probe = hostController.indexOf('api POST "/api/admin/hosts/$host_id/probe"', install);
+    const releaseCheck = hostController.indexOf('[[ "$observed" != "$release" ]]', probe);
+    const activate = hostController.indexOf("'{\"status\":\"active\"}'", releaseCheck);
+    expect(drain).toBeGreaterThan(-1);
+    expect(identity).toBeGreaterThan(drain);
+    expect(backup).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(backup);
+    expect(probe).toBeGreaterThan(install);
+    expect(releaseCheck).toBeGreaterThan(probe);
+    expect(activate).toBeGreaterThan(releaseCheck);
   });
 });

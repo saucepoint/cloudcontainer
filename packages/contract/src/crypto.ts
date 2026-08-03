@@ -5,7 +5,7 @@
  *
  * - Sealed box: X25519 ECDH (ephemeral) + HKDF-SHA256 + XChaCha20-Poly1305.
  *   Used to seal credential payloads to a destination host's public key so
- *   plaintext secrets never transit the wire, even inside the mTLS tunnel.
+ *   transport HTTPS never carries those payloads as plaintext.
  * - At-rest encryption: XChaCha20-Poly1305 under the credential master key
  *   (Workers Secret). Used for D1 `credentials_encrypted` blobs.
  */

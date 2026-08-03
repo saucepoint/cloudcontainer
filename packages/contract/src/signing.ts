@@ -1,8 +1,9 @@
 /**
  * Signed-request scheme for Worker -> daemon RPC (defense-in-depth on top of
- * TLS/mTLS): Ed25519 over a canonical string of method, path, timestamp,
- * nonce, and body hash. The daemon rejects stale timestamps and replayed
- * nonces; nonce retention only needs to cover the timestamp window.
+ * HTTPS, and compatible with future mTLS): Ed25519 over a canonical string of
+ * method, path, timestamp, nonce, and body hash. The daemon rejects stale
+ * timestamps and replayed nonces; nonce retention only needs to cover the
+ * timestamp window.
  */
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha2";

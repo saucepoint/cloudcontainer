@@ -7,12 +7,14 @@ import {
   AgentsSchema,
   GithubReposSchema,
   JobRequestSchema,
+  TIERS,
   sealJson,
   type Agent,
   type JobRequest,
   type ProvisionResult,
 } from "@workbench/contract";
 import { daemonJobStatus, daemonSubmitJob } from "./daemon.js";
+import { cpuReservation } from "./capacity.js";
 import { buildCredentialPayload, getCredentialsRow } from "./credentials.js";
 import { LIFECYCLE_OPS, pendingStatusFor, successStatusFor } from "./state.js";
 import type { Bindings, ContainerRow, HostRow, JobRow } from "./types.js";
@@ -21,6 +23,34 @@ export class LifecycleJobConflictError extends Error {
   constructor() {
     super("container state changed or lifecycle operation already in progress");
     this.name = "LifecycleJobConflictError";
+  }
+}
+
+export class HostJobAdmissionError extends Error {
+  constructor() {
+    super("host is not accepting jobs while it is draining or unhealthy");
+    this.name = "HostJobAdmissionError";
+  }
+}
+
+export class ContainerPlacementConflictError extends Error {
+  constructor() {
+    super("container placement conflicts with its host; an administrator must re-home it");
+    this.name = "ContainerPlacementConflictError";
+  }
+}
+
+function validateContainerPlacement(
+  op: JobRow["op"],
+  container: ContainerRow,
+  host: HostRow,
+): void {
+  // Only spec-bearing operations are rejected by the daemon. Start, stop, and
+  // especially destroy remain available so a divergent row is never trapped.
+  if (op !== "provision" && op !== "rebuild" && op !== "resize") return;
+  const hostTier = host.host_type === "budget" ? "free" : "paid";
+  if (container.placement_class !== host.host_type || container.tier !== hostTier) {
+    throw new ContainerPlacementConflictError();
   }
 }
 
@@ -78,7 +108,9 @@ function specOf(container: ContainerRow) {
   return {
     agents: containerAgents(container),
     tier: container.tier,
-    cpu: container.cpu,
+    // D1/public views retain the advertised 1/2-vCPU value; daemon job specs
+    // carry the actual 2/3-vCPU limit for current releases.
+    cpu: cpuReservation(container.tier),
     ramMb: container.ram_mb,
     diskGb: container.disk_gb,
     sshPort: container.ssh_port ?? 0,
@@ -172,6 +204,7 @@ export async function enqueueJob(
   container: ContainerRow,
   host: HostRow,
 ): Promise<JobRow> {
+  validateContainerPlacement(op, container, host);
   const jobId = crypto.randomUUID();
   const now = Date.now();
   const pending = pendingStatusFor(op);
@@ -181,12 +214,15 @@ export async function enqueueJob(
       `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
        SELECT ?, c.id, ?, 'queued', ?, ? FROM containers c
        WHERE c.id = ? AND c.status = ? AND c.host_id = ?
+         AND EXISTS (
+           SELECT 1 FROM hosts h WHERE h.id = ? AND h.status = 'active'
+         )
          AND NOT EXISTS (
            SELECT 1 FROM jobs
            WHERE container_id = c.id AND status IN ('queued','running')
              AND op IN ('provision','rebuild','start','stop','destroy','resize')
          )`,
-    ).bind(jobId, op, now, now, container.id, container.status, host.id);
+    ).bind(jobId, op, now, now, container.id, container.status, host.id, host.id);
     if (pending) {
       const results = (await env.DB.batch([
         insertion,
@@ -199,13 +235,20 @@ export async function enqueueJob(
     } else {
       inserted = await insertion.run();
     }
-    if (!inserted.meta.changes) throw new LifecycleJobConflictError();
+    if (!inserted.meta.changes) {
+      const currentHost = await getHost(env, host.id);
+      if (currentHost?.status !== "active") throw new HostJobAdmissionError();
+      throw new LifecycleJobConflictError();
+    }
   } else {
     inserted = await env.DB.prepare(
-      "INSERT INTO jobs (id, container_id, op, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+      `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
+       SELECT ?, ?, ?, 'queued', ?, ?
+       WHERE EXISTS (SELECT 1 FROM hosts WHERE id = ? AND status = 'active')`,
     )
-      .bind(jobId, container.id, op, now, now)
+      .bind(jobId, container.id, op, now, now, host.id)
       .run();
+    if (!inserted.meta.changes) throw new HostJobAdmissionError();
   }
 
   try {
@@ -255,8 +298,15 @@ export async function enqueueJobForUser(
   if (!container?.host_id) return;
   if (container.status !== "running") return;
   const host = await getHost(env, container.host_id);
-  if (!host) return;
-  await enqueueJob(env, op, container, host);
+  if (!host || host.status !== "active") return;
+  try {
+    await enqueueJob(env, op, container, host);
+  } catch (error) {
+    // The host may have drained after the read. The desired key/credential
+    // mutation is already in D1 and the next start carries a full snapshot.
+    if (error instanceof HostJobAdmissionError) return;
+    throw error;
+  }
 }
 
 async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | "op">, error: string) {
@@ -301,6 +351,75 @@ async function finalizeDestroy(
       )
   )`;
   const gate = [job.id, container.id, container.id] as const;
+  if (container.rehome_tier && container.rehome_placement_class) {
+    const targetTier = TIERS[container.rehome_tier];
+    const results = (await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at)
+         SELECT host_id, ssh_port, ? FROM containers
+         WHERE id = ? AND host_id IS NOT NULL AND ssh_port IS NOT NULL
+           AND ${latestActiveDestroy}`,
+      ).bind(completedAt, container.id, ...gate),
+      env.DB.prepare(
+        `UPDATE hosts
+         SET vcpu_allocated = MAX(0, vcpu_allocated - ?),
+             ram_allocated_mb = MAX(0, ram_allocated_mb - ?),
+             disk_allocated_gb = MAX(0, disk_allocated_gb - ?),
+             status = CASE
+               WHEN host_type = 'dedicated' AND ? <> 'dedicated' THEN 'draining'
+               ELSE status
+             END,
+             dedicated_user_id = CASE
+               WHEN host_type = 'dedicated' AND ? <> 'dedicated' THEN NULL
+               ELSE dedicated_user_id
+             END
+         WHERE id = ? AND EXISTS (SELECT 1 FROM containers WHERE id = ?)
+           AND ${latestActiveDestroy}`,
+      ).bind(
+        cpuReservation(container.tier),
+        container.ram_mb,
+        container.disk_gb * 2,
+        container.rehome_placement_class,
+        container.rehome_placement_class,
+        container.host_id,
+        container.id,
+        ...gate,
+      ),
+      env.DB.prepare(
+        `UPDATE containers
+         SET host_id = NULL, ssh_port = NULL, tier = ?, placement_class = ?,
+             cpu = ?, ram_mb = ?, disk_gb = ?, status = 'waitlisted',
+             status_detail = 'plan change awaiting placement',
+             host_key_fingerprints = NULL, rehome_tier = NULL,
+             rehome_placement_class = NULL, rehome_requested_at = NULL
+         WHERE id = ? AND ${latestActiveDestroy}`,
+      ).bind(
+        container.rehome_tier,
+        container.rehome_placement_class,
+        targetTier.cpu,
+        targetTier.ramMb,
+        targetTier.diskGb,
+        container.id,
+        ...gate,
+      ),
+      env.DB.prepare(
+        `INSERT INTO waitlist (user_id, requested_at, admitted_at)
+         SELECT ?, ?, NULL WHERE ${latestActiveDestroy}
+         ON CONFLICT(user_id) DO UPDATE SET
+           requested_at = excluded.requested_at, admitted_at = NULL`,
+      ).bind(container.user_id, completedAt, ...gate),
+      env.DB.prepare(
+        `UPDATE jobs SET status = 'succeeded', updated_at = ?
+         WHERE id = ? AND status IN ('queued','running') AND ? = (
+           SELECT id FROM jobs
+           WHERE container_id = ?
+             AND op IN ('provision','rebuild','start','stop','destroy','resize')
+           ORDER BY rowid DESC LIMIT 1
+         )`,
+      ).bind(completedAt, job.id, job.id, container.id),
+    ])) as Array<{ meta: { changes?: number } }>;
+    return Boolean(results.at(-1)?.meta.changes);
+  }
   const results = (await env.DB.batch([
     env.DB.prepare(
       `INSERT OR REPLACE INTO port_quarantine (host_id, port, released_at)
@@ -316,7 +435,7 @@ async function finalizeDestroy(
        WHERE id = ? AND EXISTS (SELECT 1 FROM containers WHERE id = ?)
          AND ${latestActiveDestroy}`,
     ).bind(
-      container.cpu,
+      cpuReservation(container.tier),
       container.ram_mb,
       container.disk_gb * 2,
       container.host_id,

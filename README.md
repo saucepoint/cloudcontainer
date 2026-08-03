@@ -5,12 +5,13 @@ Code, Codex, OpenCode, and the everyday development toolchain preinstalled. It
 is designed so a beginner can sign in, choose agents, and launch without first
 learning VPS administration.
 
-The current release is a free service with World ID or administrator-invite
-eligibility verification: one Incus system container per account, reached over
-public-key SSH. It is intentionally described as a cloud container rather than
-a hardware-isolated VM. Paid plans,
-Stripe, email, backups, and production redundancy are roadmap work, not current
-features. See [SPEC.md](./SPEC.md) for the normative release contract.
+Public signup is free with World ID or administrator-invite eligibility
+verification: one Incus system container per account, reached over public-key
+SSH. Operator-entitled paid and dedicated accounts are placement-ready, but
+Stripe, self-service upgrades, email, backups, and automatic failover are not
+current features. Environments are intentionally described as cloud containers
+rather than hardware-isolated VMs. See [SPEC.md](./SPEC.md) for the normative
+release contract.
 
 ## Repository layout
 
@@ -20,7 +21,8 @@ features. See [SPEC.md](./SPEC.md) for the normative release contract.
                         Better Auth, D1, and the Cron reconciler
     apps/daemon         Hono on Node.js; verifies signed RPC, opens sealed
                         payloads in memory, and drives local Incus
-    infra               Host bootstrap, base-image build, and operations runbook
+    infra               Fleet controller, host policy/bootstrap/audit,
+                        base-image build, and operations runbook
 
 There is no separate Pages application. One Worker serves the HTML and APIs.
 
@@ -37,7 +39,8 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
-4. The Worker reserves host capacity and an SSH port, stores state in D1, seals
+4. The Worker maps the account to its enforced host class, reserves capacity
+   and an SSH port on an eligible healthy host, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
 5. The daemon clones workbench-base inside a restricted Incus project,
@@ -49,8 +52,8 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    set drives dashboard and MOTD guidance even though every binary is available.
 6. The dashboard displays clear waiting/building/ready/error states. It reveals
    the SSH command and host-key fingerprints only after an SSH key is added. If
-   capacity is full, the FIFO waitlist is admitted automatically by the
-   reconciler.
+   its matching capacity pool is full, that pool's FIFO waitlist is admitted
+   automatically by the reconciler without blocking independent host classes.
 7. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
@@ -122,6 +125,7 @@ Required Worker secrets:
 - BETTER_AUTH_SECRET
 - WORKER_RPC_PRIVATE_KEY
 - INVITE_ADMIN_SECRET
+- FLEET_ADMIN_SECRET
 
 Optional secrets:
 
@@ -141,6 +145,11 @@ Generate service keys with:
 The generated Worker RPC public key belongs in each daemon configuration. The
 private half remains a Worker secret.
 
+`FLEET_ADMIN_SECRET` is a separate high-entropy bearer used only by
+`infra/hostctl.sh` and the host administration API. Do not reuse the invite
+secret. The API responds as not found when the fleet secret is absent, and it
+exposes only non-secret operational host metadata.
+
 ### First control-plane setup
 
 This is only for a new Cloudflare environment:
@@ -155,6 +164,7 @@ Copy the returned D1 ID into wrangler.jsonc, then:
     npx wrangler secret put CREDENTIAL_MASTER_KEY
     npx wrangler secret put WORKER_RPC_PRIVATE_KEY
     npx wrangler secret put INVITE_ADMIN_SECRET
+    npx wrangler secret put FLEET_ADMIN_SECRET
     npx wrangler deploy
 
 ### Account providers and World ID
@@ -272,11 +282,31 @@ the escape hatches; skipping checks or migrations should be exceptional.
 Review migrations before approving the command. D1 migrations do not roll back
 automatically; prefer backward-compatible expand-first changes.
 
+The one-time `0014_host_fleet.sql` rollout deliberately leaves every legacy
+host draining until its class policy and daemon have been deployed, audited,
+probed, and explicitly reactivated through the fleet controller. See the
+control-plane rollout in the runbook before applying it.
+`0015_host_lifecycle.sql` adds generation history and orderly re-home state and
+repairs host CPU accounting to the actual 2/3-vCPU reservations.
+
 If apps/daemon, packages/contract, its dependencies, the systemd unit, or host
-infrastructure changed, release the daemon first using the drain, backup,
-rollback, and verification procedure in [infra/RUNBOOK.md](./infra/RUNBOOK.md).
-A daemon restart clears active in-memory jobs and replay nonces, so never
-restart it while jobs are queued or running.
+infrastructure changed, use the fleet controller and the compatibility order
+in [infra/RUNBOOK.md](./infra/RUNBOOK.md). A normal daemon fleet release is:
+
+    read -rs FLEET_ADMIN_SECRET && export FLEET_ADMIN_SECRET
+    echo
+    npm run hostctl -- list
+    npm run hostctl -- deploy --all
+    unset FLEET_ADMIN_SECRET
+
+The controller processes hosts sequentially and requires a clean checkout. For
+each host it drains placement, refuses to restart with active jobs, backs up the
+old release and host configuration, copies the release, installs locked
+production dependencies, audits policy, performs a signed probe, verifies the
+reported Git commit, and only then restores hosts that were previously active. A failure, pre-drained host,
+or unhealthy host remains draining. Daemon restarts still clear in-memory jobs
+and replay nonces; draining atomically fences new daemon-job inserts, so the
+zero-active-job gate cannot race a user lifecycle action.
 
 Verify:
 
@@ -297,27 +327,71 @@ coordinated release.
 ## Adding and maintaining hosts
 
 See [infra/RUNBOOK.md](./infra/RUNBOOK.md). For a multi-tenant staging rollout,
-also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md). In
-summary:
+also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md).
+`hostctl` is the supported registration and mutation path; do not construct a
+hosts row with ad hoc SQL.
 
-1. copy the repository to /opt/workbench;
-2. run infra/bootstrap.sh with the host ID and Worker RPC public key;
-3. issue a publicly trusted daemon certificate;
-4. build workbench-base;
-5. register the host in D1; and
-6. complete a real provision-to-SSH check.
+Host classes are enforced end to end:
 
-Adding a host requires a hosts row, not a code change. Existing-host updates
-must use draining and active-job checks; do not rerun bootstrap blindly.
+| Host class | Eligible account | Advertised / enforced shape | Tenant ceiling |
+|---|---|---|---|
+| budget | free only | 1 / 2 vCPU, 1536 MiB RAM, 1 GiB swap, 5+5 GiB disk | calculated per host |
+| regular | paid only | 2 / 3 vCPU, 4096 MiB RAM, swap disabled, 8+8 GiB disk | calculated per host |
+| dedicated | one assigned paid account | paid shape | exactly one |
+
+Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
+remainder is tenant RAM. Its CPU reservation capacity defaults to four times
+the detected online vCPU count, and an operator may select a lower multiplier
+from 1 through 4. The calculated tenant ceiling is the minimum of
+class-adjusted vCPU, non-reserved RAM, safe disk, swap where required, and
+available isolated ID maps, so either RAM or vCPU can be the binding resource.
+The scheduler rechecks that ceiling and all resource counters transactionally.
+Every host registers its own numbers, so two budget hosts (for example 4
+vCPU/8 GiB and 8 vCPU/16 GiB) can have different ceilings, independent of an
+8-vCPU/16-GiB regular host.
+After a deliberate hardware or host-policy change,
+`npm run hostctl -- capacity HOST_ID` drains, recalculates, safely re-registers,
+audits, and probes the new ceiling before restoring prior active state.
+
+Typical onboarding, after a trusted daemon certificate exists on the host:
+
+    export WORKER_RPC_PUBLIC_KEY='PUBLIC_KEY_FROM_genkeys'
+    read -rs FLEET_ADMIN_SECRET && export FLEET_ADMIN_SECRET
+    echo
+    npm run hostctl -- onboard \
+      --id budget-fsn-1 \
+      --type budget \
+      --management-host admin-fsn-1.example.com \
+      --ssh-hostname ssh-fsn-1.example.com \
+      --daemon-endpoint https://daemon-fsn-1.example.com:8443 \
+      --tls-cert-path /etc/letsencrypt/live/daemon-fsn-1.example.com/fullchain.pem \
+      --tls-key-path /etc/letsencrypt/live/daemon-fsn-1.example.com/privkey.pem \
+      --activate
+    unset FLEET_ADMIN_SECRET WORKER_RPC_PUBLIC_KEY
+
+Onboarding copies the clean current commit, bootstraps policy, builds the base
+image, audits the host, registers it as draining, probes the signed daemon, and
+activates only when explicitly requested. Existing-host updates use `hostctl
+deploy`; never rerun bootstrap as an update mechanism.
+
+`hostctl rehome` applies a changed account plan by destroying the old instance
+before waitlisting it on the new class. `hostctl reclass` safely repurposes an
+empty host. Forced dead-host retirement evacuates desired rows and frees a
+dedicated assignment after the failed hardware is isolated; `onboard
+--replace-dead`, `history`, and `remove` provide the replacement and
+deregistration lifecycle without raw D1 edits. These are destructive
+reprovisioning paths, not backup or live-migration features.
 
 ## Current limitations
 
-- Free tier only; no Stripe, paid upgrade, email, or dunning UI.
-- One small development host; current registered capacity supports one free
-  environment after reserve.
+- Public signup is free; paid/dedicated entitlements are administrative until
+  Stripe, paid upgrade, email, and dunning UI exist.
+- A development budget host may use file-backed ZFS, but every such host is
+  explicitly non-production and contributes only its calculated safe capacity.
 - Development storage is file-backed ZFS without encryption. Production must
   use encrypted ZFS and documented key handling.
-- No backups, replication, live migration, or host-failure recovery.
+- No backups, replication, live migration, or user-data recovery after host
+  loss; manual force-retirement can only queue clean replacement environments.
 - Daemon HTTPS is public. Ed25519 signatures and sealed credential payloads are
   enforced, but mTLS/private networking and ingress restriction are not.
 - Daemon jobs and replay nonces are in memory and are lost on daemon restart.

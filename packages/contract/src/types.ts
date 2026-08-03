@@ -115,10 +115,232 @@ export const JOB_STATUSES = ["queued", "running", "succeeded", "failed"] as cons
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
 export const TIERS = {
-  free: { cpu: 1, ramMb: 1536, swapMb: 1024, diskGb: 5 },
-  paid: { cpu: 2, ramMb: 4096, swapMb: 0, diskGb: 8 },
+  // `cpu` is the public plan value. `provisionedCpu` is both the Incus limit
+  // and the amount reserved from a host's independently registered capacity.
+  free: { cpu: 1, provisionedCpu: 2, ramMb: 1536, swapMb: 1024, diskGb: 5 },
+  paid: { cpu: 2, provisionedCpu: 3, ramMb: 4096, swapMb: 0, diskGb: 8 },
 } as const;
 export type Tier = keyof typeof TIERS;
+
+export const HOST_TYPES = ["budget", "regular", "dedicated"] as const;
+export const HostTypeSchema = z.enum(HOST_TYPES);
+export type HostType = z.infer<typeof HostTypeSchema>;
+
+export const MIN_HOST_RAM_RESERVE_MB = 3072;
+export const HOST_RAM_RESERVE_PERCENT = 8;
+export const MAX_HOST_VCPU_OVERCOMMIT = 4;
+
+export function minimumHostRamReserveMb(ramTotalMb: number): number {
+  return Math.max(
+    MIN_HOST_RAM_RESERVE_MB,
+    Math.ceil((ramTotalMb * HOST_RAM_RESERVE_PERCENT) / 100),
+  );
+}
+
+/**
+ * Billing remains separate from placement. A dedicated subscription is still
+ * a paid account; it selects an exclusively assigned dedicated host rather
+ * than the shared regular pool.
+ */
+export const SERVICE_PLANS = {
+  free: { tier: "free", hostType: "budget" },
+  paid: { tier: "paid", hostType: "regular" },
+  dedicated: { tier: "paid", hostType: "dedicated" },
+} as const satisfies Record<string, { tier: Tier; hostType: HostType }>;
+export type ServicePlan = keyof typeof SERVICE_PLANS;
+
+export const HOST_STATUSES = ["active", "draining", "unhealthy", "dead"] as const;
+export const HostStatusSchema = z.enum(HOST_STATUSES);
+export type HostStatus = z.infer<typeof HostStatusSchema>;
+
+export const ManagementHostnameSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .regex(/^[A-Za-z0-9._:-]+$/, "invalid management hostname");
+
+export const HostSshHostnameSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .regex(/^[A-Za-z0-9._:-]+$/, "invalid tenant SSH hostname");
+
+export const DaemonEndpointSchema = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => {
+    const endpoint = new URL(value);
+    return endpoint.protocol === "https:" &&
+      endpoint.username === "" &&
+      endpoint.password === "" &&
+      endpoint.pathname === "/" &&
+      endpoint.search === "" &&
+      endpoint.hash === "" &&
+      !value.endsWith("/");
+  }, "daemon endpoint must be an HTTPS origin without credentials, path, query, hash, or trailing slash");
+
+function validateHostRamReserve(
+  capacity: { ramTotalMb: number; ramReserveMb: number },
+  context: z.RefinementCtx,
+): void {
+  if (capacity.ramReserveMb >= capacity.ramTotalMb) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ramReserveMb"],
+      message: "RAM reserve must be smaller than total RAM",
+    });
+  }
+  if (capacity.ramReserveMb < minimumHostRamReserveMb(capacity.ramTotalMb)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ramReserveMb"],
+      message: "RAM reserve must be at least 3072 MiB or rounded-up 8% of total RAM, whichever is larger",
+    });
+  }
+}
+
+export const HostCapacitySchema = z
+  .object({
+    ramTotalMb: z.number().int().positive(),
+    ramReserveMb: z.number().int().nonnegative(),
+    vcpuCapacity: z.number().int().positive(),
+    diskTotalGb: z.number().int().positive(),
+    maxTenants: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine(validateHostRamReserve);
+export type HostCapacity = z.infer<typeof HostCapacitySchema>;
+
+/** Public, non-secret host metadata produced by bootstrap and registered by an administrator. */
+export const HostRegistrationSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/),
+    hostType: HostTypeSchema,
+    ipv4: z.string().ip({ version: "v4" }),
+    ipv6: z.string().ip({ version: "v6" }).optional(),
+    sshHostname: HostSshHostnameSchema,
+    daemonEndpoint: DaemonEndpointSchema,
+    daemonCertFingerprint: z.string().min(1).max(256).optional(),
+    daemonPublicKey: z
+      .string()
+      .regex(/^[A-Za-z0-9+/]{43}=$/, "daemon public key must encode exactly 32 bytes"),
+    managementHostname: ManagementHostnameSchema,
+    managementPort: z.number().int().min(1).max(65535).default(22),
+    managementUser: z.string().min(1).max(32).regex(/^[a-z_][a-z0-9_-]*$/).default("root"),
+    ramTotalMb: z.number().int().positive(),
+    ramReserveMb: z.number().int().nonnegative(),
+    vcpuCapacity: z.number().int().positive(),
+    diskTotalGb: z.number().int().positive(),
+    maxTenants: z.number().int().positive(),
+    dedicatedUserId: z.string().min(1).max(128).optional(),
+  })
+  .strict()
+  .superRefine((host, context) => {
+    validateHostRamReserve(host, context);
+    if (host.hostType === "dedicated" && host.maxTenants !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxTenants"],
+        message: "dedicated hosts must have exactly one tenant slot",
+      });
+    }
+    if (host.hostType !== "dedicated" && host.dedicatedUserId !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dedicatedUserId"],
+        message: "only dedicated hosts can be assigned to one account",
+      });
+    }
+    const tier = host.hostType === "budget" ? TIERS.free : TIERS.paid;
+    const resourceCeiling = Math.min(
+      Math.floor(host.vcpuCapacity / tier.provisionedCpu),
+      Math.floor((host.ramTotalMb - host.ramReserveMb) / tier.ramMb),
+      Math.floor(host.diskTotalGb / (tier.diskGb * 2)),
+    );
+    if (host.maxTenants > resourceCeiling) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxTenants"],
+        message: "tenant ceiling exceeds registered CPU, RAM, or disk capacity",
+      });
+    }
+  });
+export type HostRegistration = z.infer<typeof HostRegistrationSchema>;
+
+/** Validated host mutations accepted by the secret-authenticated fleet API. */
+export const HostFleetUpdateSchema = z
+  .object({
+    status: z.enum(["active", "draining", "dead"]).optional(),
+    hostType: HostTypeSchema.optional(),
+    dedicatedUserId: z.string().min(1).max(128).nullable().optional(),
+    sshHostname: HostSshHostnameSchema.optional(),
+    daemonEndpoint: DaemonEndpointSchema.optional(),
+    managementHostname: ManagementHostnameSchema.optional(),
+    managementPort: z.number().int().min(1).max(65535).optional(),
+    managementUser: z
+      .string()
+      .min(1)
+      .max(32)
+      .regex(/^[a-z_][a-z0-9_-]*$/)
+      .optional(),
+    capacity: HostCapacitySchema.optional(),
+    force: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.status !== undefined ||
+      value.hostType !== undefined ||
+      value.dedicatedUserId !== undefined ||
+      value.sshHostname !== undefined ||
+      value.daemonEndpoint !== undefined ||
+      value.managementHostname !== undefined ||
+      value.managementPort !== undefined ||
+      value.managementUser !== undefined ||
+      value.capacity !== undefined,
+    "host update is empty",
+  )
+  .superRefine((value, context) => {
+    const endpointUpdate = value.sshHostname !== undefined ||
+      value.daemonEndpoint !== undefined ||
+      value.managementHostname !== undefined ||
+      value.managementPort !== undefined ||
+      value.managementUser !== undefined;
+    const mutationGroups = [
+      value.status !== undefined,
+      value.dedicatedUserId !== undefined,
+      value.capacity !== undefined || value.hostType !== undefined,
+      endpointUpdate,
+    ].filter(Boolean).length;
+    if (mutationGroups > 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "combine endpoint fields only; submit state, assignment, and capacity separately",
+      });
+    }
+    if (value.force !== undefined && value.status !== "dead") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["force"],
+        message: "force is valid only when retiring a host",
+      });
+    }
+    if (value.hostType !== undefined && value.capacity === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["capacity"],
+        message: "host class changes require a fresh capacity report",
+      });
+    }
+  });
+export type HostFleetUpdate = z.infer<typeof HostFleetUpdateSchema>;
+
+/** An orderly re-home destroys the old Incus container before re-provisioning. */
+export const ContainerRehomeSchema = z
+  .object({ confirmDataLoss: z.literal(true) })
+  .strict();
+export type ContainerRehome = z.infer<typeof ContainerRehomeSchema>;
 
 export const INPUT_LIMITS = {
   sshKeyBytes: 4096,
@@ -367,9 +589,11 @@ const ContainerStatSchema = z
 export const StatsResponseSchema = z
   .object({
     hostId: z.string(),
+    // Optional while a rolling fleet contains mixed daemon versions.
+    hostType: HostTypeSchema.optional(),
+    version: z.string().min(1).max(128).optional(),
     containers: z.array(ContainerStatSchema),
     ramTotalMb: z.number(),
-    // Optional for daemon-first/Worker-first rolling compatibility.
     ramAvailableMb: z.number().nonnegative().optional(),
     cpuLogical: z.number().int().positive().optional(),
     loadAverage1: z.number().nonnegative().optional(),
@@ -380,5 +604,10 @@ export const StatsResponseSchema = z
 export type StatsResponse = z.infer<typeof StatsResponseSchema>;
 
 export const HealthResponseSchema = z
-  .object({ ok: z.boolean(), hostId: z.string(), version: z.string() })
+  .object({
+    ok: z.boolean(),
+    hostId: z.string(),
+    hostType: HostTypeSchema.optional(),
+    version: z.string(),
+  })
   .strict();

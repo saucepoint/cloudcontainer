@@ -8,8 +8,8 @@
 #
 # Required setup is intentionally kept outside this script: authenticated
 # Wrangler access, existing D1/KV bindings, and the Worker secrets documented
-# in README.md. Daemon releases remain a separate, host-draining operation;
-# see infra/RUNBOOK.md before changing daemon or shared-contract code.
+# in README.md. Fleet daemon releases use the controller's drain, deploy,
+# verify, and restore workflow; see infra/RUNBOOK.md for compatibility order.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -115,7 +115,7 @@ confirm_remote_release() {
     die "Refusing a non-interactive release without --yes."
   fi
 
-  read -r -p "Confirm any daemon/shared-contract changes were deployed daemon-first per infra/RUNBOOK.md [y/N] " daemon_answer
+  read -r -p "Confirm daemon/shared-contract changes follow the compatibility order in infra/RUNBOOK.md [y/N] " daemon_answer
   if [[ ! "$daemon_answer" =~ ^[Yy]([Ee][Ss])?$ ]]; then
     info "Release cancelled."
     exit 0
@@ -237,7 +237,7 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-warn "This command deploys only the Worker. Release daemon or shared-contract changes daemon-first with infra/RUNBOOK.md."
+warn "This command deploys only the Worker. Use 'npm run hostctl -- deploy' for fleet daemon releases per infra/RUNBOOK.md."
 confirm_remote_release
 
 if [[ "$SKIP_MIGRATIONS" == false ]]; then

@@ -1,4 +1,11 @@
-import type { ContainerStatus, JobOp, JobStatus, Tier } from "@workbench/contract";
+import type {
+  ContainerStatus,
+  HostStatus,
+  HostType,
+  JobOp,
+  JobStatus,
+  Tier,
+} from "@workbench/contract";
 
 /**
  * Bindings = generated Cloudflare.Env (vars + D1 bindings from wrangler.jsonc)
@@ -38,6 +45,8 @@ export type Bindings = Omit<
   GITHUB_APP_CLIENT_SECRET?: string;
   /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
   INVITE_ADMIN_SECRET?: string;
+  /** Protects host registration, health probes, and fleet state changes. */
+  FLEET_ADMIN_SECRET?: string;
 };
 
 export interface UserRow {
@@ -69,10 +78,21 @@ export interface HostRow {
   vcpu_allocated: number;
   disk_total_gb: number;
   disk_allocated_gb: number;
-  status: string;
+  status: HostStatus;
   joined_at: number;
   last_seen_at: number | null;
   consecutive_failures: number;
+  host_type: HostType;
+  max_tenants: number;
+  dedicated_user_id: string | null;
+  management_hostname: string | null;
+  management_port: number;
+  management_user: string;
+  daemon_version: string | null;
+  reported_ram_total_mb: number | null;
+  reported_cpu_logical: number | null;
+  generation: number;
+  retired_at: number | null;
 }
 
 export interface ContainerRow {
@@ -83,6 +103,7 @@ export interface ContainerRow {
   agents: string; // JSON array of Agent, e.g. '["claude","codex"]'
   github_repos: string; // JSON array of owner/name repositories cloned on provision
   tier: Tier;
+  placement_class: HostType;
   cpu: number;
   ram_mb: number;
   disk_gb: number;
@@ -92,6 +113,9 @@ export interface ContainerRow {
   suspended_at: number | null;
   created_at: number;
   last_upgraded_at: number | null;
+  rehome_tier: Tier | null;
+  rehome_placement_class: HostType | null;
+  rehome_requested_at: number | null;
 }
 
 export interface CredentialsRow {

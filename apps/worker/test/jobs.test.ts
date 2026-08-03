@@ -8,10 +8,12 @@ import { upsertCredentials } from "../src/credentials.js";
 import { HOST_HEARTBEAT_MAX_AGE_MS, pickHost } from "../src/capacity.js";
 import {
   buildJobRequest,
+  ContainerPlacementConflictError,
   enqueueJob,
   enqueueJobForUser,
   getContainerForUser,
   getJob,
+  HostJobAdmissionError,
   refreshJob,
 } from "../src/jobs.js";
 import { startProvision } from "../src/placement.js";
@@ -42,6 +44,7 @@ describe("buildJobRequest", () => {
     expect(request.op).toBe("provision");
     if (request.op !== "provision") throw new Error("unreachable");
     expect(request.spec.sshPort).toBe(30500);
+    expect(request.spec.cpu).toBe(2);
     expect(request.sshKeys).toEqual(["ssh-ed25519 AAAA k"]);
     expect(JSON.stringify(request)).not.toContain("CANARY-"); // sealed, not plaintext
 
@@ -194,6 +197,59 @@ describe("enqueueJob", () => {
     expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
   });
 
+  it("atomically fences new jobs once a host starts draining", async () => {
+    const { env, host, container } = await setup();
+    await env.DB.prepare("UPDATE hosts SET status = 'draining' WHERE id = ?")
+      .bind(host.id)
+      .run();
+    stubFetch(() => {
+      throw new Error("drained work must not be dispatched");
+    });
+
+    await expect(enqueueJob(env, "stop", container, host))
+      .rejects.toBeInstanceOf(HostJobAdmissionError);
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+    expect((await getContainerForUser(env, "user-1"))?.status).toBe("running");
+  });
+
+  it("rejects spec-bearing placement drift before dispatch but always permits destroy", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    const host = await seedHost(env, { host_type: "regular" });
+    const container = await seedContainer(env, {
+      tier: "free",
+      placement_class: "budget",
+    });
+    await expect(enqueueJob(env, "rebuild", container, host)).rejects.toBeInstanceOf(
+      ContainerPlacementConflictError,
+    );
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+    await expect(enqueueJob(env, "destroy", container, host)).resolves.toMatchObject({
+      op: "destroy",
+      status: "running",
+    });
+  });
+
+  it("keeps an existing placement operable until an explicit plan re-home", async () => {
+    const { env } = makeEnv();
+    await seedUser(env, "user-1", "free");
+    const host = await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const container = await seedContainer(env);
+    await env.DB.prepare(
+      "UPDATE users SET subscription_status = 'paid' WHERE id = 'user-1'",
+    ).run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await expect(enqueueJob(env, "rebuild", container, host)).resolves.toMatchObject({
+      op: "rebuild",
+      status: "running",
+    });
+  });
+
   it("fails the job and drops the container to error when the daemon is unreachable (lifecycle op)", async () => {
     const { env, host, container } = await setup();
     stubFetch(() => {
@@ -289,6 +345,19 @@ describe("enqueueJobForUser", () => {
     });
 
     await enqueueJobForUser(env, "user-1", "refresh-credentials");
+    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
+  });
+
+  it("defers updates while the assigned host is draining", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { status: "draining", daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "running" });
+    stubFetch(() => {
+      throw new Error("should not dispatch during maintenance");
+    });
+
+    await enqueueJobForUser(env, "user-1", "sync-keys");
     expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toHaveLength(0);
   });
 });
@@ -387,7 +456,7 @@ describe("refreshJob", () => {
   it("destroy success quarantines the port, releases host accounting, and drops the row", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
     await seedContainer(env, { status: "running" });
     await env.DB.prepare(
       "INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES ('user-1', 1, 2)",
@@ -417,7 +486,7 @@ describe("refreshJob", () => {
   it("keeps destroy retryable when an atomic finalization step fails", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    await seedHost(env, { vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
     await seedContainer(env, { status: "destroying" });
     await env.DB.prepare(
       `INSERT INTO jobs (id, container_id, op, status, created_at, updated_at)
@@ -447,7 +516,7 @@ describe("refreshJob", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 16 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 16 });
     expect((await env.DB.prepare("SELECT * FROM port_quarantine").all()).results).toHaveLength(0);
   });
 
@@ -455,8 +524,8 @@ describe("refreshJob", () => {
     const { env } = makeEnv();
     await seedUser(env);
     await seedHost(env, {
-      vcpu_allocated: 2,
-      ram_allocated_mb: 4096,
+      vcpu_allocated: 4,
+      ram_allocated_mb: 3072,
       disk_allocated_gb: 20,
     });
     await seedContainer(env, { status: "destroying" });
@@ -485,7 +554,7 @@ describe("refreshJob", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 2048, disk_allocated_gb: 10 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
   });
 
   it("renews the D1 lease when the daemon reports a running heartbeat", async () => {
@@ -538,38 +607,47 @@ describe("refreshJob", () => {
 });
 
 describe("pickHost (scheduler §10)", () => {
+  const request = (overrides: Partial<Parameters<typeof pickHost>[1]> = {}) => ({
+    userId: "user-1",
+    hostType: "budget" as const,
+    cpu: 2,
+    ramMb: 1536,
+    diskGb: 8,
+    ...overrides,
+  });
+
   it("prefers the host with the most unallocated non-reserved RAM", async () => {
     const { env } = makeEnv();
     await seedHost(env, { id: "small", ram_total_mb: 32768, ram_reserve_mb: 8192, ram_allocated_mb: 20000 });
     await seedHost(env, { id: "big", ram_total_mb: 65536, ram_reserve_mb: 16384, ram_allocated_mb: 0 });
 
-    expect((await pickHost(env, 1, 2048, 8))?.id).toBe("big");
+    expect((await pickHost(env, request()))?.id).toBe("big");
   });
 
   it("respects the upgrade-headroom reserve", async () => {
     const { env } = makeEnv();
-    // 4096 total, 2048 reserved, 1024 allocated -> only 1024 non-reserved free.
-    await seedHost(env, { ram_total_mb: 4096, ram_reserve_mb: 2048, ram_allocated_mb: 1024 });
-    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+    // 5120 total, 3072 reserved, 1024 allocated -> only 1024 non-reserved free.
+    await seedHost(env, { ram_total_mb: 5120, ram_reserve_mb: 3072, ram_allocated_mb: 1024 });
+    expect(await pickHost(env, request())).toBeNull();
   });
 
   it("rejects hosts whose ZFS pool cannot fit the disk quota", async () => {
     const { env } = makeEnv();
     await seedHost(env, { disk_total_gb: 40, disk_allocated_gb: 36 });
-    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
-    expect(await pickHost(env, 1, 2048, 4)).not.toBeNull();
+    expect(await pickHost(env, request())).toBeNull();
+    expect(await pickHost(env, request({ diskGb: 4 }))).not.toBeNull();
   });
 
   it("ignores inactive hosts", async () => {
     const { env } = makeEnv();
     await seedHost(env, { status: "draining" });
-    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+    expect(await pickHost(env, request())).toBeNull();
   });
 
   it("rejects a host whose vCPU reservation ceiling is full", async () => {
     const { env } = makeEnv();
     await seedHost(env, { vcpu_capacity: 3, vcpu_allocated: 3 });
-    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+    expect(await pickHost(env, request())).toBeNull();
   });
 
   it("rejects stale or currently failing daemon heartbeats", async () => {
@@ -577,11 +655,88 @@ describe("pickHost (scheduler §10)", () => {
     await seedHost(env, {
       last_seen_at: Date.now() - HOST_HEARTBEAT_MAX_AGE_MS - 1,
     });
-    expect(await pickHost(env, 1, 2048, 8)).toBeNull();
+    expect(await pickHost(env, request())).toBeNull();
 
     const fresh = makeEnv();
     await seedHost(fresh.env, { consecutive_failures: 1 });
-    expect(await pickHost(fresh.env, 1, 2048, 8)).toBeNull();
+    expect(await pickHost(fresh.env, request())).toBeNull();
+  });
+
+  it("rejects a daemon without verified release and hardware metadata", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, { daemon_version: null });
+    expect(await pickHost(env, request())).toBeNull();
+
+    const missingHardware = makeEnv();
+    await seedHost(missingHardware.env, { reported_cpu_logical: null });
+    expect(await pickHost(missingHardware.env, request())).toBeNull();
+  });
+
+  it("keeps free and paid placement pools isolated", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, { id: "budget", host_type: "budget" });
+    await seedHost(env, { id: "regular", host_type: "regular" });
+
+    expect((await pickHost(env, request({ hostType: "budget" })))?.id).toBe("budget");
+    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("regular");
+  });
+
+  it("scores heterogeneous capacity independently even within the same host class", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, {
+      id: "budget-4cpu-8gb",
+      vcpu_capacity: 16,
+      ram_total_mb: 8192,
+      ram_reserve_mb: 3072,
+      max_tenants: 3,
+      reported_cpu_logical: 4,
+    });
+    await seedHost(env, {
+      id: "budget-8cpu-16gb",
+      vcpu_capacity: 32,
+      ram_total_mb: 16384,
+      ram_reserve_mb: 3072,
+      max_tenants: 8,
+      reported_cpu_logical: 8,
+    });
+
+    expect((await pickHost(env, request()))?.id).toBe("budget-8cpu-16gb");
+    await env.DB.prepare(
+      "UPDATE hosts SET vcpu_allocated = 32 WHERE id = 'budget-8cpu-16gb'",
+    ).run();
+    expect((await pickHost(env, request()))?.id).toBe("budget-4cpu-8gb");
+  });
+
+  it("applies the paid 3-vCPU reservation to an independently sized regular host", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, {
+      host_type: "regular",
+      vcpu_capacity: 8,
+      ram_total_mb: 16384,
+      ram_reserve_mb: 3072,
+      max_tenants: 2,
+      vcpu_allocated: 6,
+    });
+    expect(await pickHost(env, request({ hostType: "regular", cpu: 3 }))).toBeNull();
+    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 3 WHERE id = 'host-1'").run();
+    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("host-1");
+  });
+
+  it("enforces tenant ceilings and dedicated account assignment", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, {
+      host_type: "dedicated",
+      max_tenants: 1,
+      dedicated_user_id: "user-1",
+    });
+
+    expect((await pickHost(env, request({ hostType: "dedicated", cpu: 3 })))?.id).toBe("host-1");
+    expect(await pickHost(env, request({ userId: "another", hostType: "dedicated", cpu: 3 })))
+      .toBeNull();
+
+    await seedContainer(env, { placement_class: "dedicated" });
+    expect(await pickHost(env, request({ hostType: "dedicated", cpu: 3 }))).toBeNull();
   });
 });
 
@@ -614,10 +769,55 @@ describe("startProvision", () => {
       ram_allocated_mb: number;
       disk_allocated_gb: number;
     }>();
-    expect(host?.vcpu_allocated).toBe(1);
+    expect(host?.vcpu_allocated).toBe(2);
     expect(host?.ram_allocated_mb).toBe(1536);
     expect(host?.disk_allocated_gb).toBe(10);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
+  it("maps paid and dedicated subscriptions to their isolated host classes", async () => {
+    const regularEnv = makeEnv();
+    const paidUser = await seedUser(regularEnv.env, "paid-user", "paid");
+    await seedHost(regularEnv.env, {
+      id: "budget-host",
+      host_type: "budget",
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    await seedHost(regularEnv.env, {
+      id: "regular-host",
+      host_type: "regular",
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    stubFetch(fakeDaemon().route);
+
+    const paid = await startProvision(regularEnv.env, paidUser, { agents: ["claude"] });
+    expect(paid).toMatchObject({
+      host_id: "regular-host",
+      tier: "paid",
+      placement_class: "regular",
+      cpu: 2,
+      ram_mb: 4096,
+      disk_gb: 8,
+    });
+
+    vi.unstubAllGlobals();
+    const dedicatedEnv = makeEnv();
+    const dedicatedUser = await seedUser(dedicatedEnv.env, "dedicated-user", "dedicated");
+    await seedHost(dedicatedEnv.env, {
+      id: "dedicated-host",
+      host_type: "dedicated",
+      max_tenants: 1,
+      dedicated_user_id: dedicatedUser.id,
+      daemon_pubkey: hostKeys.publicKey,
+    });
+    stubFetch(fakeDaemon().route);
+
+    const dedicated = await startProvision(dedicatedEnv.env, dedicatedUser, { agents: ["codex"] });
+    expect(dedicated).toMatchObject({
+      host_id: "dedicated-host",
+      tier: "paid",
+      placement_class: "dedicated",
+    });
   });
 
   it("does not turn an unrelated placement database failure into a waitlist row", async () => {
@@ -707,14 +907,49 @@ describe("startProvision", () => {
     });
   });
 
+  it("returns a retryable error when a host drains after placement but before job admission", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const database = env.DB;
+    let batches = 0;
+    env.DB = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property === "batch") {
+          return async (...args: Parameters<typeof target.batch>) => {
+            const result = await target.batch(...args);
+            batches += 1;
+            if (batches === 1) {
+              await target.prepare(
+                "UPDATE hosts SET status = 'draining' WHERE id = 'host-1'",
+              ).run();
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    const container = await startProvision(env, user, { agents: ["claude"] });
+
+    expect(container).toMatchObject({
+      status: "error",
+      status_detail: "host entered maintenance before provisioning could be queued",
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM jobs").first()).toEqual({
+      count: 0,
+    });
+  });
+
   it("does not oversubscribe the final host slot when two provisions race", async () => {
     const { env } = makeEnv();
     const alice = await seedUser(env, "alice");
     const bob = await seedUser(env, "bob");
     await seedHost(env, {
-      vcpu_capacity: 1,
-      ram_total_mb: 4096,
-      ram_reserve_mb: 2048,
+      vcpu_capacity: 2,
+      ram_total_mb: 5120,
+      ram_reserve_mb: 3072,
       disk_total_gb: 16,
       daemon_pubkey: hostKeys.publicKey,
     });
@@ -733,7 +968,7 @@ describe("startProvision", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 1, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 1536, disk_allocated_gb: 10 });
     expect(daemon.submitted).toHaveLength(1);
   });
 });

@@ -4,14 +4,28 @@
 # traffic from being enabled for the host.
 set -euo pipefail
 
-PROJECT_NAME="${PROJECT_NAME:-workbench}"
-POOL_NAME="${POOL_NAME:-default}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DAEMON_CONFIG="${WB_DAEMON_CONFIG:-/etc/workbench/daemon.json}"
+if [[ -f "$DAEMON_CONFIG" ]]; then
+  PROJECT_NAME="${PROJECT_NAME:-$(jq -er '.project // "workbench"' "$DAEMON_CONFIG")}"
+  POOL_NAME="${POOL_NAME:-$(jq -er '.storagePool // "default"' "$DAEMON_CONFIG")}"
+else
+  PROJECT_NAME="${PROJECT_NAME:-workbench}"
+  POOL_NAME="${POOL_NAME:-default}"
+fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
-TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
-TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
-TENANT_RAM_MB=1536
-TENANT_SWAP_MB=1024
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
+EXPECTED_HOST_ID="${EXPECTED_HOST_ID:-}"
+EXPECTED_MAX_TENANTS="${EXPECTED_MAX_TENANTS:-}"
+EXPECTED_VCPU_CAPACITY="${EXPECTED_VCPU_CAPACITY:-}"
+EXPECTED_RAM_TOTAL_MB="${EXPECTED_RAM_TOTAL_MB:-}"
+EXPECTED_RAM_RESERVE_MB="${EXPECTED_RAM_RESERVE_MB:-}"
+EXPECTED_DISK_TOTAL_GB="${EXPECTED_DISK_TOTAL_GB:-}"
+if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
+  HOST_TYPE=$(jq -r '.hostType // "budget"' "$DAEMON_CONFIG")
+fi
+# shellcheck source=infra/host-policy.sh
+source "$SCRIPT_DIR/host-policy.sh"
 
 failures=0
 checks=0
@@ -52,6 +66,22 @@ check_set() {
   fi
 }
 
+expanded_device_value() {
+  local name=$1
+  local device=$2
+  local key=$3
+  incus --project "$PROJECT_NAME" query "/1.0/instances/${name}?recursion=1" | \
+    jq -er --arg device "$device" --arg key "$key" \
+      '.metadata.expanded_devices[$device][$key] // empty'
+}
+
+home_volume_size() {
+  local name=$1
+  local source
+  source=$(incus --project "$PROJECT_NAME" config device get "$name" home source)
+  incus --project "$PROJECT_NAME" storage volume get "$POOL_NAME" "$source" size
+}
+
 if systemctl is-active --quiet incus; then
   pass "Incus daemon is active"
 else
@@ -80,11 +110,39 @@ if [[ "$STORAGE_DRIVER" == "zfs" || "$ALLOW_DIR_STORAGE" == "1" ]]; then
 else
   fail "storage pool must be ZFS (got ${STORAGE_DRIVER:-missing})"
 fi
-if POOL_TOTAL_BYTES=$(incus query "/1.0/storage-pools/${POOL_NAME}/resources" 2>/dev/null | \
-  jq -er '.metadata.space.total // .space.total') && [[ "$POOL_TOTAL_BYTES" -gt 0 ]]; then
-  pass "storage pool reports total capacity"
-else
-  fail "storage pool reports total capacity"
+calculate_host_capacity "$POOL_NAME"
+pass "host capacity is calculable ($TENANT_SLOTS complete $HOST_TYPE slot(s))"
+
+if [[ -n "$EXPECTED_MAX_TENANTS" ]]; then
+  for expected in \
+    "$EXPECTED_MAX_TENANTS" "$EXPECTED_VCPU_CAPACITY" "$EXPECTED_RAM_TOTAL_MB" \
+    "$EXPECTED_RAM_RESERVE_MB" "$EXPECTED_DISK_TOTAL_GB"; do
+    if ! [[ "$expected" =~ ^[0-9]+$ ]]; then
+      echo "!! registered capacity expectations must be non-negative integers" >&2
+      exit 1
+    fi
+  done
+  EXPECTED_RAM_CAPACITY_MB=$(( EXPECTED_RAM_TOTAL_MB - EXPECTED_RAM_RESERVE_MB ))
+  if (( TENANT_SLOTS >= EXPECTED_MAX_TENANTS )); then
+    pass "calculated tenant ceiling covers the D1 registration"
+  else
+    fail "calculated tenant ceiling covers the D1 registration ($TENANT_SLOTS < $EXPECTED_MAX_TENANTS)"
+  fi
+  if (( VCPU_CAPACITY >= EXPECTED_VCPU_CAPACITY )); then
+    pass "calculated vCPU capacity covers the D1 registration"
+  else
+    fail "calculated vCPU capacity covers the D1 registration ($VCPU_CAPACITY < $EXPECTED_VCPU_CAPACITY)"
+  fi
+  if (( RAM_TOTAL_MB + 16 >= EXPECTED_RAM_TOTAL_MB && RAM_CAPACITY_MB >= EXPECTED_RAM_CAPACITY_MB )); then
+    pass "detected RAM capacity covers the D1 registration"
+  else
+    fail "detected RAM capacity covers the D1 registration"
+  fi
+  if (( DISK_GB >= EXPECTED_DISK_TOTAL_GB )); then
+    pass "safe disk capacity covers the D1 registration"
+  else
+    fail "safe disk capacity covers the D1 registration ($DISK_GB < $EXPECTED_DISK_TOTAL_GB)"
+  fi
 fi
 
 check_eq "tenant project is restricted" "true" incus project get "$PROJECT_NAME" restricted
@@ -112,22 +170,23 @@ check_eq "tenant project has isolated profiles" "true" \
   incus project get "$PROJECT_NAME" features.profiles
 check_eq "tenant project has isolated custom volumes" "true" \
   incus project get "$PROJECT_NAME" features.storage.volumes
-check_set "tenant project CPU ceiling" incus project get "$PROJECT_NAME" limits.cpu
-check_set "tenant project memory ceiling" incus project get "$PROJECT_NAME" limits.memory
-check_set "tenant project process ceiling" incus project get "$PROJECT_NAME" limits.processes
-check_set "tenant project container ceiling" incus project get "$PROJECT_NAME" limits.containers
-check_set "tenant project disk ceiling" \
+check_eq "tenant project CPU ceiling" "$VCPU_CAPACITY" \
+  incus project get "$PROJECT_NAME" limits.cpu
+check_eq "tenant project memory ceiling" "${RAM_CAPACITY_MB}MiB" \
+  incus project get "$PROJECT_NAME" limits.memory
+check_eq "tenant project process ceiling" "$(( TENANT_SLOTS * TENANT_PROCESS_LIMIT ))" \
+  incus project get "$PROJECT_NAME" limits.processes
+check_eq "tenant project container ceiling" "$TENANT_SLOTS" \
+  incus project get "$PROJECT_NAME" limits.containers
+check_eq "tenant project disk ceiling" "${DISK_GB}GiB" \
   incus project get "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}"
 
-PROJECT_SLOTS=$(incus project get "$PROJECT_NAME" limits.containers 2>/dev/null || echo 0)
-SWAP_TOTAL_MB=$(awk '/SwapTotal/ { print int($2 / 1024) }' /proc/meminfo)
-SWAP_REQUIRED_MB=$(( PROJECT_SLOTS * TENANT_SWAP_MB ))
+SWAP_REQUIRED_MB=$(( TENANT_SLOTS * TENANT_SWAP_MB ))
 if (( SWAP_TOTAL_MB >= SWAP_REQUIRED_MB )); then
   pass "host swap fits the tenant ceiling"
 else
   fail "host swap fits the tenant ceiling (need ${SWAP_REQUIRED_MB}MiB, got ${SWAP_TOTAL_MB}MiB)"
 fi
-IDMAP_REQUIRED=$(( (PROJECT_SLOTS + 1) * 65536 ))
 if [[ -s /etc/subuid || -s /etc/subgid ]]; then
   SUBUID_TOTAL=$(awk -F: '$1 == "root" { total += int($3 / 65536) * 65536 } END { print total + 0 }' /etc/subuid 2>/dev/null || true)
   SUBGID_TOTAL=$(awk -F: '$1 == "root" { total += int($3 / 65536) * 65536 } END { print total + 0 }' /etc/subgid 2>/dev/null || true)
@@ -144,10 +203,14 @@ fi
 
 check_eq "profile root pool" "$POOL_NAME" \
   incus --project "$PROJECT_NAME" profile device get default root pool
-check_eq "profile root default quota" "5GiB" \
+check_eq "image-build profile root pool" "$POOL_NAME" \
+  incus profile device get default root pool
+check_eq "profile root default quota" "${TENANT_DISK_GB}GiB" \
   incus --project "$PROJECT_NAME" profile device get default root size
 check_eq "profile NIC network" "$NETWORK_NAME" \
   incus --project "$PROJECT_NAME" profile device get default eth0 network
+check_eq "image-build profile NIC network" "$NETWORK_NAME" \
+  incus profile device get default eth0 network
 check_eq "Incus IPv4 firewall/NAT management" "true" \
   incus network get "$NETWORK_NAME" ipv4.firewall
 check_eq "Incus IPv6 firewall/NAT management" "true" \
@@ -163,12 +226,22 @@ check_eq "profile east-west isolation" "true" \
 check_eq "profile network bandwidth cap" "$TENANT_NETWORK_LIMIT" \
   incus --project "$PROJECT_NAME" profile device get default eth0 limits.max
 
-if [[ -f /etc/workbench/daemon.json ]] && \
-  jq -e --arg project "$PROJECT_NAME" '.project == $project' \
-    /etc/workbench/daemon.json >/dev/null; then
-  pass "daemon is scoped to the tenant project"
+if [[ -f "$DAEMON_CONFIG" ]] && \
+  jq -e --arg project "$PROJECT_NAME" --arg host_type "$HOST_TYPE" \
+    --arg host_id "$EXPECTED_HOST_ID" \
+    '.project == $project and (.hostType // "budget") == $host_type and
+      ($host_id == "" or .hostId == $host_id)' \
+    "$DAEMON_CONFIG" >/dev/null; then
+  pass "daemon identity is scoped to the tenant project and host class"
 else
-  fail "daemon is scoped to the tenant project"
+  fail "daemon identity is scoped to the tenant project and host class"
+fi
+BASE_IMAGE=$(jq -r '.baseImage // "workbench-base"' "$DAEMON_CONFIG" 2>/dev/null || true)
+if [[ -n "$BASE_IMAGE" ]] && \
+  incus --project "$PROJECT_NAME" image info "$BASE_IMAGE" >/dev/null 2>&1; then
+  pass "daemon base image is available ($BASE_IMAGE)"
+else
+  fail "daemon base image is available (${BASE_IMAGE:-missing})"
 fi
 if nft list table inet workbench >/dev/null 2>&1; then
   pass "Workbench nftables policy is loaded"
@@ -197,16 +270,23 @@ while IFS= read -r name; do
   tenant_count=$(( tenant_count + 1 ))
   check_set "$name has a control-plane identity" \
     incus --project "$PROJECT_NAME" config get "$name" user.workbench.id
-  check_set "$name has a CPU reservation" \
+  check_eq "$name has the class CPU reservation" "$TENANT_CPU" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu
-  check_set "$name has a CPU allowance" \
+  check_eq "$name has the class CPU allowance" "$(( TENANT_CPU * 100 ))%" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu.allowance
-  check_eq "$name has the free-tier memory limit" "${TENANT_RAM_MB}MiB" \
+  check_eq "$name has the class tier metadata" "$TENANT_TIER" \
+    incus --project "$PROJECT_NAME" config get "$name" user.workbench.tier
+  check_eq "$name has the class memory limit" "${TENANT_RAM_MB}MiB" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory
   check_eq "$name has hard memory enforcement" "hard" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory.enforce
-  check_eq "$name has the free-tier swap limit" "${TENANT_SWAP_MB}MiB" \
-    incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
+  if (( TENANT_SWAP_MB > 0 )); then
+    check_eq "$name has the class swap limit" "${TENANT_SWAP_MB}MiB" \
+      incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
+  else
+    check_eq "$name has swap disabled" "false" \
+      incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
+  fi
   check_eq "$name process ceiling" "$TENANT_PROCESS_LIMIT" \
     incus --project "$PROJECT_NAME" config get "$name" limits.processes
   check_eq "$name is unprivileged" "false" \
@@ -228,13 +308,21 @@ while IFS= read -r name; do
     incus --project "$PROJECT_NAME" config get "$name" security.nesting
   check_eq "$name preserves stopped state across host reboot" "last-state" \
     incus --project "$PROJECT_NAME" config get "$name" boot.autostart
-  check_set "$name root disk has a quota" \
-    incus --project "$PROJECT_NAME" config device get "$name" root size
+  check_eq "$name root disk has the class quota" "${TENANT_DISK_GB}GiB" \
+    expanded_device_value "$name" root size
   check_eq "$name home volume uses the tenant pool" "$POOL_NAME" \
     incus --project "$PROJECT_NAME" config device get "$name" home pool
+  check_eq "$name home volume has the class quota" "${TENANT_DISK_GB}GiB" \
+    home_volume_size "$name"
   check_set "$name has an SSH proxy" \
     incus --project "$PROJECT_NAME" config device get "$name" ssh listen
 done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
+
+if (( tenant_count <= TENANT_SLOTS )); then
+  pass "tenant count is within the calculated host ceiling"
+else
+  fail "tenant count exceeds the calculated host ceiling ($tenant_count > $TENANT_SLOTS)"
+fi
 
 echo "audited $checks controls across $tenant_count tenant container(s); failures=$failures"
 if [[ "$failures" -ne 0 ]]; then

@@ -16,6 +16,7 @@ const workerKeys = generateEd25519Keypair();
 function makeApp() {
   const config: DaemonConfig = {
     hostId: "host-1",
+    hostType: "budget",
     listenPort: 8443,
     workerRpcPublicKey: workerKeys.publicKey,
     x25519PrivateKey: generateX25519Keypair().privateKey,
@@ -33,7 +34,7 @@ function makeApp() {
   });
   const incus = new Incus(exec);
   const runner = new JobRunner(new Provisioner(incus, config));
-  return buildApp({ config, incus, runner });
+  return buildApp({ config, incus, runner, version: "release-abc123" });
 }
 
 function signedInit(method: "GET" | "POST", path: string, body = ""): RequestInit {
@@ -98,7 +99,12 @@ describe("daemon HTTP API", () => {
     const app = makeApp();
     const health = await app.request("/health", signedInit("GET", "/health"));
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ ok: true, hostId: "host-1" });
+    expect(await health.json()).toMatchObject({
+      ok: true,
+      hostId: "host-1",
+      hostType: "budget",
+      version: "release-abc123",
+    });
 
     const stats = await app.request("/stats", signedInit("GET", "/stats"));
     const body = (await stats.json()) as {
@@ -106,11 +112,15 @@ describe("daemon HTTP API", () => {
       cpuLogical: number;
       ramAvailableMb: number;
       hostUptimeSec: number;
+      hostType: string;
+      version: string;
     };
     expect(body.containers).toEqual([{ containerId: "c-123", incusStatus: "Running" }]);
     expect(body.cpuLogical).toBeGreaterThan(0);
     expect(body.ramAvailableMb).toBeGreaterThanOrEqual(0);
     expect(body.hostUptimeSec).toBeGreaterThan(0);
+    expect(body.hostType).toBe("budget");
+    expect(body.version).toBe("release-abc123");
   });
 
   it("rejects a replayed signed request", async () => {

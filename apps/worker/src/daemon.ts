@@ -1,10 +1,11 @@
 /**
- * Transport to per-host daemons: HTTPS + Ed25519-signed requests with
- * timestamp + nonce (mTLS via a Workers mTLS-certificate binding is the
- * production transport underneath; the signature layer works either way).
+ * Transport to per-host daemons: publicly trusted HTTPS plus Ed25519-signed
+ * requests with timestamp and nonce. mTLS/private ingress remains future
+ * hardening; credential payloads are independently sealed to each host.
  */
 import {
   JobStatusResponseSchema,
+  MAX_HOST_VCPU_OVERCOMMIT,
   StatsResponseSchema,
   signRequest,
   type JobRequest,
@@ -14,6 +15,7 @@ import {
 import type { Bindings, HostRow } from "./types.js";
 
 const RPC_TIMEOUT_MS = 15_000;
+const RAM_REPORT_TOLERANCE_MB = 16;
 
 async function daemonFetch(
   env: Bindings,
@@ -72,5 +74,17 @@ export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsRe
   if (!res.ok) throw new Error(`daemon stats failed (${res.status})`);
   const stats = StatsResponseSchema.parse(await res.json());
   if (stats.hostId !== host.id) throw new Error("daemon stats host identity mismatch");
+  if (stats.hostType !== undefined && stats.hostType !== host.host_type) {
+    throw new Error("daemon stats host type mismatch");
+  }
+  if (stats.ramTotalMb + RAM_REPORT_TOLERANCE_MB < host.ram_total_mb) {
+    throw new Error("daemon reports less RAM than the registered host capacity");
+  }
+  if (
+    stats.cpuLogical !== undefined &&
+    host.vcpu_capacity > stats.cpuLogical * MAX_HOST_VCPU_OVERCOMMIT
+  ) {
+    throw new Error("daemon reports fewer CPUs than the registered host capacity supports");
+  }
   return stats;
 }

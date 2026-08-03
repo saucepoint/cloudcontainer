@@ -16,16 +16,24 @@ import {
   JobStatusResponseSchema,
   GithubRepoNameSchema,
   GithubReposSchema,
+  HostFleetUpdateSchema,
+  HostRegistrationSchema,
+  HOST_RAM_RESERVE_PERCENT,
+  HOST_TYPES,
   LLM_PROVIDERS,
   LlmKeysSchema,
+  MAX_HOST_VCPU_OVERCOMMIT,
+  MIN_HOST_RAM_RESERVE_MB,
   TIERS,
+  SERVICE_PLANS,
+  minimumHostRamReserveMb,
 } from "../src/types.js";
 
 const spec = {
   agents: ["claude"],
   tier: "free",
   cpu: 1,
-  ramMb: 2048,
+  ramMb: 1536,
   diskGb: 5,
   sshPort: 30500,
 };
@@ -33,14 +41,170 @@ const base = { jobId: "j-1", containerId: "c-1" };
 
 describe("tier capacities", () => {
   it("gives the free tier 1.5 GiB RAM, 1 GiB swap, and 5 GiB disk", () => {
+    expect(TIERS.free.cpu).toBe(1);
+    expect(TIERS.free.provisionedCpu).toBe(2);
     expect(TIERS.free.ramMb).toBe(1536);
     expect(TIERS.free.swapMb).toBe(1024);
     expect(TIERS.free.diskGb).toBe(5);
   });
 
-  it("keeps the upcoming paid tier at 8 GiB disk without swap", () => {
+  it("keeps the paid tier at 8 GiB disk without swap", () => {
+    expect(TIERS.paid.cpu).toBe(2);
+    expect(TIERS.paid.provisionedCpu).toBe(3);
     expect(TIERS.paid.swapMb).toBe(0);
     expect(TIERS.paid.diskGb).toBe(8);
+  });
+
+  it("maps free, paid, and dedicated service plans to isolated host pools", () => {
+    expect(HOST_TYPES).toEqual(["budget", "regular", "dedicated"]);
+    expect(SERVICE_PLANS).toEqual({
+      free: { tier: "free", hostType: "budget" },
+      paid: { tier: "paid", hostType: "regular" },
+      dedicated: { tier: "paid", hostType: "dedicated" },
+    });
+  });
+
+  it("reserves the greater of 3 GiB or a rounded-up 8% of host RAM", () => {
+    expect(MIN_HOST_RAM_RESERVE_MB).toBe(3072);
+    expect(HOST_RAM_RESERVE_PERCENT).toBe(8);
+    expect(minimumHostRamReserveMb(8192)).toBe(3072);
+    expect(minimumHostRamReserveMb(38400)).toBe(3072);
+    expect(minimumHostRamReserveMb(38401)).toBe(3073);
+    expect(minimumHostRamReserveMb(65536)).toBe(5243);
+    expect(MAX_HOST_VCPU_OVERCOMMIT).toBe(4);
+  });
+});
+
+describe("HostRegistrationSchema", () => {
+  const host = {
+    id: "budget-fsn-1",
+    hostType: "budget",
+    ipv4: "192.0.2.10",
+    sshHostname: "ssh-1.example.test",
+    daemonEndpoint: "https://daemon-1.example.test:8443",
+    daemonPublicKey: generateX25519Keypair().publicKey,
+    managementHostname: "management-1.example.test",
+    managementPort: 22,
+    managementUser: "root",
+    ramTotalMb: 32768,
+    ramReserveMb: 3072,
+    vcpuCapacity: 24,
+    diskTotalGb: 700,
+    maxTenants: 12,
+  };
+
+  it("accepts public bootstrap metadata and rejects insecure endpoints", () => {
+    expect(HostRegistrationSchema.safeParse(host).success).toBe(true);
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      daemonEndpoint: "http://daemon-1.example.test:8443",
+    }).success).toBe(false);
+    for (const daemonEndpoint of [
+      "https://daemon-1.example.test:8443/",
+      "https://operator:secret@daemon-1.example.test:8443",
+      "https://daemon-1.example.test:8443/rpc",
+      "https://daemon-1.example.test:8443?target=other",
+    ]) {
+      expect(HostRegistrationSchema.safeParse({ ...host, daemonEndpoint }).success).toBe(false);
+    }
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      ramReserveMb: host.ramTotalMb,
+    }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      daemonPublicKey: "c2hvcnQ=",
+    }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 13 }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      ramTotalMb: 65536,
+      ramReserveMb: 5242,
+    }).success).toBe(false);
+  });
+
+  it("allows either RAM or vCPU to determine a shared host tenant ceiling", () => {
+    const ramConstrained = {
+      ...host,
+      ramTotalMb: 8192,
+      ramReserveMb: 3072,
+      vcpuCapacity: 16,
+      diskTotalGb: 100,
+      maxTenants: 3,
+    };
+    expect(HostRegistrationSchema.safeParse(ramConstrained).success).toBe(true);
+    expect(HostRegistrationSchema.safeParse({
+      ...ramConstrained,
+      maxTenants: 4,
+    }).success).toBe(false);
+
+    const cpuConstrained = {
+      ...host,
+      ramTotalMb: 16384,
+      ramReserveMb: 3072,
+      vcpuCapacity: 4,
+      diskTotalGb: 100,
+      maxTenants: 2,
+    };
+    expect(HostRegistrationSchema.safeParse(cpuConstrained).success).toBe(true);
+    expect(HostRegistrationSchema.safeParse({
+      ...cpuConstrained,
+      maxTenants: 3,
+    }).success).toBe(false);
+  });
+
+  it("requires dedicated hosts to have exactly one slot and rejects assignments on shared hosts", () => {
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      id: "dedicated-1",
+      hostType: "dedicated",
+      maxTenants: 1,
+      dedicatedUserId: "paid-user",
+    }).success).toBe(true);
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      id: "dedicated-1",
+      hostType: "dedicated",
+      maxTenants: 2,
+    }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({
+      ...host,
+      dedicatedUserId: "paid-user",
+    }).success).toBe(false);
+  });
+});
+
+describe("HostFleetUpdateSchema", () => {
+  it("groups endpoint edits but separates state and capacity transitions", () => {
+    expect(HostFleetUpdateSchema.safeParse({
+      managementHostname: "new-management.example.test",
+      daemonEndpoint: "https://new-daemon.example.test:8443",
+    }).success).toBe(true);
+    expect(HostFleetUpdateSchema.safeParse({
+      status: "active",
+      capacity: {
+        ramTotalMb: 8192,
+        ramReserveMb: 3072,
+        vcpuCapacity: 6,
+        diskTotalGb: 70,
+        maxTenants: 4,
+      },
+    }).success).toBe(false);
+    expect(HostFleetUpdateSchema.safeParse({ status: "draining", force: true }).success)
+      .toBe(false);
+    expect(HostFleetUpdateSchema.safeParse({ status: "draining", force: false }).success)
+      .toBe(false);
+    expect(HostFleetUpdateSchema.safeParse({ hostType: "regular" }).success).toBe(false);
+    expect(HostFleetUpdateSchema.safeParse({
+      hostType: "regular",
+      capacity: {
+        ramTotalMb: 16384,
+        ramReserveMb: 3072,
+        vcpuCapacity: 8,
+        diskTotalGb: 160,
+        maxTenants: 2,
+      },
+    }).success).toBe(true);
   });
 });
 
@@ -93,7 +257,7 @@ describe("JobRequestSchema", () => {
         sealedCredentials: "abc",
       }).success,
     ).toBe(true);
-    // Kept compatible during daemon-first rolling deploys.
+    // Kept compatible while a rolling fleet contains mixed daemon versions.
     expect(JobRequestSchema.safeParse({ op: "start", ...base }).success).toBe(true);
   });
 

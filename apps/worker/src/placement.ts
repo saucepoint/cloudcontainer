@@ -1,16 +1,40 @@
-import { TIERS, type Agent } from "@workbench/contract";
+import {
+  SERVICE_PLANS,
+  TIERS,
+  type Agent,
+  type ServicePlan,
+} from "@workbench/contract";
 import { allocatePort, NoFreePortsError } from "./ports.js";
 import {
+  cpuReservation,
   diskReservationGb,
   HOST_HEARTBEAT_MAX_AGE_MS,
   pickHost,
 } from "./capacity.js";
-import { enqueueJob, getContainerForUser } from "./jobs.js";
+import {
+  enqueueJob,
+  getContainerForUser,
+  HostJobAdmissionError,
+} from "./jobs.js";
 import type { Bindings, ContainerRow, UserRow } from "./types.js";
 
 interface ProvisionInput {
   agents: Agent[];
   githubRepos?: string[];
+}
+
+export class ProvisioningNotAllowedError extends Error {
+  constructor(subscriptionStatus: string) {
+    super(`account subscription cannot provision: ${subscriptionStatus}`);
+    this.name = "ProvisioningNotAllowedError";
+  }
+}
+
+export function servicePlanForSubscription(subscriptionStatus: string) {
+  if (Object.hasOwn(SERVICE_PLANS, subscriptionStatus)) {
+    return SERVICE_PLANS[subscriptionStatus as ServicePlan];
+  }
+  throw new ProvisioningNotAllowedError(subscriptionStatus);
 }
 
 /**
@@ -23,12 +47,16 @@ export async function startProvision(
   user: UserRow,
   input: ProvisionInput,
 ): Promise<ContainerRow> {
-  const tier = TIERS.free;
+  const servicePlan = servicePlanForSubscription(user.subscription_status);
+  const tierName = servicePlan.tier;
+  const tier = TIERS[tierName];
+  const placementClass = servicePlan.hostType;
   const containerId = crypto.randomUUID();
   const now = Date.now();
   const agents = JSON.stringify(input.agents);
   const githubRepos = JSON.stringify(input.githubRepos ?? []);
   const reservedDiskGb = diskReservationGb(tier.diskGb);
+  const reservedCpu = cpuReservation(tierName);
 
   // D1 batches are transactional. Capacity is checked in the INSERT itself,
   // then `changes()` gates host accounting on that INSERT winning. This avoids
@@ -39,9 +67,13 @@ export async function startProvision(
   while (reservationAttempts < 4) {
     const host = await pickHost(
       env,
-      tier.cpu,
-      tier.ramMb,
-      reservedDiskGb,
+      {
+        userId: user.id,
+        hostType: placementClass,
+        cpu: reservedCpu,
+        ramMb: tier.ramMb,
+        diskGb: reservedDiskGb,
+      },
       Date.now,
       hostsWithoutPorts,
     );
@@ -61,15 +93,24 @@ export async function startProvision(
       results = (await env.DB.batch([
         env.DB.prepare(
           `INSERT INTO containers
-             (id, user_id, host_id, ssh_port, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
-           SELECT ?, ?, h.id, ?, ?, ?, 'free', ?, ?, ?, 'provisioning', ?
+             (id, user_id, host_id, ssh_port, agents, github_repos, tier,
+              placement_class, cpu, ram_mb, disk_gb, status, created_at)
+           SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
            FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
+             AND h.host_type = ?
+             AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?)
+             AND h.max_tenants > (
+               SELECT COUNT(*) FROM containers existing WHERE existing.host_id = h.id
+             )
              AND h.vcpu_capacity - h.vcpu_allocated >= ?
              AND h.ram_total_mb - h.ram_reserve_mb - h.ram_allocated_mb >= ?
              AND h.disk_total_gb - h.disk_allocated_gb >= ?
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
+             AND h.daemon_version IS NOT NULL
+             AND h.reported_ram_total_mb IS NOT NULL
+             AND h.reported_cpu_logical IS NOT NULL
            ON CONFLICT(host_id, ssh_port) DO NOTHING`,
         ).bind(
           containerId,
@@ -77,12 +118,16 @@ export async function startProvision(
           port,
           agents,
           githubRepos,
+          tierName,
+          placementClass,
           tier.cpu,
           tier.ramMb,
           tier.diskGb,
           now,
           host.id,
-          tier.cpu,
+          placementClass,
+          user.id,
+          reservedCpu,
           tier.ramMb,
           reservedDiskGb,
           heartbeatCutoff,
@@ -93,7 +138,7 @@ export async function startProvision(
                ram_allocated_mb = ram_allocated_mb + ?,
                disk_allocated_gb = disk_allocated_gb + ?
            WHERE id = ? AND changes() = 1`,
-        ).bind(tier.cpu, tier.ramMb, reservedDiskGb, host.id),
+        ).bind(reservedCpu, tier.ramMb, reservedDiskGb, host.id),
       ])) as Array<{ meta?: { changes?: number } }>;
     } catch (error) {
       // A concurrent request for the same account may win its user_id unique
@@ -114,11 +159,24 @@ export async function startProvision(
     try {
       await enqueueJob(env, "provision", container, host);
     } catch (error) {
+      const statusDetail = error instanceof HostJobAdmissionError
+        ? "host entered maintenance before provisioning could be queued"
+        : "provisioning could not be queued";
       await env.DB.prepare(
-        "UPDATE containers SET status = 'error', status_detail = 'provisioning could not be queued' WHERE id = ?",
+        "UPDATE containers SET status = 'error', status_detail = ? WHERE id = ?",
       )
-        .bind(container.id)
+        .bind(statusDetail, container.id)
         .run();
+      // The reservation is valid and can be retried after the host is active.
+      // Return a stable API result instead of turning this maintenance race
+      // into an opaque 500 after the user's container row was already created.
+      if (error instanceof HostJobAdmissionError) {
+        return (await getContainerForUser(env, user.id)) ?? {
+          ...container,
+          status: "error",
+          status_detail: statusDetail,
+        };
+      }
       throw error;
     }
     return (await getContainerForUser(env, user.id)) ?? container;
@@ -127,9 +185,22 @@ export async function startProvision(
   try {
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO containers (id, user_id, agents, github_repos, tier, cpu, ram_mb, disk_gb, status, created_at)
-         VALUES (?, ?, ?, ?, 'free', ?, ?, ?, 'waitlisted', ?)`,
-      ).bind(containerId, user.id, agents, githubRepos, tier.cpu, tier.ramMb, tier.diskGb, now),
+        `INSERT INTO containers
+           (id, user_id, agents, github_repos, tier, placement_class, cpu,
+            ram_mb, disk_gb, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waitlisted', ?)`,
+      ).bind(
+        containerId,
+        user.id,
+        agents,
+        githubRepos,
+        tierName,
+        placementClass,
+        tier.cpu,
+        tier.ramMb,
+        tier.diskGb,
+        now,
+      ),
       env.DB.prepare(
         `INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, NULL)
          ON CONFLICT(user_id) DO UPDATE SET requested_at = excluded.requested_at, admitted_at = NULL`,

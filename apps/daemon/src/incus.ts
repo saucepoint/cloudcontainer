@@ -5,6 +5,7 @@
  * temp files.
  */
 import { execFile } from "node:child_process";
+import type { Tier } from "@workbench/contract";
 
 export interface ExecResult {
   stdout: string;
@@ -154,6 +155,7 @@ export class Incus {
     image: string,
     name: string,
     containerId: string,
+    tier: Tier,
     cpu: number,
     ramMb: number,
     swapMb: number,
@@ -174,6 +176,7 @@ export class Incus {
       "-c", "security.idmap.isolated=true",
       "-c", "security.nesting=false",
       "-c", `user.workbench.id=${containerId}`,
+      "-c", `user.workbench.tier=${tier}`,
     ]);
   }
 
