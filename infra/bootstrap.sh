@@ -235,7 +235,7 @@ systemctl enable --now workbench-daemon
 
 echo "== [6/6] register host =="
 IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
-  { for (index = 1; index <= NF; index += 1) if ($index == "src") { print $(index + 1); exit } }
+  { for (field = 1; field <= NF; field += 1) if ($field == "src") { print $(field + 1); exit } }
 ')
 [[ -n "$IPV4" ]] || {
   echo "!! could not detect the host's routed IPv4 address" >&2
