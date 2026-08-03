@@ -1050,7 +1050,7 @@ REMOTE
   local public_registration registration
   public_registration=$(ssh_root_run "$management_host" "$management_port" "$management_user" \
     "jq -c . /etc/workbench/registration.json")
-  registration=$(jq -c \
+  registration=$(printf '%s\n' "$public_registration" | jq -c \
     --arg sshHostname "$ssh_hostname" \
     --arg daemonEndpoint "$daemon_endpoint" \
     --arg managementHostname "$management_host" \
