@@ -128,8 +128,9 @@ IPv4 and prove the first cannot reach it:
     PROJECT=workbench
     A=FIRST_INCUS_NAME
     B=SECOND_INCUS_NAME
-    B_IP=$(incus --project "$PROJECT" query "/1.0/instances/$B/state" |
-      jq -r '.metadata.network.eth0.addresses[] | select(.family == "inet").address' |
+    PROJECT_QUERY=$(jq -rn --arg project "$PROJECT" '$project | @uri')
+    B_IP=$(incus query "/1.0/instances/$B/state?project=$PROJECT_QUERY" |
+      jq -r '(.metadata.network // .network).eth0.addresses[] | select(.family == "inet").address' |
       head -1)
     if incus --project "$PROJECT" exec "$A" -- ping -c 1 -W 2 "$B_IP"; then
       echo "east-west isolation failed" >&2

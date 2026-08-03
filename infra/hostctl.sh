@@ -862,9 +862,17 @@ deploy_fleet() {
     (cd "$ROOT_DIR" && npm run typecheck && npm run lint && npm test)
   fi
 
-  local failures=0 host
+  local failures=0 host deployment_status
   while IFS= read -r host; do
-    if ! (set -Eeuo pipefail; deploy_one "$host" "$release"); then
+    # A function or subshell used directly as an `if !` condition inherits
+    # Bash's conditional errexit exemption. Capture the isolated deployment's
+    # status with errexit disabled only in this outer controller instead, so a
+    # failed remote install cannot fall through to probing or activation.
+    set +e
+    (set -Eeuo pipefail; deploy_one "$host" "$release")
+    deployment_status=$?
+    set -e
+    if (( deployment_status != 0 )); then
       failures=$(( failures + 1 ))
     fi
   done <<<"$selected"
