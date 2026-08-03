@@ -15,6 +15,7 @@ else
 fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
+PROJECT_QUERY=$(jq -rn --arg project "$PROJECT_NAME" '$project | @uri')
 EXPECTED_HOST_ID="${EXPECTED_HOST_ID:-}"
 EXPECTED_MAX_TENANTS="${EXPECTED_MAX_TENANTS:-}"
 EXPECTED_VCPU_CAPACITY="${EXPECTED_VCPU_CAPACITY:-}"
@@ -70,9 +71,9 @@ expanded_device_value() {
   local name=$1
   local device=$2
   local key=$3
-  incus --project "$PROJECT_NAME" query "/1.0/instances/${name}?recursion=1" | \
+  incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}&recursion=1" | \
     jq -er --arg device "$device" --arg key "$key" \
-      '.metadata.expanded_devices[$device][$key] // empty'
+      '.metadata.expanded_devices[$device][$key] // .expanded_devices[$device][$key] // empty'
 }
 
 home_volume_size() {

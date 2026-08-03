@@ -114,6 +114,23 @@ printf '%s %s %s %s %s\n' \
     expect(hostController).toContain("'{capacity: $capacity}'");
   });
 
+  it("uses project-aware REST URLs for raw Incus instance queries", () => {
+    expect(configurePolicy).toContain(
+      'incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}"',
+    );
+    expect(auditPolicy).toContain(
+      'incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}&recursion=1"',
+    );
+    expect(configurePolicy).toContain(
+      "(.metadata.devices.root // .devices.root) != null",
+    );
+    expect(auditPolicy).toContain(
+      ".metadata.expanded_devices[$device][$key] // .expanded_devices[$device][$key]",
+    );
+    expect(configurePolicy).not.toContain('incus --project "$PROJECT_NAME" query');
+    expect(auditPolicy).not.toContain('incus --project "$PROJECT_NAME" query');
+  });
+
   it("drains, backs up, probes, and verifies the release before reactivation", () => {
     const drain = hostController.indexOf("Draining $host_id");
     const identity = hostController.indexOf('remote_preflight "$hostname"', drain);
@@ -129,5 +146,16 @@ printf '%s %s %s %s %s\n' \
     expect(probe).toBeGreaterThan(install);
     expect(releaseCheck).toBeGreaterThan(probe);
     expect(activate).toBeGreaterThan(releaseCheck);
+  });
+
+  it("stops a host rollout immediately when its isolated deployment fails", () => {
+    expect(hostController).toContain(
+      '(set -Eeuo pipefail; deploy_one "$host" "$release")',
+    );
+    expect(hostController).toContain("deployment_status=$?");
+    expect(hostController).toContain("if (( deployment_status != 0 )); then");
+    expect(hostController).not.toContain(
+      'if ! (set -Eeuo pipefail; deploy_one "$host" "$release")',
+    );
   });
 });

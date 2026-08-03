@@ -17,6 +17,7 @@ fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
+PROJECT_QUERY=$(jq -rn --arg project "$PROJECT_NAME" '$project | @uri')
 if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
   HOST_TYPE=$(jq -er '.hostType // "budget"' "$DAEMON_CONFIG")
 fi
@@ -189,8 +190,8 @@ while IFS= read -r name; do
   incus --project "$PROJECT_NAME" config set "$name" security.nesting=false
   incus --project "$PROJECT_NAME" config set "$name" user.workbench.tier="$TENANT_TIER"
 
-  if incus --project "$PROJECT_NAME" query "/1.0/instances/${name}" | \
-    jq -e '.metadata.devices.root != null' >/dev/null; then
+  if incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}" | \
+    jq -e '(.metadata.devices.root // .devices.root) != null' >/dev/null; then
     incus --project "$PROJECT_NAME" config device set "$name" root size="${TENANT_DISK_GB}GiB"
   else
     incus --project "$PROJECT_NAME" config device override "$name" root size="${TENANT_DISK_GB}GiB"
