@@ -274,7 +274,7 @@ Host bootstrapped. Next steps:
 2. Register this host through the fleet controller. Bootstrap metadata is at:
      $REGISTRATION_PATH
 
-   The normal path is `npm run hostctl -- onboard ...`, which copies this
+   The normal path is \`npm run hostctl -- onboard ...\`, which copies this
    metadata to the control plane, probes the signed daemon endpoint, and only
    activates the host after every check succeeds.
 
