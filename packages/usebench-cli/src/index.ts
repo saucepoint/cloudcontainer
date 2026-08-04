@@ -1,5 +1,5 @@
 import { Cli, z } from "incur";
-import { clearSession, loadOrAuthenticate } from "./session.js";
+import { clearSession, loadOrAuthenticate, reauthenticate } from "./session.js";
 import { formatFailure, runOnboarding } from "./onboarding.js";
 
 const cli = Cli.create("usebench", {
@@ -23,7 +23,7 @@ const cli = Cli.create("usebench", {
     }
     try {
       const { api, state } = await loadOrAuthenticate(options.baseUrl, false);
-      return await runOnboarding(api, state);
+      return await runOnboarding(api, state, () => reauthenticate(api));
     } catch (error) {
       throw new Error(formatFailure(error));
     }

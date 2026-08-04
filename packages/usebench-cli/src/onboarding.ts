@@ -322,13 +322,32 @@ async function configureGithub(api: ApiClient, state: SessionState): Promise<str
   return chooseGithubRepositories(api);
 }
 
-async function review(inputValue: ProvisionInput): Promise<void> {
+type Navigation = "next" | "repeat" | "back";
+
+async function chooseNavigation(canGoBack: boolean): Promise<Navigation> {
+  return select<Navigation>({
+    message: "Setup wizard",
+    choices: [
+      { name: "Continue", value: "next" },
+      { name: "Edit this section", value: "repeat" },
+      ...(canGoBack ? [{ name: "← Back", value: "back" as const }] : []),
+    ],
+  });
+}
+
+async function review(inputValue: ProvisionInput): Promise<"create" | "back"> {
   console.log("\nReview your workbench setup:");
   console.log(`Agents: ${inputValue.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}`);
   console.log(`Repositories: ${inputValue.githubRepos.length || "none"}`);
   console.log(`Model API keys: ${Object.keys(inputValue.llmKeys).length || "none"}`);
   console.log(`SSH: ${inputValue.sshPubkey ? "public key configured" : "no key (SSH disabled until later)"}`);
-  if (!(await confirm({ message: "Create this workbench?", default: true }))) throw new Error("Onboarding cancelled.");
+  return select({
+    message: "Ready to create this workbench?",
+    choices: [
+      { name: "Create this workbench", value: "create" as const },
+      { name: "← Back to setup", value: "back" as const },
+    ],
+  });
 }
 
 async function waitForReady(api: ApiClient): Promise<ContainerView> {
@@ -366,21 +385,97 @@ export interface OnboardingResult {
 export async function runOnboarding(
   api: ApiClient,
   initialState: SessionState,
+  changeAccount?: () => Promise<SessionState>,
 ): Promise<OnboardingResult | { status: "existing"; redirect: string }> {
-  let state = await verifyAccount(api, initialState);
-  if (state.hasWorkbench) {
-    console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
-    return { status: "existing", redirect: state.redirect };
-  }
+  let state = initialState;
+  let agents: Agent[] = [];
+  let githubRepos: string[] = [];
+  let tools: AdditionalTools = { llmKeys: {} };
+  let sshKey: SelectedSshKey = { publicKey: undefined, privatePath: undefined };
+  let container: ContainerView | undefined;
+  let step = 0;
+  let welcomeShown = false;
 
-  console.log("\nWelcome to usebench.dev. Set up your cloud workbench.\n");
-  const agents = await chooseAgents();
-  await configureAgentAuth(api, agents);
-  const githubRepos = await configureGithub(api, state);
-  let tools = await configureAdditionalTools(api);
-  const sshKey: SelectedSshKey = await chooseSshKey();
-  let container: ContainerView;
-  while (true) {
+  while (step < 8) {
+    if (step === 0) {
+      if (state.hasWorkbench) {
+        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
+        return { status: "existing", redirect: state.redirect };
+      }
+      if (changeAccount) {
+        const accountAction = await select({
+          message: "usebench account",
+          choices: [
+            { name: "Continue with the current sign-in", value: "continue" as const },
+            { name: "Sign in with a different Google/GitHub account", value: "change" as const },
+          ],
+        });
+        if (accountAction === "change") {
+          state = await changeAccount();
+          agents = [];
+          githubRepos = [];
+          tools = { llmKeys: {} };
+          sshKey = { publicKey: undefined, privatePath: undefined };
+        }
+      }
+      if (state.hasWorkbench) {
+        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
+        return { status: "existing", redirect: state.redirect };
+      }
+      step = 1;
+      continue;
+    }
+
+    if (step === 1) {
+      state = await verifyAccount(api, state);
+      if (state.hasWorkbench) {
+        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
+        return { status: "existing", redirect: state.redirect };
+      }
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
+    if (step === 2) {
+      if (!welcomeShown) {
+        console.log("\nWelcome to usebench.dev. Set up your cloud workbench.\n");
+        welcomeShown = true;
+      }
+      agents = await chooseAgents();
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
+    if (step === 3) {
+      await configureAgentAuth(api, agents);
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
+    if (step === 4) {
+      githubRepos = await configureGithub(api, state);
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
+    if (step === 5) {
+      tools = await configureAdditionalTools(api);
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
+    if (step === 6) {
+      sshKey = await chooseSshKey();
+      const navigation = await chooseNavigation(true);
+      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      continue;
+    }
+
     const provisionInput: ProvisionInput = {
       agents,
       ...(sshKey.publicKey ? { sshPubkey: sshKey.publicKey } : {}),
@@ -390,11 +485,15 @@ export async function runOnboarding(
       ...(tools.convexToken ? { convexToken: tools.convexToken } : {}),
       githubRepos,
     };
+    const reviewChoice = await review(provisionInput);
+    if (reviewChoice === "back") {
+      step = 6;
+      continue;
+    }
     try {
-      await review(provisionInput);
       await api.post("/api/provision", provisionInput);
       container = await waitForReady(api);
-      break;
+      step = 8;
     } catch (error) {
       if (error instanceof ApiError && (error.status === 400 || error.status === 503)) {
         console.error(`\n${error.message}`);
@@ -406,6 +505,8 @@ export async function runOnboarding(
       throw error;
     }
   }
+
+  if (!container) throw new Error("The setup wizard ended before provisioning completed.");
 
   let sshShortcutConfigured = false;
   if (container.sshCommand && sshKey.privatePath) {
