@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
+import { LANDING_TERMINAL_PROMPT } from "../client/landing-terminal-model.js";
 import {
   AccountPage,
   LandingPage,
@@ -61,8 +62,25 @@ describe("landing page call to action", () => {
     expect(html).toContain("<title>usebench.dev</title>");
     expect(html).toContain('work<span class="logo-bench">bench</span>');
     expect(html).toContain("A cloud terminal");
-    expect(html).toContain("an always-on container for long running coding agents");
+    expect(html).toContain("an always-on container, accessed from any terminal client on any device");
+    expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
     expect(html).toContain("free for each unique person");
+    expect(html).toContain('id="landing-terminal-root"');
+    expect(html).toContain("ssh workbench");
+    expect(html).toContain("Welcome to Debian GNU/Linux 13 (trixie)");
+    expect(html).toContain("cd ~/repos/lantern");
+    expect(landingClient).toContain("OpenAI Codex");
+    expect(landingClient).toContain("(v0.146.0)");
+    expect(landingClient).toContain("gpt-5.6-luna xhigh");
+    expect(landingClient).toContain("/model to change");
+    expect(landingClient).toContain("Start a fresh idea with /new; the previous session stays in history.");
+    expect(html).toContain(LANDING_TERMINAL_PROMPT);
+    expect(html).toContain("Working");
+    expect(html).toContain("Found the app entrypoint");
+    expect(html).toContain("Mapped reusable UI components");
+    expect(html).toContain("Planning a tiny raccoon component heist");
+    expect(html).toContain("terminal-screen terminal-static-screen");
+    expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf("free tier"));
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
@@ -670,6 +688,12 @@ describe("interface foundation", () => {
     expect(html).toContain(".wrap { width: min(100% - 2.5rem, 731px);");
     expect(html).toContain(".landing-hero { text-align: left; }");
     expect(html).toContain(".landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }");
+    expect(html).toContain(".landing-hero .lead { font-size: 0.95rem; }");
+    expect(html).toContain(".landing-terminal-window { overflow: hidden; color: #c9d1d9; background: #0d1117;");
+    expect(html).toContain(".terminal-screen { min-height: 19.8rem;");
+    expect(html).toContain(".terminal-screen { min-height: 19.44rem;");
+    expect(html).toContain("@keyframes terminal-cursor-blink");
+    expect(html).toContain(".terminal-cursor { animation: none; }");
     expect(html).toContain(".spec-list .ok, .spec-list .tier-label { align-self: center;");
     expect(html).toContain(".auth-provider-list { display: grid;");
     expect(html).toContain("padding: 1.1rem 1.25rem;");
