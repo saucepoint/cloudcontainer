@@ -5,6 +5,7 @@ import { DashboardPage } from "../src/pages/dashboard.js";
 import { LANDING_TERMINAL_PROMPT } from "../client/landing-terminal-model.js";
 import {
   AccountPage,
+  CliAuthPage,
   LandingPage,
   NotFoundPage,
   OnboardingPage,
@@ -32,6 +33,7 @@ const dashboardClient = [
   "dashboard-ssh.tsx",
 ].map((file) => readFileSync(new URL(`../client/${file}`, import.meta.url), "utf8")).join("\n");
 const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
+const cliAuthClient = readFileSync(new URL("../client/cli-auth.ts", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false })],
@@ -42,6 +44,7 @@ const pages: Array<[string, () => unknown]> = [
   })],
   ["onboarding", () => OnboardingPage({})],
   ["dashboard", () => DashboardPage({})],
+  ["cli-auth", () => CliAuthPage({ attempt: "a".repeat(64), provider: "google" })],
 ];
 
 describe("compiled page clients", () => {
@@ -110,6 +113,18 @@ describe("landing page call to action", () => {
     expect(landingClient).toContain("authClient.signIn.social");
     expect(landingClient).toContain("authClient.passkey.addPasskey");
     expect(landingClient).toContain("authClient.signIn.passkey");
+  });
+});
+
+describe("CLI browser sign-in page", () => {
+  it("uses the selected provider and one-time attempt in the external client", () => {
+    const html = String(CliAuthPage({ attempt: "a".repeat(64), provider: "github" }));
+    expect(html).toContain('id="cli-auth-root"');
+    expect(html).toContain('data-provider="github"');
+    expect(html).toContain('data-attempt="' + "a".repeat(64) + '"');
+    expect(html).toContain('<script type="module" src="/cli-auth.js"></script>');
+    expect(cliAuthClient).toContain("authClient.signIn.social");
+    expect(cliAuthClient).toContain('callbackURL: `/cli/auth/callback?attempt=');
   });
 });
 
