@@ -1,15 +1,19 @@
 import type { Child, FC } from "hono/jsx";
 import { PAGE_STYLES } from "./styles.js";
 
+const CONTACT_ADDRESS_CODE = "104,101,108,108,111,64,117,115,101,98,101,110,99,104,46,100,101,118";
+
 export const Layout: FC<{
   title?: string;
   loggedIn?: boolean;
   notificationCount?: number;
+  footerLinks?: Child;
   children?: Child;
 }> = ({
   title,
   loggedIn,
   notificationCount = 0,
+  footerLinks,
   children,
 }) => {
   const unreadLabel = notificationCount === 1
@@ -58,6 +62,18 @@ export const Layout: FC<{
           <main id="main-content">{children}</main>
         </div>
       </div>
+      <nav class="site-formalities" aria-label="Site information">
+        <a class="site-formality" href="/terms">Terms of Service</a>
+        {loggedIn ? (
+          <a
+            id="contact"
+            class="site-formality"
+            href="#contact"
+            data-contact-code={CONTACT_ADDRESS_CODE}
+          >Contact</a>
+        ) : null}
+        {footerLinks}
+      </nav>
       <div id="ui-root"></div>
       <script type="module" src="/ui.js"></script>
     </body>

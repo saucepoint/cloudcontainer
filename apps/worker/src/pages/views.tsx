@@ -70,7 +70,19 @@ export const VerificationPage: FC<{
   worldIdAvailable: boolean;
   notificationCount?: number;
 }> = ({ worldIdAvailable, notificationCount = 0 }) => (
-  <Layout title="Verify your account" loggedIn notificationCount={notificationCount}>
+  <Layout
+    title="Verify your account"
+    loggedIn
+    notificationCount={notificationCount}
+    footerLinks={
+      <a
+        class="site-formality"
+        href="http://x.com/messages/compose?recipient_id=1488260920564490242"
+        target="_blank"
+        rel="noopener noreferrer"
+      >Request Invite</a>
+    }
+  >
     <h1>Verify your account.</h1>
     <p class="lead">
       The free tier is limited to one account per person. {worldIdAvailable
@@ -366,6 +378,179 @@ const AgentSignins: FC<{ agent: Agent }> = ({ agent }) => {
     />
   </div>;
 };
+
+export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
+  <Layout title="Terms of Service" loggedIn={loggedIn}>
+    <article class="terms">
+      <h1>Terms of Service.</h1>
+      <p class="terms-meta">Effective August 4, 2026</p>
+
+      <p>
+        These Terms of Service govern your use of usebench.dev. By creating an account, accessing a
+        workbench, or using the site, you agree to these Terms. If you do not agree, do not use the service.
+      </p>
+
+      <h2>1. The service</h2>
+      <p>
+        usebench.dev provides persistent, remote Debian development environments with SSH access and
+        preconfigured coding tools. A workbench is a shared-kernel Linux container, not a hardware-isolated
+        virtual machine. We may change, suspend, or discontinue features, limits, images, or infrastructure.
+      </p>
+      <p>
+        As of the effective date, there is no self-service paid subscription or automatic recurring billing.
+        Free access and operator-entitled paid or dedicated access may be offered under
+        separate plan information. If self-service subscriptions are introduced, the checkout flow and the
+        subscription terms below will apply.
+      </p>
+
+      <h2>2. Accounts</h2>
+      <p>
+        You must provide accurate information, protect your sign-in methods, and promptly tell us about
+        unauthorized access. You are responsible for activity under your account and for complying with the
+        terms of any provider or integration you connect to the service.
+      </p>
+      <p>
+        You may not create or use accounts to evade an eligibility limit, a suspension, or a force closure.
+        We may require additional verification before granting or restoring access.
+      </p>
+
+      <h2>3. Acceptable use</h2>
+      <p>
+        You may use a workbench only for lawful development and related personal or business activities. You
+        must not:
+      </p>
+      <ul>
+        <li>use the service to violate law, court orders, sanctions, or another person’s rights;</li>
+        <li>probe, attack, disrupt, overload, or gain unauthorized access to systems, networks, or accounts;</li>
+        <li>send spam, phishing, malware, ransomware, abusive automation, or unsolicited bulk traffic;</li>
+        <li>mine cryptocurrency, operate persistent high-impact workloads, or evade resource limits;</li>
+        <li>store or distribute content that is unlawful, fraudulent, exploitative, or infringing;</li>
+        <li>resell, sublicense, share, or transfer access without our written permission; or</li>
+        <li>use credentials, tokens, repositories, or third-party services without authorization.</li>
+      </ul>
+      <p>
+        We may investigate suspected abuse using reasonable operational and security signals. Do not place
+        information in a workbench that you cannot risk losing or that requires a regulated hosting environment
+        unless we have expressly agreed to those requirements in writing.
+      </p>
+
+      <h2>4. Your content and integrations</h2>
+      <p>
+        You retain your rights in code, files, repositories, and other content you place in a workbench. You
+        grant us only the limited license needed to host, transmit, back up when explicitly provided, secure,
+        and operate that content for you. You are responsible for your content, licenses, credentials, and
+        actions taken by agents or programs running in your workbench.
+      </p>
+      <p>
+        Third-party agents, model providers, source-control services, and cloud integrations have their own
+        terms and policies. We do not control them and are not responsible for their availability, decisions,
+        charges, or handling of your data.
+      </p>
+
+      <h2>5. Availability and data</h2>
+      <p>
+        The service is provided without a backup, disaster-recovery, or availability guarantee. Provisioning,
+        maintenance, host failure, security response, or a lifecycle operation may make a workbench unavailable
+        or permanently remove its data. Keep independent copies of anything important before rebuilding,
+        stopping, or destroying a workbench.
+      </p>
+      <p>
+        We use reasonable safeguards for the service, but no internet service is completely secure. Never place
+        private keys, passwords, or other secrets in chat, tickets, repositories, or files that do not need them.
+      </p>
+
+      <h2>6. Suspension, termination, and force closure</h2>
+      <p>
+        We may suspend or terminate an account, restrict access, stop a workbench, remove content, or end a
+        placement when we reasonably believe that you violated these Terms, created a security or legal risk,
+        abused resources, used fraudulent credentials, failed to pay an amount due, or exposed us or another
+        person to harm.
+      </p>
+      <p>
+        A <strong>force closure</strong> may happen immediately and without advance notice when delay could
+        increase the risk. It may stop and permanently delete the workbench, release its storage and network
+        resources, and prevent replacement access. We will provide notice when reasonably practical, but notice
+        is not required for urgent security, legal, or abuse responses. Except where the law requires otherwise,
+        a force closure for abuse does not create a refund, credit, or data-recovery obligation.
+      </p>
+      <p>
+        You may stop using the service at any time. Account deletion and workbench destruction are permanent;
+        export anything you need first. Sections that should reasonably survive termination continue to apply.
+      </p>
+
+      <h2>7. Future subscriptions</h2>
+      <p>
+        If we offer a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
+        method will be shown before purchase. Unless the checkout terms say otherwise, a cancellation prevents
+        the next renewal and does not automatically refund the current period.
+      </p>
+      <p>
+        We may cancel a subscription immediately for abuse, a material violation of these Terms, fraud,
+        nonpayment, or a security or legal risk. We may also suspend the associated workbench and permanently
+        remove its data under Section 6. Except where required by law or the applicable checkout terms, an
+        abuse-related cancellation is not eligible for a refund or credit for unused time.
+      </p>
+
+      <h2>8. Intellectual property</h2>
+      <p>
+        The site, service software, branding, documentation, and content supplied by us belong to us or our
+        licensors. We grant you a limited, non-exclusive, revocable right to use them only as needed to use the
+        service. You may send feedback, and we may use it without restriction or payment.
+      </p>
+
+      <h2>9. Disclaimers</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SERVICE IS PROVIDED “AS IS” AND “AS AVAILABLE.” WE DISCLAIM
+        WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, SECURITY,
+        ACCURACY, AND UNINTERRUPTED OR ERROR-FREE OPERATION. WE DO NOT PROMISE THAT A WORKBENCH WILL BE AVAILABLE,
+        SAFE FROM ALL ATTACKS, OR SUITABLE FOR A PARTICULAR WORKLOAD.
+      </p>
+
+      <h2>10. Limitation of liability</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY LAW, usebench.dev and its providers will not be liable for indirect,
+        incidental, special, consequential, exemplary, or punitive damages, or for lost profits, revenue, data,
+        goodwill, or business interruption. Our total liability arising from the service will not exceed the
+        greater of the amounts you paid us for the service in the twelve months before the event or one hundred
+        U.S. dollars. This section does not limit liability that cannot lawfully be limited.
+      </p>
+
+      <h2>11. Indemnity</h2>
+      <p>
+        To the extent permitted by law, you will defend and indemnify usebench.dev and its providers from claims,
+        losses, liabilities, and reasonable costs arising from your content, your use of the service, your
+        violation of these Terms, or your violation of another person’s rights or law.
+      </p>
+
+      <h2>12. Changes</h2>
+      <p>
+        We may update these Terms by posting a revised version with a new effective date. For material changes,
+        we will provide reasonable notice through the service or to the contact information associated with your
+        account. Continuing to use the service after the effective date means you accept the revised Terms.
+      </p>
+
+      <h2>13. Governing law and venue</h2>
+      <p>
+        New York law governs these Terms, without regard to conflict-of-law rules. You and usebench.dev consent
+        to the exclusive jurisdiction and venue of the state and federal courts located in New York County, New
+        York, for disputes that are not otherwise required by law to be brought elsewhere.
+      </p>
+
+      <h2>14. General terms</h2>
+      <p>
+        These Terms are the agreement between you and usebench.dev about the service and replace earlier terms
+        on the same subject. If a provision is unenforceable, the rest remains effective. Our failure to enforce
+        a provision is not a waiver. You may not assign these Terms without our consent; we may assign them in
+        connection with a reorganization, sale, or transfer of the service.
+      </p>
+
+      <h2>15. Contact</h2>
+      <p>
+        Authenticated users can use the Contact link in the footer for questions about these Terms.
+      </p>
+    </article>
+  </Layout>
+);
 
 export const NotFoundPage: FC = () => (
   <Layout title="Page not found">

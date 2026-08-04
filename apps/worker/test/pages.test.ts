@@ -8,6 +8,7 @@ import {
   NotFoundPage,
   OnboardingPage,
   SecurityPage,
+  TermsPage,
   VerificationPage,
 } from "../src/pages/views.js";
 import { PAGE_STYLES } from "../src/pages/styles.js";
@@ -132,6 +133,10 @@ describe("account eligibility verification", () => {
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
+    expect(html).toContain('href="http://x.com/messages/compose?recipient_id=1488260920564490242"');
+    expect(html).toContain(">Request Invite</a>");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
   });
 
   it("omits the World ID action when the deployment is not configured", () => {
@@ -524,6 +529,60 @@ describe("beginner-friendly provisioning UI", () => {
     expect(authFlowsClient).not.toContain("let active = false;");
     expect(authFlowsClient).not.toContain("let activeRoot: Root | null = null;");
     expect(onboardingClient).toContain("isAuthFlowActive(target)");
+  });
+});
+
+describe("site formalities", () => {
+  it("shows terms publicly but only exposes contact after authentication", () => {
+    const landing = String(LandingPage({ devAuth: false }));
+    const html = String(DashboardPage({}));
+    const contactAddress = ["hello", "usebench.dev"].join("@");
+    expect(landing).toContain('class="site-formalities"');
+    expect(landing).toContain('href="/terms">Terms of Service</a>');
+    expect(landing).not.toContain('>Contact</a>');
+    expect(landing).not.toContain("data-contact-code");
+    const contactCode = html.match(/data-contact-code="([^"]+)"/)?.[1];
+    expect(contactCode).toBeDefined();
+    expect(String.fromCodePoint(...(contactCode ?? "").split(",").map(Number))).toBe(contactAddress);
+    expect(html).toContain(">Contact</a>");
+    expect(html).not.toContain(contactAddress);
+    expect(html).not.toContain("mailto:");
+    expect(html).toContain(".site-formalities { position: fixed;");
+    expect(html).toContain(".site-formality { padding: 0.25rem 0; color: var(--line-strong);");
+    expect(html).toContain("font-size: 0.68rem;");
+    expect(html).toContain("body { display: flex; flex-direction: column; }");
+    expect(html).toContain("#app-root { flex: 1; }");
+    expect(html).toContain(".site-formalities { position: static; justify-content: flex-end;");
+    expect(html).toContain(".site-formality { padding: 0.55rem 0; }");
+    expect(html).toContain(".site-toast { bottom: 3.25rem;");
+    expect(html).toContain(".site-toast { position: fixed;");
+    expect(uiClient).toContain('querySelectorAll<HTMLAnchorElement>("[data-contact-code]")');
+    expect(uiClient).toContain("navigator.clipboard.writeText(address)");
+    expect(uiClient).toContain("Email copied to clipboard");
+    expect(uiClient).toContain("mailto:");
+    expect(uiClient).not.toContain(contactAddress);
+  });
+});
+
+describe("terms page", () => {
+  it("states the current service scope and abuse enforcement terms", () => {
+    const html = String(TermsPage({}));
+    expect(html).toContain("Terms of Service.");
+    expect(html).toContain("no self-service paid subscription");
+    expect(html).toContain("force closure");
+    expect(html).toContain("cancel a subscription");
+    expect(html).toContain("New York");
+    expect(html).toContain("Authenticated users can use the Contact link in the footer");
+    expect(html).not.toContain('id="contact"');
+    expect(html).not.toContain(["hello", "usebench.dev"].join("@"));
+    expect(String(TermsPage({ loggedIn: true }))).toContain('id="contact"');
+  });
+
+  it("is publicly reachable", async () => {
+    const response = await workerApp.request("/terms", {}, makeEnv());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("force closure");
   });
 });
 

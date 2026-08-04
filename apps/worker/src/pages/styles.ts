@@ -46,6 +46,15 @@ a:hover { text-decoration-thickness: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 #app-root { isolation: isolate; }
+.site-formalities { position: fixed; right: 1rem; bottom: 0.75rem; z-index: 10; display: flex;
+  gap: 0.75rem; align-items: center; }
+.site-formality { padding: 0.25rem 0; color: var(--line-strong); font-size: 0.68rem; font-weight: 400;
+  line-height: 1.2; text-decoration: none; }
+.site-formality:hover, .site-formality:focus-visible { color: var(--muted); text-decoration: underline; }
+.site-toast { position: fixed; left: 50%; bottom: 1rem; z-index: 60; padding: 0.45rem 0.7rem;
+  transform: translateX(-50%); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--ink); color: var(--paper); font-size: 0.76rem; line-height: 1.2;
+  pointer-events: none; }
 .wrap { width: min(100% - 2.5rem, 731px); margin: 0 auto; padding-bottom: 5rem; }
 header.site { min-height: 70px; display: flex; align-items: center; justify-content: space-between;
   border-bottom: 1px solid var(--ink); margin-bottom: 3.75rem; }
@@ -61,6 +70,12 @@ h1 { max-width: 700px; margin: 0 0 0.65rem; font-size: clamp(2rem, 7vw, 4.2rem);
 h2, legend { font-size: 1rem; font-weight: 700; letter-spacing: -0.015em; }
 h3 { font-size: 0.92rem; }
 p.lead { max-width: 590px; color: var(--muted); font-size: 1.08rem; margin: 0 0 3.75rem; }
+.terms { max-width: 680px; }
+.terms-meta { margin: 0 0 2rem; color: var(--muted); font-size: 0.8rem; }
+.terms h2 { margin: 2.25rem 0 0.6rem; font-size: 1.08rem; }
+.terms p { margin: 0.75rem 0; }
+.terms ul { margin: 0.75rem 0 1rem; padding-left: 1.25rem; }
+.terms li + li { margin-top: 0.35rem; }
 code, pre { font-family: var(--mono); }
 .card { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0;
   padding: 1.25rem 0 2.25rem; margin: 0; }
@@ -271,9 +286,14 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .dialog-description { margin: 0; color: var(--muted); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.3rem; }
 @media (max-width: 600px) {
+  body { display: flex; flex-direction: column; }
+  #app-root { flex: 1; }
   .wrap { width: min(100% - 2rem, 860px); padding-bottom: 3rem; }
   input[type=text], input[type=password], input[type=search], textarea, select { font-size: 16px; }
   header.site { min-height: 58px; margin-bottom: 2.5rem; }
+  .site-formalities { position: static; justify-content: flex-end; padding: 0 0.75rem 0.75rem; gap: 0.6rem; }
+  .site-formality { padding: 0.55rem 0; }
+  .site-toast { bottom: 3.25rem; }
   h1 { font-size: clamp(2.4rem, 13vw, 3.5rem); }
   p.lead { margin-bottom: 2.5rem; }
   .card { padding: 1rem 0 1.8rem; }

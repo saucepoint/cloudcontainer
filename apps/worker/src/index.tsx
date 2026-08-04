@@ -12,7 +12,7 @@ import { getContainerForUser } from "./jobs.js";
 import { credentialsView } from "./container-view.js";
 import { notificationsForUser, unreadNotificationCount } from "./notifications.js";
 import { DashboardPage } from "./pages/dashboard.js";
-import { AccountPage, LandingPage, NotFoundPage, OnboardingPage } from "./pages/views.js";
+import { AccountPage, LandingPage, NotFoundPage, OnboardingPage, TermsPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
@@ -34,6 +34,11 @@ app.onError((err, c) => {
     return c.json({ error: "internal error" }, 500);
   }
   return c.text("Something went wrong.", 500);
+});
+
+app.get("/terms", async (c) => {
+  const session = await createAuth(c.env, c.req.url).api.getSession({ headers: c.req.raw.headers });
+  return c.html(<TermsPage loggedIn={Boolean(session)} />);
 });
 
 app.get("/", async (c) => {
