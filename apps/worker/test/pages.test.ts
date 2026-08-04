@@ -83,7 +83,21 @@ describe("landing page call to action", () => {
     expect(html).toContain("Mapped reusable UI components");
     expect(html).toContain("Planning a tiny raccoon component heist");
     expect(html).toContain("terminal-screen terminal-static-screen");
+    expect(html).toContain('class="agent-logo-strip"');
+    expect(html).toContain('aria-label="Supported coding agents"');
+    expect(html).toContain('class="agent-logo agent-logo-pi"');
+    expect(html).toContain('class="agent-logo agent-logo-claude"');
+    expect(html).toContain('class="agent-logo agent-logo-codex"');
+    expect(html).toContain('class="agent-logo agent-logo-opencode"');
+    expect(html).toContain('id="codex-gradient"');
+    expect(html).toContain('stop-color="#B1A7FF"');
+    expect(html).toContain('stop-color="#3941FF"');
+    expect(html).toContain('fill="#CFCECD"');
+    expect(html).toContain('fill="#656363"');
+    expect(html).not.toContain("Pi, Claude Code, Codex, OpenCode");
     expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf("free tier"));
+    expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf('class="agent-logo-strip"'));
+    expect(html.indexOf('class="agent-logo-strip"')).toBeLessThan(html.indexOf("free tier"));
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
@@ -327,6 +341,13 @@ describe("subscription sign-in wiring", () => {
     expect(PAGE_STYLES).toContain(".agent-choice input {");
     expect(PAGE_STYLES).not.toContain(".agent input {");
     expect(authFlowsClient).toContain('id={config.inputId}');
+  });
+
+  it("reuses the agent marks in every setup choice", () => {
+    const html = String(OnboardingPage({}));
+    for (const agent of ["pi", "claude", "codex", "opencode"]) {
+      expect(html).toContain(`class="agent-logo agent-logo-${agent}"`);
+    }
   });
 
   it("keeps Claude sign-in instructions aligned with the flow container", () => {

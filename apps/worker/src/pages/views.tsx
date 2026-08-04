@@ -7,7 +7,7 @@ import {
   type LlmProvider,
 } from "@workbench/contract";
 import type { NotificationView } from "../notifications.js";
-import { ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
+import { AgentLogo, AgentLogoItem, ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
 const AGENT_DESCRIPTIONS: Record<Agent, string> = {
@@ -74,6 +74,9 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
       </div>
       <p class="sr-only">An animated terminal session connects to workbench, opens a project repository, launches Codex, and types a playful request.</p>
     </section>
+    <div class="agent-logo-strip" role="list" aria-label="Supported coding agents">
+      {AGENTS.map((a) => <AgentLogoItem agent={a} />)}
+    </div>
     <div class="card">
       <ul class="check spec-list">
         <li>
@@ -83,9 +86,6 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
         <li>
           2 vCPU · 4 GB RAM · 8 GB Storage
           <span class="muted tier-label">coming soon</span>
-        </li>
-        <li>
-          Pi, Claude Code, Codex, OpenCode
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -649,7 +649,7 @@ export const OnboardingPage: FC<{
                   <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
                   <span class="agent-checkbox" aria-hidden="true">✓</span>
                   <span class="agent-copy">
-                    <span class="agent-title">{AGENT_LABELS[a]}</span>
+                    <span class="agent-title"><AgentLogo agent={a} />{AGENT_LABELS[a]}</span>
                     <small>{AGENT_DESCRIPTIONS[a]}</small>
                   </span>
                 </label>

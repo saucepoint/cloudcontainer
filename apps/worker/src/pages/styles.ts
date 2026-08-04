@@ -138,7 +138,11 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
 .agent-choice input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
 .agent-copy { min-width: 0; flex: 1; }
-.agent-title { display: block; }
+.agent-title { display: flex; gap: 0.45rem; align-items: center; }
+.agent-title .agent-logo { width: 1.15rem; height: 1.15rem; }
+.agent-logo { display: inline-flex; flex: 0 0 auto; width: 2.7rem; height: 2.7rem; color: var(--ink); }
+.agent-logo svg { display: block; width: 100%; height: 100%; }
+.agent-logo-claude { color: #d97757; }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
 .agent:has(input:checked), .agent:has(input:checked):hover { background: var(--accent-soft); }
 .agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
@@ -303,6 +307,9 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .terminal-codex-chevron { flex: 0 0 auto; color: #7ee787; font-size: 1.15em; font-weight: 700; line-height: 1.35; }
 .terminal-placeholder { color: #8b949e; }
 .terminal-codex-footer { margin-top: auto; padding-top: 0.5rem; color: #8b949e; font-size: 0.68em; }
+.agent-logo-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; align-items: center;
+  margin: -1rem 0 2.5rem; padding: 0.35rem 0; }
+.agent-logo-item { display: grid; min-height: 3.5rem; place-items: center; }
 .landing-signin-content { width: 100%; }
 .auth-provider-list { display: grid; width: min(100%, 25rem); gap: 0.55rem; margin: 1rem auto 0;
   padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); }
