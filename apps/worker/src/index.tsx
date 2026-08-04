@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { accountRoutes } from "./account.js";
 import { apiRoutes } from "./api.js";
 import { adminRoutes } from "./admin.js";
+import { cliAuthRoutes } from "./cli-auth.js";
 import { fleetAdminRoutes } from "./fleet-admin.js";
 import { authRoutes, requireUser } from "./auth.js";
 import { createAuth, handleAuthRequest } from "./better-auth.js";
@@ -100,6 +101,7 @@ app.get("/security", requireUser, renderAccountPage);
 
 app.route("/", authRoutes);
 app.route("/", accountRoutes);
+app.route("/", cliAuthRoutes);
 app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c.env, c.req.raw));
 app.route("/", adminRoutes);
 app.route("/", fleetAdminRoutes);

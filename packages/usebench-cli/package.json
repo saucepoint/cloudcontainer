@@ -1,0 +1,39 @@
+{
+  "name": "usebench",
+  "version": "0.1.0",
+  "description": "Keyboard-driven onboarding for usebench.dev workbenches",
+  "type": "module",
+  "private": false,
+  "bin": {
+    "usebench": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js --banner:js=\"#!/usr/bin/env node\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm run typecheck"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "@worldcoin/idkit-core": "^4.2.2",
+    "incur": "^0.4.26",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/qrcode-terminal": "^0.12.2",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

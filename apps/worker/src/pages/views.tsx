@@ -98,6 +98,27 @@ export const VerificationPage: FC<{
   </Layout>
 );
 
+export const CliAuthPage: FC<{
+  attempt: string;
+  provider: "google" | "github";
+}> = ({ attempt, provider }) => (
+  <Layout title="Sign in for the CLI">
+    <h1>Sign in to usebench.</h1>
+    <p class="lead">
+      Continue in this browser to finish the sign-in started by your terminal.
+      Your terminal will receive a separate short-lived session.
+    </p>
+    <section class="card" aria-labelledby="cli-auth-heading">
+      <h2 id="cli-auth-heading">Browser sign-in</h2>
+      <div id="cli-auth-root" data-attempt={attempt} data-provider={provider}>
+        <button class="btn primary" type="button">Continue with {provider === "google" ? "Google" : "GitHub"}</button>
+        <p data-status class="muted" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <script type="module" src="/cli-auth.js"></script>
+  </Layout>
+);
+
 export const AccountPage: FC<{
   passkeyCount: number;
   continueHref: string;
