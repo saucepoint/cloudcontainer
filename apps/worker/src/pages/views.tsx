@@ -17,6 +17,44 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
   opencode: "The open source AI coding agent.",
 };
 
+const LANDING_TERMINAL_PROMPT =
+  "Add a little mischievous raccoon to the web app; animate it as if it were stealing components from the app.";
+
+const LandingTerminalFallback: FC = () => (
+  <div
+    class="landing-terminal-window"
+    role="img"
+    aria-label="Terminal demo: SSH into workbench, open a project repository, launch Codex, and type a prompt."
+  >
+    <div class="terminal-titlebar">
+      <span class="terminal-dots" aria-hidden="true"><i /><i /><i /></span>
+      <span class="terminal-title">ssh workbench</span>
+      <span class="terminal-title-status">codex</span>
+    </div>
+    <div class="terminal-screen terminal-static-screen" aria-hidden="true">
+      <div class="terminal-shell-screen">
+        <div class="terminal-line"><span class="terminal-prompt-label">you@laptop:~$</span> ssh workbench</div>
+        <div class="terminal-line terminal-output yellow">Connecting to workbench...</div>
+        <div class="terminal-line terminal-output">Welcome to Debian GNU/Linux 13 (trixie)</div>
+        <div class="terminal-line terminal-output dim">bash 5.2.37 · x86_64</div>
+        <div class="terminal-line"><span class="terminal-prompt-label">dev@workbench:~$</span> cd ~/repos/lantern</div>
+        <div class="terminal-line"><span class="terminal-prompt-label">dev@workbench:~/repos/lantern$</span> codex</div>
+        <div class="terminal-line terminal-output green">Loading Codex...</div>
+      </div>
+      <div class="terminal-codex-screen">
+        <div class="terminal-codex-conversation">
+          <div class="terminal-codex-user-prompt"><span class="terminal-codex-chevron" aria-hidden="true">›</span><span>{LANDING_TERMINAL_PROMPT}</span></div>
+          <div class="terminal-codex-working"><span class="terminal-codex-working-dot" aria-hidden="true">•</span><strong>Working</strong><span>(3s • esc to interrupt)</span></div>
+          <div class="terminal-codex-result">Found the app entrypoint</div>
+          <div class="terminal-codex-result">Mapped reusable UI components</div>
+          <div class="terminal-codex-result">Planning a tiny raccoon component heist</div>
+        </div>
+        <div class="terminal-codex-footer"><span>gpt-5.6-luna xhigh · ~/repos/lantern</span></div>
+      </div>
+    </div>
+  </div>
+);
+
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
     <div class="landing-hero">
@@ -24,11 +62,18 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
       <p class="lead">
         free for each unique person
         <br />
-        an always-on container for long running coding agents
+        an always-on container, accessed from any terminal client on any device
         <br />
-        access from any terminal client on any device
+        <i>your workflows, your environment, your terminal</i>
       </p>
     </div>
+    <section class="landing-terminal" aria-labelledby="landing-terminal-heading">
+      <h2 id="landing-terminal-heading" class="sr-only">SSH terminal demo</h2>
+      <div id="landing-terminal-root">
+        <LandingTerminalFallback />
+      </div>
+      <p class="sr-only">An animated terminal session connects to workbench, opens a project repository, launches Codex, and types a playful request.</p>
+    </section>
     <div class="card">
       <ul class="check spec-list">
         <li>
