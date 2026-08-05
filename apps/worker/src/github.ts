@@ -115,13 +115,40 @@ export async function githubAccessToken(env: Bindings, userId: string): Promise<
   return refreshed.access_token;
 }
 
-function githubApiHeaders(token: string): Record<string, string> {
+function githubApiHeaders(token: string | null): Record<string, string> {
   return {
-    authorization: `Bearer ${token}`,
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
     "user-agent": "usebench.dev",
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
   };
+}
+
+/** Convert a pasted canonical GitHub repository URL into an owner/name pair. */
+export function githubRepositoryNameFromUrl(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || !["github.com", "www.github.com"].includes(url.hostname.toLowerCase())) {
+    return null;
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length !== 2) return null;
+  const [rawOwner, rawRepository] = parts;
+  if (!rawOwner || !rawRepository) return null;
+  let owner: string;
+  let repository: string;
+  try {
+    owner = decodeURIComponent(rawOwner);
+    repository = decodeURIComponent(rawRepository).replace(/\.git$/, "");
+  } catch {
+    return null;
+  }
+  const fullName = `${owner}/${repository}`;
+  return GithubRepoNameSchema.safeParse(fullName).success ? fullName : null;
 }
 
 function githubRepository(row: GithubRepositoryResponse): GithubRepository | null {
@@ -136,7 +163,7 @@ function githubRepository(row: GithubRepositoryResponse): GithubRepository | nul
 
 /** Fetch one repository when the user token and App installation can access it. */
 async function fetchGithubRepository(
-  token: string,
+  token: string | null,
   fullName: string,
 ): Promise<GithubRepository | null> {
   const [owner, name] = fullName.split("/");
@@ -155,15 +182,17 @@ async function fetchGithubRepository(
 
 /** Search every repository visible to the authenticated GitHub App user token. */
 async function searchGithubRepositories(
-  token: string,
+  token: string | null,
   query: string,
 ): Promise<GithubRepository[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  if (GithubRepoNameSchema.safeParse(trimmed).success) {
-    const exact = await fetchGithubRepository(token, trimmed);
+  const pastedUrlName = githubRepositoryNameFromUrl(trimmed);
+  if (pastedUrlName || GithubRepoNameSchema.safeParse(trimmed).success) {
+    const exact = await fetchGithubRepository(token, pastedUrlName ?? trimmed);
     return exact ? [exact] : [];
   }
+  if (!token) throw new Error("github connection required for repository search");
 
   const url = new URL("https://api.github.com/search/repositories");
   url.searchParams.set("q", `${trimmed} in:name`);
@@ -193,7 +222,7 @@ async function searchGithubRepositories(
 
 /** Verify selected names directly so access checks have no repository-list cutoff. */
 export async function verifyGithubRepositories(
-  token: string,
+  token: string | null,
   fullNames: string[],
 ): Promise<Set<string>> {
   const repositories = await Promise.all(
@@ -312,12 +341,16 @@ export const githubRoutes = new Hono<AppContext>()
   .get("/api/github/repos", requireUser, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
     try {
-      const token = await githubAccessToken(c.env, c.get("user").id);
-      if (!token) return c.json({ error: "connect GitHub first" }, 409);
       const query = (c.req.query("q") ?? "").trim().slice(0, 256);
       if (!query) return c.json({ repositories: [] });
+      const token = await githubAccessToken(c.env, c.get("user").id);
+      const pastedUrl = githubRepositoryNameFromUrl(query) !== null;
+      if (!token && !pastedUrl) return c.json({ error: "connect GitHub first" }, 409);
       const repositories = await searchGithubRepositories(token, query);
-      return c.json({ repositories });
+      return c.json({
+        repositories,
+        ...(pastedUrl && !token && repositories.length === 0 ? { githubRequired: true } : {}),
+      });
     } catch (err) {
       console.error(JSON.stringify({ event: "github_repositories_failed", error: String(err) }));
       return c.json({ error: "Could not load GitHub repositories. Reconnect GitHub and retry." }, 502);

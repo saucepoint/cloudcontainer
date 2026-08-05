@@ -283,14 +283,18 @@ async function chooseGithubRepositories(api: ApiClient): Promise<string[]> {
   while (selected.size < GITHUB_REPOSITORY_LIMIT) {
     const query = await input({
       message: selected.size
-        ? `Search another GitHub repository, or press Enter when done (${selected.size}/${GITHUB_REPOSITORY_LIMIT})`
-        : "Search GitHub repositories (press Enter to finish)",
+        ? `Search another GitHub repository or paste a URL, or press Enter when done (${selected.size}/${GITHUB_REPOSITORY_LIMIT})`
+        : "Search GitHub repositories or paste a URL (press Enter to finish)",
     });
     if (!query.trim()) break;
-    const response = await api.get<{ repositories?: Repository[] }>(`/api/github/repos?q=${encodeURIComponent(query.trim())}`);
+    const response = await api.get<{ repositories?: Repository[]; githubRequired?: boolean }>(
+      `/api/github/repos?q=${encodeURIComponent(query.trim())}`,
+    );
     const repositories = response.repositories ?? [];
     if (!repositories.length) {
-      console.log("No accessible repositories matched that search.");
+      console.log(response.githubRequired === true
+        ? "If this repository is private, connect GitHub to access it."
+        : "No accessible repositories matched that search.");
       continue;
     }
     const choices = repositories.map((repository) => ({
@@ -317,8 +321,9 @@ async function configureGithub(api: ApiClient, state: SessionState): Promise<str
     return [];
   }
   const alreadyConnected = await connectedGithub(api);
-  if (!alreadyConnected && !(await confirm({ message: "Connect GitHub for repository access?", default: true }))) return [];
-  if (!alreadyConnected) await connectGithub(api, api.baseUrl);
+  if (!alreadyConnected && await confirm({ message: "Connect GitHub for private repository access?", default: true })) {
+    await connectGithub(api, api.baseUrl);
+  }
   return chooseGithubRepositories(api);
 }
 

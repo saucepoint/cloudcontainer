@@ -699,10 +699,10 @@ export const OnboardingPage: FC<{
             </a>
           </div>
           <p id="github-status" class="muted" role="status" aria-live="polite">
-            After connecting, search by repository name or enter an exact owner/repository.
+            Search by repository name after connecting, or paste a public GitHub URL. Private repositories require a GitHub connection.
           </p>
-          <label for="github-repo-search">Search repositories</label>
-          <input id="github-repo-search" type="search" placeholder="repository name or owner/repository" maxLength={256} autocomplete="off" />
+          <label for="github-repo-search">Search or paste a repository URL</label>
+          <input id="github-repo-search" type="search" placeholder="repository name, owner/repository, or GitHub URL" maxLength={256} autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
         </div>
       ) : null}

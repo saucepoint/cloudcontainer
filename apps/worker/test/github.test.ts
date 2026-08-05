@@ -222,6 +222,60 @@ describe("GitHub App connection", () => {
 });
 
 describe("GET /api/github/repos", () => {
+  it("looks up a public GitHub URL without requiring a connected account", async () => {
+    const { env } = makeEnv(githubConfig);
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    stubFetch((url, init) => {
+      if (url.hostname !== "api.github.com" || url.pathname !== "/repos/octocat/hello-world") {
+        return null;
+      }
+      expect(new Headers(init.headers).get("authorization")).toBeNull();
+      return Response.json({
+        full_name: "octocat/hello-world",
+        private: false,
+        archived: false,
+        description: "A sample repository",
+      });
+    });
+
+    const response = await app().request(
+      "/api/github/repos?q=https%3A%2F%2Fgithub.com%2Foctocat%2Fhello-world.git",
+      { headers },
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      repositories: [{
+        fullName: "octocat/hello-world",
+        private: false,
+        archived: false,
+        description: "A sample repository",
+      }],
+    });
+  });
+
+  it("explains that an inaccessible pasted URL may be a private repository", async () => {
+    const { env } = makeEnv(githubConfig);
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    stubFetch((url, init) => {
+      if (url.hostname !== "api.github.com" || url.pathname !== "/repos/acme/private") {
+        return null;
+      }
+      expect(new Headers(init.headers).get("authorization")).toBeNull();
+      return Response.json({ message: "Not Found" }, { status: 404 });
+    });
+
+    const response = await app().request(
+      "/api/github/repos?q=https%3A%2F%2Fgithub.com%2Facme%2Fprivate",
+      { headers },
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ repositories: [], githubRequired: true });
+  });
+
   it("uses GitHub search instead of filtering a capped recent-repository list", async () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
@@ -327,10 +381,10 @@ describe("GET /api/github/repos", () => {
     });
   });
 
-  it("requires a connected GitHub account", async () => {
+  it("requires a connected GitHub account for name searches", async () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
-    const response = await app().request("/api/github/repos", { headers: await login(env, user) }, env);
+    const response = await app().request("/api/github/repos?q=octocat", { headers: await login(env, user) }, env);
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "connect GitHub first" });
   });

@@ -196,7 +196,7 @@ async function loadGithubRepositories(query: string): Promise<void> {
   const status = requiredElement<HTMLElement>("github-status");
   if (!query.trim()) {
     renderGithubRepositories([]);
-    status.textContent = "Search for a repository by owner or name.";
+    status.textContent = "Search by name after connecting, or paste a public GitHub URL.";
     return;
   }
   const spinner = document.createElement("span");
@@ -204,7 +204,7 @@ async function loadGithubRepositories(query: string): Promise<void> {
   spinner.setAttribute("aria-hidden", "true");
   status.replaceChildren(spinner, "Searching GitHub…");
   try {
-    const json = await requestJson<{ repositories?: unknown }>(
+    const json = await requestJson<{ repositories?: unknown; githubRequired?: boolean }>(
       `/api/github/repos?q=${encodeURIComponent(query)}`,
       undefined,
       "Could not load repositories",
@@ -216,11 +216,13 @@ async function loadGithubRepositories(query: string): Promise<void> {
     }
     status.textContent = repositories.length
       ? `Choose up to ${INPUT_LIMITS.githubReposPerProvision} repositories.`
-      : "No accessible repositories match your search.";
+      : json.githubRequired === true
+        ? "If this repository is private, connect GitHub to access it."
+        : "No accessible repositories match your search.";
     renderGithubRepositories(repositories);
   } catch (error) {
     status.textContent = error instanceof HttpError && error.status === 409
-      ? "Connect GitHub to search repositories."
+      ? "Connect GitHub to search by name, or paste a public GitHub URL."
       : errorMessage(error, "Could not load GitHub repositories.");
   }
 }

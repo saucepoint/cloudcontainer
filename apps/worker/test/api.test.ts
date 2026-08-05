@@ -193,6 +193,35 @@ describe("POST /api/provision", () => {
     expect(JSON.stringify(daemon.submitted)).not.toContain("CANARY-");
   });
 
+  it("verifies and carries a public GitHub repository into provisioning without a token", async () => {
+    const { env, headers, daemon } = await setup();
+    stubFetch(
+      daemon.route,
+      (url, init) => {
+        if (url.hostname !== "api.github.com" || url.pathname !== "/repos/octocat/public") {
+          return null;
+        }
+        expect(new Headers(init.headers).get("authorization")).toBeNull();
+        return Response.json({
+          full_name: "octocat/public",
+          private: false,
+          archived: false,
+        });
+      },
+    );
+
+    const response = await app().request(
+      "/api/provision",
+      json({ agents: ["codex"], githubRepos: ["octocat/public"] }, headers),
+      env,
+    );
+    expect(response.status).toBe(202);
+    expect(daemon.submitted[0]).toMatchObject({
+      op: "provision",
+      githubRepos: ["octocat/public"],
+    });
+  });
+
   it("verifies and carries selected GitHub repositories into provisioning", async () => {
     const { env, headers, daemon } = await setup();
     await env.DB.prepare(

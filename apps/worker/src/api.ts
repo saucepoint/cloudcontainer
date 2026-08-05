@@ -150,11 +150,12 @@ export const apiRoutes = new Hono<AppContext>()
     if (githubRepos.length > 0) {
       try {
         const token = await githubAccessToken(c.env, user.id);
-        if (!token) return c.json({ error: "connect GitHub before selecting repositories" }, 409);
         const accessible = await verifyGithubRepositories(token, githubRepos);
         const unavailable = githubRepos.find((repo) => !accessible.has(repo));
         if (unavailable) {
-          return c.json({ error: `GitHub repository is no longer available: ${unavailable}` }, 400);
+          return token
+            ? c.json({ error: `GitHub repository is no longer available: ${unavailable}` }, 400)
+            : c.json({ error: "connect GitHub to access private repositories" }, 409);
         }
       } catch {
         return c.json({ error: "Could not verify GitHub repositories; retry in a moment" }, 503);

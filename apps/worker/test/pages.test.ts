@@ -434,8 +434,10 @@ describe("GitHub repository onboarding", () => {
     expect(enabled).not.toContain("/auth/github/install");
     expect(onboardingClient).not.toContain("/auth/github/reauth");
     expect(onboardingClient).toContain("/api/github/repos");
+    expect(onboardingClient).toContain("githubRequired");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
+    expect(enabled).toContain("paste a public GitHub URL");
     expect(enabled).toContain('id="github-repo-search"');
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
