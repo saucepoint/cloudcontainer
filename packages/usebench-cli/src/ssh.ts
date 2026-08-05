@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -37,12 +37,26 @@ async function readPublicKey(path: string): Promise<string | undefined> {
   }
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function generateDedicatedKey(): Promise<SelectedSshKey> {
   const privatePath = join(sshDirectory(), "workbench_id_ed25519");
   const publicPath = `${privatePath}.pub`;
   await mkdir(sshDirectory(), { recursive: true, mode: 0o700 });
+  const privateExists = await pathExists(privatePath);
+  const publicExists = await pathExists(publicPath);
   const existing = await readPublicKey(publicPath);
-  if (existing) return { publicKey: existing, privatePath };
+  if (privateExists || publicExists) {
+    if (privateExists && existing) return { publicKey: existing, privatePath };
+    throw new Error(`Refusing to overwrite an existing SSH key at ${privatePath}; remove it or restore its matching public key first.`);
+  }
 
   try {
     await execFile("ssh-keygen", [

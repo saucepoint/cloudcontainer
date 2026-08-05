@@ -218,6 +218,8 @@ async function runConvexSignIn(api: ApiClient): Promise<void | Back> {
   console.log("Convex connected.");
 }
 
+type OptionalIntegration = "cloudflare" | "supabase" | "convex";
+
 async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools | Back> {
   const result: AdditionalTools = { llmKeys: {} };
   const selectedProviders = await promptWithBack(checkbox<PasteableProvider>, {
@@ -239,50 +241,63 @@ async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools
   if (copilot === BACK) return BACK;
   if (copilot) await runCopilotSignIn(api);
 
-  const cloudflare = await promptWithBack(select, {
-    message: "Cloudflare access",
+  const integrations = await promptWithBack(checkbox<OptionalIntegration>, {
+    message: "Optional integrations",
     choices: [
-      { name: "Skip", value: "skip" as const },
-      { name: "Sign in with Cloudflare / Wrangler", value: "oauth" as const },
-      { name: "Paste a Cloudflare API token", value: "token" as const },
+      { name: "Cloudflare", value: "cloudflare" as const, description: "Deploy and manage Cloudflare projects." },
+      { name: "Supabase", value: "supabase" as const, description: "Connect to Supabase projects." },
+      { name: "Convex", value: "convex" as const, description: "Connect to Convex projects." },
     ],
+    required: false,
   });
-  if (cloudflare === BACK) return BACK;
-  if (cloudflare === "oauth") {
-    const result = await runWranglerSignIn(api);
-    if (result === BACK) return BACK;
-  }
-  if (cloudflare === "token") {
-    const value = await promptWithBack(password, { message: "Cloudflare API token" });
-    if (value === BACK) return BACK;
-    if (value.trim()) result.cloudflareToken = value.trim();
-  }
+  if (integrations === BACK) return BACK;
 
-  const supabase = await promptWithBack(confirm, { message: "Connect Supabase?", default: false });
-  if (supabase === BACK) return BACK;
-  if (supabase) {
-    const value = await promptWithBack(password, { message: "Supabase personal or OAuth access token" });
-    if (value === BACK) return BACK;
-    if (value.trim()) result.supabaseToken = value.trim();
-  }
+  for (const integration of integrations) {
+    if (integration === "cloudflare") {
+      const cloudflare = await promptWithBack(select, {
+        message: "Cloudflare access",
+        choices: [
+          { name: "Sign in with Cloudflare / Wrangler", value: "oauth" as const },
+          { name: "Paste a Cloudflare API token", value: "token" as const },
+        ],
+      });
+      if (cloudflare === BACK) return BACK;
+      if (cloudflare === "oauth") {
+        const signInResult = await runWranglerSignIn(api);
+        if (signInResult === BACK) return BACK;
+      }
+      if (cloudflare === "token") {
+        const value = await promptWithBack(password, { message: "Cloudflare API token" });
+        if (value === BACK) return BACK;
+        if (value.trim()) result.cloudflareToken = value.trim();
+      }
+      continue;
+    }
 
-  const convex = await promptWithBack(select, {
-    message: "Convex access",
-    choices: [
-      { name: "Skip", value: "skip" as const },
-      { name: "Sign in with Convex", value: "oauth" as const },
-      { name: "Paste a Convex personal token", value: "token" as const },
-    ],
-  });
-  if (convex === BACK) return BACK;
-  if (convex === "oauth") {
-    const signInResult = await runConvexSignIn(api);
-    if (signInResult === BACK) return BACK;
-  }
-  if (convex === "token") {
-    const value = await promptWithBack(password, { message: "Convex personal access token" });
-    if (value === BACK) return BACK;
-    if (value.trim()) result.convexToken = value.trim();
+    if (integration === "supabase") {
+      const value = await promptWithBack(password, { message: "Supabase personal or OAuth access token" });
+      if (value === BACK) return BACK;
+      if (value.trim()) result.supabaseToken = value.trim();
+      continue;
+    }
+
+    const convex = await promptWithBack(select, {
+      message: "Convex access",
+      choices: [
+        { name: "Sign in with Convex", value: "oauth" as const },
+        { name: "Paste a Convex personal token", value: "token" as const },
+      ],
+    });
+    if (convex === BACK) return BACK;
+    if (convex === "oauth") {
+      const signInResult = await runConvexSignIn(api);
+      if (signInResult === BACK) return BACK;
+    }
+    if (convex === "token") {
+      const value = await promptWithBack(password, { message: "Convex personal access token" });
+      if (value === BACK) return BACK;
+      if (value.trim()) result.convexToken = value.trim();
+    }
   }
   return result;
 }
@@ -490,6 +505,7 @@ export async function runOnboarding(
       continue;
     }
     try {
+      console.log("\nYour workbench is provisioning. This may take a few minutes.");
       await api.post("/api/provision", provisionInput);
       container = await waitForReady(api);
     } catch (error) {
