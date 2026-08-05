@@ -284,6 +284,12 @@ describe("provision command construction", () => {
       command.includes("gh api --method POST user/ssh_signing_keys") &&
       command.includes("-F key=@/home/dev/.ssh/workbench_github_signing_key.pub"),
     )).toBe(true);
+    expect(commands.some((command) =>
+      command.includes("git config --global user.name") && command.includes("octocat")
+    )).toBe(true);
+    expect(commands.some((command) =>
+      command.includes("git config --global user.email") && command.includes("octocat@users.noreply.github.com")
+    )).toBe(true);
     expect(commands.some((command) => command.includes("git config --global gpg.format ssh"))).toBe(true);
     expect(commands.some((command) => command.includes("git config --global user.signingkey /home/dev/.ssh/workbench_github_signing_key"))).toBe(true);
     expect(commands.some((command) => command.includes("git config --global commit.gpgsign true"))).toBe(true);
