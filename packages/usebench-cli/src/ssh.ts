@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { confirm, select } from "@inquirer/prompts";
+import { BACK, promptWithBack, type Back } from "./navigation.js";
 
 const execFile = promisify(execFileCallback);
 const PUBLIC_KEY_PATTERN = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+(?: [^\n]*)?$/;
@@ -60,7 +61,7 @@ async function generateDedicatedKey(): Promise<SelectedSshKey> {
   return { publicKey: generated, privatePath };
 }
 
-export async function chooseSshKey(): Promise<SelectedSshKey> {
+export async function chooseSshKey(): Promise<SelectedSshKey | Back> {
   const defaultPrivatePath = join(sshDirectory(), "id_ed25519");
   const defaultPublicPath = `${defaultPrivatePath}.pub`;
   const defaultPublic = await readPublicKey(defaultPublicPath);
@@ -69,9 +70,10 @@ export async function chooseSshKey(): Promise<SelectedSshKey> {
       ? [{ name: `Reuse ${defaultPublicPath}`, value: "default" as const, description: "Only the public key is sent to usebench." }]
       : []),
     { name: `Generate ${join(sshDirectory(), "workbench_id_ed25519.pub")}`, value: "dedicated" as const, description: "Creates a new local ed25519 keypair without overwriting an existing one." },
-    { name: "Continue without an SSH key", value: "none" as const, description: "SSH remains disabled until you add a key later." },
+    { name: "Skip SSH for now", value: "none" as const, description: "SSH remains disabled until you add a key later." },
   ];
-  const selection = await select({ message: "SSH access", choices });
+  const selection = await promptWithBack(select, { message: "SSH access", choices });
+  if (selection === BACK) return BACK;
   if (selection === "default") return { publicKey: defaultPublic, privatePath: defaultPrivatePath };
   if (selection === "dedicated") return generateDedicatedKey();
   return { publicKey: undefined, privatePath: undefined };

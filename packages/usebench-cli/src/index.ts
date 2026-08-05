@@ -1,10 +1,11 @@
 import { Cli, z } from "incur";
-import { clearSession, loadOrAuthenticate, reauthenticate } from "./session.js";
+import { clearSession, loadOrAuthenticate } from "./session.js";
 import { formatFailure, runOnboarding } from "./onboarding.js";
 
 const cli = Cli.create("usebench", {
   version: "0.1.0",
   description: "Onboard onto usebench.dev from a keyboard-driven terminal wizard.",
+  outputPolicy: "agent-only",
   options: z.object({
     baseUrl: z.string().url().default(process.env.USEBENCH_BASE_URL ?? "https://usebench.dev").describe("usebench deployment URL"),
     clearSession: z.boolean().default(false).describe("clear the locally cached sign-in session and exit"),
@@ -23,13 +24,14 @@ const cli = Cli.create("usebench", {
     }
     try {
       const { api, state } = await loadOrAuthenticate(options.baseUrl, false);
-      return await runOnboarding(api, state, () => reauthenticate(api));
+      return await runOnboarding(api, state);
     } catch (error) {
       throw new Error(formatFailure(error));
     }
   },
 });
 
-cli.serve();
+await cli.serve();
+process.stdin.pause();
 
 export default cli;

@@ -17,6 +17,7 @@ import {
   type PasteableProvider,
 } from "./catalog.js";
 import { ApiClient, ApiError, errorMessage, wait } from "./http.js";
+import { BACK, promptWithBack, type Back } from "./navigation.js";
 import { maybeConfigureSshShortcut, chooseSshKey, type SelectedSshKey } from "./ssh.js";
 import { verifyWithWorldId } from "./world-id.js";
 import type { SessionState } from "./session.js";
@@ -75,8 +76,8 @@ function authTargetLabel(target: AuthTarget): string {
   return `${target.kind === "claude" ? "Claude" : "ChatGPT"} for ${AGENT_LABELS[target.agent]}`;
 }
 
-async function chooseAgents(): Promise<Agent[]> {
-  const selected = await checkbox<Agent>({
+async function chooseAgents(): Promise<Agent[] | Back> {
+  const selected = await promptWithBack(checkbox<Agent>, {
     message: "Choose at least one coding agent",
     choices: AGENTS.map((agent) => ({
       name: AGENT_LABELS[agent],
@@ -85,14 +86,16 @@ async function chooseAgents(): Promise<Agent[]> {
     })),
     required: true,
   });
+  if (selected === BACK) return BACK;
   return AGENTS.filter((agent) => selected.includes(agent));
 }
 
-async function runClaudeSignIn(api: ApiClient, agent: AuthTarget["agent"]): Promise<void> {
+async function runClaudeSignIn(api: ApiClient, agent: AuthTarget["agent"]): Promise<void | Back> {
   const start = await api.post<{ authorizeUrl: string }>("/api/claude/oauth/start", { agent });
   console.log(`\nOpening Claude sign-in…\n${start.authorizeUrl}`);
   openBrowser(start.authorizeUrl);
-  const code = await input({ message: "Paste the Claude authorization code (CODE#STATE)" });
+  const code = await promptWithBack(input, { message: "Paste the Claude authorization code (CODE#STATE)" });
+  if (code === BACK) return BACK;
   await api.post("/api/claude/oauth/finish", { code, agent });
   console.log("Claude connected.");
 }
@@ -114,7 +117,7 @@ async function pollDevice(
   throw new Error(`${label} sign-in expired.`);
 }
 
-async function runChatGptSignIn(api: ApiClient, agent: AuthTarget["agent"]): Promise<void> {
+async function runChatGptSignIn(api: ApiClient, agent: AuthTarget["agent"]): Promise<void | Back> {
   const start = await api.post<{
     verificationUrl: string;
     userCode: string;
@@ -135,40 +138,47 @@ async function runChatGptSignIn(api: ApiClient, agent: AuthTarget["agent"]): Pro
   );
 }
 
-async function configureAgentAuth(api: ApiClient, agents: Agent[]): Promise<void> {
+async function configureAgentAuth(api: ApiClient, agents: Agent[]): Promise<void | Back> {
   const targets = agentAuthTargets(agents);
   if (!targets.length) return;
-  const selected = await checkbox<AuthTarget>({
+  const selected = await promptWithBack(checkbox<AuthTarget>, {
     message: "Optional agent sign-ins",
     choices: targets.map((target) => ({ name: authTargetLabel(target), value: target })),
     required: false,
   });
+  if (selected === BACK) return BACK;
   for (const target of selected) {
-    if (target.kind === "claude") await runClaudeSignIn(api, target.agent);
-    else await runChatGptSignIn(api, target.agent);
+    const result = target.kind === "claude"
+      ? await runClaudeSignIn(api, target.agent)
+      : await runChatGptSignIn(api, target.agent);
+    if (result === BACK) return BACK;
   }
 }
 
 async function verifyAccount(api: ApiClient, state: SessionState): Promise<SessionState> {
   if (state.verified) return state;
-  const method = await select({
-    message: "Verify your usebench account",
-    choices: [
-      ...(state.worldIdAvailable ? [{ name: "Verify with World ID (QR code)", value: "world" as const }] : []),
-      { name: "Enter an invite code", value: "invite" as const },
-    ],
-  });
-  if (method === "world") {
-    await verifyWithWorldId(api);
-  } else {
-    const code = await input({
-      message: "Eight-character invite code",
-      validate: (value) => /^[A-Za-z0-9]{8}$/.test(value.trim()) || "Enter exactly eight letters or numbers.",
+  while (true) {
+    const method = await promptWithBack(select, {
+      message: "Verify your usebench account",
+      choices: [
+        ...(state.worldIdAvailable ? [{ name: "Verify with World ID (QR code)", value: "world" as const }] : []),
+        { name: "Enter an invite code", value: "invite" as const },
+      ],
     });
-    await api.post("/api/account/invite/verify", { code: code.trim().toUpperCase() });
+    if (method === BACK) continue;
+    if (method === "world") {
+      await verifyWithWorldId(api);
+    } else {
+      const code = await promptWithBack(input, {
+        message: "Eight-character invite code",
+        validate: (value) => /^[A-Za-z0-9]{8}$/.test(value.trim()) || "Enter exactly eight letters or numbers.",
+      });
+      if (code === BACK) continue;
+      await api.post("/api/account/invite/verify", { code: code.trim().toUpperCase() });
+    }
+    console.log("Account verified.");
+    return api.get<SessionState>("/api/cli/session");
   }
-  console.log("Account verified.");
-  return api.get<SessionState>("/api/cli/session");
 }
 
 async function runCopilotSignIn(api: ApiClient): Promise<void> {
@@ -188,27 +198,29 @@ async function runCopilotSignIn(api: ApiClient): Promise<void> {
   );
 }
 
-async function runWranglerSignIn(api: ApiClient): Promise<void> {
+async function runWranglerSignIn(api: ApiClient): Promise<void | Back> {
   const start = await api.post<{ authorizeUrl: string }>("/api/wrangler/oauth/start");
   console.log(`\nOpening Cloudflare sign-in…\n${start.authorizeUrl}`);
   openBrowser(start.authorizeUrl);
-  const callbackUrl = await input({ message: "Paste the full localhost callback URL" });
+  const callbackUrl = await promptWithBack(input, { message: "Paste the full localhost callback URL" });
+  if (callbackUrl === BACK) return BACK;
   await api.post("/api/wrangler/oauth/finish", { callbackUrl });
   console.log("Cloudflare connected.");
 }
 
-async function runConvexSignIn(api: ApiClient): Promise<void> {
+async function runConvexSignIn(api: ApiClient): Promise<void | Back> {
   const start = await api.post<{ authorizeUrl: string }>("/api/convex/oauth/start");
   console.log(`\nOpening Convex sign-in…\n${start.authorizeUrl}`);
   openBrowser(start.authorizeUrl);
-  const authorizationToken = await password({ message: "Paste the Convex authorization token" });
+  const authorizationToken = await promptWithBack(password, { message: "Paste the Convex authorization token" });
+  if (authorizationToken === BACK) return BACK;
   await api.post("/api/convex/oauth/finish", { authorizationToken });
   console.log("Convex connected.");
 }
 
-async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools> {
+async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools | Back> {
   const result: AdditionalTools = { llmKeys: {} };
-  const selectedProviders = await checkbox<PasteableProvider>({
+  const selectedProviders = await promptWithBack(checkbox<PasteableProvider>, {
     message: "Optional model API keys",
     choices: PASTEABLE_PROVIDERS.map((provider) => ({
       name: PROVIDER_LABELS[provider],
@@ -216,14 +228,18 @@ async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools
     })),
     required: false,
   });
+  if (selectedProviders === BACK) return BACK;
   for (const provider of selectedProviders) {
-    const value = await password({ message: `${PROVIDER_LABELS[provider]} API key` });
+    const value = await promptWithBack(password, { message: `${PROVIDER_LABELS[provider]} API key` });
+    if (value === BACK) return BACK;
     if (value.trim()) result.llmKeys[provider] = value.trim();
   }
 
-  if (await confirm({ message: "Connect GitHub Copilot?", default: false })) await runCopilotSignIn(api);
+  const copilot = await promptWithBack(confirm, { message: "Connect GitHub Copilot?", default: false });
+  if (copilot === BACK) return BACK;
+  if (copilot) await runCopilotSignIn(api);
 
-  const cloudflare = await select({
+  const cloudflare = await promptWithBack(select, {
     message: "Cloudflare access",
     choices: [
       { name: "Skip", value: "skip" as const },
@@ -231,18 +247,26 @@ async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools
       { name: "Paste a Cloudflare API token", value: "token" as const },
     ],
   });
-  if (cloudflare === "oauth") await runWranglerSignIn(api);
+  if (cloudflare === BACK) return BACK;
+  if (cloudflare === "oauth") {
+    const result = await runWranglerSignIn(api);
+    if (result === BACK) return BACK;
+  }
   if (cloudflare === "token") {
-    const value = await password({ message: "Cloudflare API token" });
+    const value = await promptWithBack(password, { message: "Cloudflare API token" });
+    if (value === BACK) return BACK;
     if (value.trim()) result.cloudflareToken = value.trim();
   }
 
-  if (await confirm({ message: "Connect Supabase?", default: false })) {
-    const value = await password({ message: "Supabase personal or OAuth access token" });
+  const supabase = await promptWithBack(confirm, { message: "Connect Supabase?", default: false });
+  if (supabase === BACK) return BACK;
+  if (supabase) {
+    const value = await promptWithBack(password, { message: "Supabase personal or OAuth access token" });
+    if (value === BACK) return BACK;
     if (value.trim()) result.supabaseToken = value.trim();
   }
 
-  const convex = await select({
+  const convex = await promptWithBack(select, {
     message: "Convex access",
     choices: [
       { name: "Skip", value: "skip" as const },
@@ -250,9 +274,14 @@ async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools
       { name: "Paste a Convex personal token", value: "token" as const },
     ],
   });
-  if (convex === "oauth") await runConvexSignIn(api);
+  if (convex === BACK) return BACK;
+  if (convex === "oauth") {
+    const signInResult = await runConvexSignIn(api);
+    if (signInResult === BACK) return BACK;
+  }
   if (convex === "token") {
-    const value = await password({ message: "Convex personal access token" });
+    const value = await promptWithBack(password, { message: "Convex personal access token" });
+    if (value === BACK) return BACK;
     if (value.trim()) result.convexToken = value.trim();
   }
   return result;
@@ -278,14 +307,15 @@ async function connectGithub(api: ApiClient, baseUrl: string): Promise<void> {
   throw new Error("GitHub authorization did not finish before the sign-in window expired.");
 }
 
-async function chooseGithubRepositories(api: ApiClient): Promise<string[]> {
+async function chooseGithubRepositories(api: ApiClient): Promise<string[] | Back> {
   const selected = new Set<string>();
   while (selected.size < GITHUB_REPOSITORY_LIMIT) {
-    const query = await input({
+    const query = await promptWithBack(input, {
       message: selected.size
         ? `Search another GitHub repository, or press Enter when done (${selected.size}/${GITHUB_REPOSITORY_LIMIT})`
         : "Search GitHub repositories (press Enter to finish)",
     });
+    if (query === BACK) return BACK;
     if (!query.trim()) break;
     const response = await api.get<{ repositories?: Repository[] }>(`/api/github/repos?q=${encodeURIComponent(query.trim())}`);
     const repositories = response.repositories ?? [];
@@ -299,55 +329,47 @@ async function chooseGithubRepositories(api: ApiClient): Promise<string[]> {
       ...(repository.description ? { description: repository.description } : {}),
       checked: selected.has(repository.fullName),
     }));
-    const picked = await checkbox<string>({
+    const picked = await promptWithBack(checkbox<string>, {
       message: "Choose repositories to clone",
       choices,
       required: false,
       validate: (values) => values.length <= GITHUB_REPOSITORY_LIMIT - selected.size
         || `Choose at most ${GITHUB_REPOSITORY_LIMIT - selected.size} more.`,
     });
+    if (picked === BACK) return BACK;
     for (const repository of picked) selected.add(repository);
   }
   return [...selected];
 }
 
-async function configureGithub(api: ApiClient, state: SessionState): Promise<string[]> {
+async function configureGithub(api: ApiClient, state: SessionState): Promise<string[] | Back> {
   if (!state.githubAvailable) {
     console.log("GitHub repository setup is unavailable on this deployment; skipping it.");
     return [];
   }
   const alreadyConnected = await connectedGithub(api);
-  if (!alreadyConnected && !(await confirm({ message: "Connect GitHub for repository access?", default: true }))) return [];
+  if (!alreadyConnected) {
+    const shouldConnect = await promptWithBack(confirm, { message: "Connect GitHub for repository access?", default: true });
+    if (shouldConnect === BACK) return BACK;
+    if (!shouldConnect) return [];
+  }
   if (!alreadyConnected) await connectGithub(api, api.baseUrl);
   return chooseGithubRepositories(api);
 }
 
-type Navigation = "next" | "repeat" | "back";
-
-async function chooseNavigation(canGoBack: boolean): Promise<Navigation> {
-  return select<Navigation>({
-    message: "Setup wizard",
-    choices: [
-      { name: "Continue", value: "next" },
-      { name: "Edit this section", value: "repeat" },
-      ...(canGoBack ? [{ name: "← Back", value: "back" as const }] : []),
-    ],
-  });
-}
-
-async function review(inputValue: ProvisionInput): Promise<"create" | "back"> {
+async function review(inputValue: ProvisionInput): Promise<"create" | Back> {
   console.log("\nReview your workbench setup:");
   console.log(`Agents: ${inputValue.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}`);
   console.log(`Repositories: ${inputValue.githubRepos.length || "none"}`);
   console.log(`Model API keys: ${Object.keys(inputValue.llmKeys).length || "none"}`);
   console.log(`SSH: ${inputValue.sshPubkey ? "public key configured" : "no key (SSH disabled until later)"}`);
-  return select({
-    message: "Ready to create this workbench?",
+  const choice = await promptWithBack(select, {
+    message: "Create this workbench?",
     choices: [
       { name: "Create this workbench", value: "create" as const },
-      { name: "← Back to setup", value: "back" as const },
     ],
   });
+  return choice;
 }
 
 async function waitForReady(api: ApiClient): Promise<ContainerView> {
@@ -385,94 +407,71 @@ export interface OnboardingResult {
 export async function runOnboarding(
   api: ApiClient,
   initialState: SessionState,
-  changeAccount?: () => Promise<SessionState>,
 ): Promise<OnboardingResult | { status: "existing"; redirect: string }> {
   let state = initialState;
+  if (state.hasWorkbench) {
+    console.log(`This account already has a workbench. Open ${api.baseUrl}${state.redirect}`);
+    return { status: "existing", redirect: state.redirect };
+  }
+  state = await verifyAccount(api, state);
+  if (state.hasWorkbench) {
+    console.log(`This account already has a workbench. Open ${api.baseUrl}${state.redirect}`);
+    return { status: "existing", redirect: state.redirect };
+  }
+
+  console.log("\nWelcome to usebench.dev. Set up your cloud workbench.");
+  console.log("Press Shift+Left at any prompt to return to the previous section.\n");
   let agents: Agent[] = [];
   let githubRepos: string[] = [];
   let tools: AdditionalTools = { llmKeys: {} };
   let sshKey: SelectedSshKey = { publicKey: undefined, privatePath: undefined };
   let container: ContainerView | undefined;
   let step = 0;
-  let welcomeShown = false;
-
-  while (step < 8) {
+  while (!container) {
     if (step === 0) {
-      if (state.hasWorkbench) {
-        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
-        return { status: "existing", redirect: state.redirect };
-      }
-      if (changeAccount) {
-        const accountAction = await select({
-          message: "usebench account",
-          choices: [
-            { name: "Continue with the current sign-in", value: "continue" as const },
-            { name: "Sign in with a different Google/GitHub account", value: "change" as const },
-          ],
-        });
-        if (accountAction === "change") {
-          state = await changeAccount();
-          agents = [];
-          githubRepos = [];
-          tools = { llmKeys: {} };
-          sshKey = { publicKey: undefined, privatePath: undefined };
-        }
-      }
-      if (state.hasWorkbench) {
-        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
-        return { status: "existing", redirect: state.redirect };
-      }
+      const selectedAgents = await chooseAgents();
+      if (selectedAgents === BACK) continue;
+      agents = selectedAgents;
       step = 1;
       continue;
     }
 
     if (step === 1) {
-      state = await verifyAccount(api, state);
-      if (state.hasWorkbench) {
-        console.log(`This account already has a workbench. Continue at ${api.baseUrl}${state.redirect}`);
-        return { status: "existing", redirect: state.redirect };
-      }
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      const result = await configureAgentAuth(api, agents);
+      step = result === BACK ? 0 : 2;
       continue;
     }
 
     if (step === 2) {
-      if (!welcomeShown) {
-        console.log("\nWelcome to usebench.dev. Set up your cloud workbench.\n");
-        welcomeShown = true;
+      const result = await configureGithub(api, state);
+      if (result === BACK) {
+        step = 1;
+        continue;
       }
-      agents = await chooseAgents();
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      githubRepos = result;
+      step = 3;
       continue;
     }
 
     if (step === 3) {
-      await configureAgentAuth(api, agents);
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      const result = await configureAdditionalTools(api);
+      if (result === BACK) {
+        step = 2;
+        continue;
+      }
+      tools = result;
+      step = 4;
       continue;
     }
 
     if (step === 4) {
-      githubRepos = await configureGithub(api, state);
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
-      continue;
-    }
-
-    if (step === 5) {
-      tools = await configureAdditionalTools(api);
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
-      continue;
-    }
-
-    if (step === 6) {
-      sshKey = await chooseSshKey();
-      const navigation = await chooseNavigation(true);
-      step += navigation === "next" ? 1 : navigation === "back" ? -1 : 0;
+      const result = await chooseSshKey();
+      if (result === BACK) {
+        step = 3;
+        continue;
+      }
+      sshKey = result;
+      step = 5;
       continue;
     }
 
@@ -486,27 +485,32 @@ export async function runOnboarding(
       githubRepos,
     };
     const reviewChoice = await review(provisionInput);
-    if (reviewChoice === "back") {
-      step = 6;
+    if (reviewChoice === BACK) {
+      step = 4;
       continue;
     }
     try {
       await api.post("/api/provision", provisionInput);
       container = await waitForReady(api);
-      step = 8;
     } catch (error) {
       if (error instanceof ApiError && (error.status === 400 || error.status === 503)) {
         console.error(`\n${error.message}`);
-        if (await confirm({ message: "Review optional tools and try again?", default: true })) {
-          tools = await configureAdditionalTools(api);
+        const reviewTools = await promptWithBack(confirm, {
+          message: "Review optional tools and try again?",
+          default: true,
+        });
+        if (reviewTools === BACK) {
+          step = 3;
+          continue;
+        }
+        if (reviewTools) {
+          step = 3;
           continue;
         }
       }
       throw error;
     }
   }
-
-  if (!container) throw new Error("The setup wizard ended before provisioning completed.");
 
   let sshShortcutConfigured = false;
   if (container.sshCommand && sshKey.privatePath) {

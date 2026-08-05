@@ -136,10 +136,3 @@ export async function loadOrAuthenticate(baseUrl: string, forceClear: boolean): 
   if (api.sessionCookie) await saveSession(baseUrl, api.sessionCookie);
   return { api, state };
 }
-
-export async function reauthenticate(api: ApiClient): Promise<SessionState> {
-  await browserAuthentication(api);
-  const state = await api.get<SessionState>("/api/cli/session");
-  if (api.sessionCookie) await saveSession(api.baseUrl, api.sessionCookie);
-  return state;
-}
