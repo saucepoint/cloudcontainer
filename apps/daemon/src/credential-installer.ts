@@ -313,12 +313,15 @@ export class CredentialInstaller {
     return creds;
   }
 
-  /** Create a persistent SSH signing key and make Git sign every commit. */
+  /** Create and register a persistent SSH signing key, then sign every commit. */
   private async configureGitSigning(name: string): Promise<void> {
     const publicKeyPath = `${GIT_SIGNING_KEY_PATH}.pub`;
     const script = [
       "install -d -m 700 /home/dev/.ssh",
       `if test ! -f ${GIT_SIGNING_KEY_PATH}; then rm -f ${publicKeyPath}; ssh-keygen -q -t ed25519 -N '' -C 'workbench commit signing' -f ${GIT_SIGNING_KEY_PATH}; fi`,
+      `if test ! -f ${publicKeyPath}; then ssh-keygen -y -f ${GIT_SIGNING_KEY_PATH} > ${publicKeyPath}; fi`,
+      `public_key="$(cut -d ' ' -f 1-2 ${publicKeyPath})"`,
+      `if ! gh api --paginate user/ssh_signing_keys --jq '.[].key' | cut -d ' ' -f 1-2 | grep -Fqx "$public_key"; then gh api --method POST user/ssh_signing_keys -f title='usebench.dev instance' -F key=@${publicKeyPath} --silent; fi`,
       `git config --global gpg.format ssh`,
       `git config --global user.signingkey ${GIT_SIGNING_KEY_PATH}`,
       "git config --global commit.gpgsign true",

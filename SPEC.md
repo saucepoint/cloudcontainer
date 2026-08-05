@@ -487,22 +487,23 @@ the upstream flow changes. In-shell login remains the recovery path.
   OAuth or destructive reauthorization action. A working token remains stored
   unless a replacement callback succeeds. The live App must be public and
   installable on any account, request OAuth during installation, use expiring
-  user tokens, and request only read-only Contents permission (plus implicit
-  Metadata). Organization approval, permission-change approval, and an active
-  SAML session remain GitHub-side prerequisites where applicable.
+  user tokens, and request read-only Contents permission (plus implicit
+  Metadata) and user-level SSH signing-key write permission. Organization
+  approval, permission-change approval, and an active SAML session remain
+  GitHub-side prerequisites where applicable.
 - GitHub user-to-server access and refresh tokens are stored encrypted. The App
   installation itself is not an authentication credential. The control-plane
   reconciler refreshes expiring user access; the refresh token never goes to a
   host. The short-lived user access token configures `gh`; Git reuses it through
   `gh auth git-credential`, without a second `.git-credentials` token copy.
   When GitHub is configured, the daemon creates a persistent SSH signing key at
-  `~/.ssh/workbench_github_signing_key` and sets `commit.gpgsign=true` with SSH signing
-  as the global Git default. The public key can be uploaded to GitHub as a
-  signing key for **Verified** badges; the control plane does not upload it or
-  grant key-management permissions. Onboarding searches only repositories
-  shared by the user and an App installation, revalidates selected names at
-  submission, and clones at most 20 during provision or rebuild. Ungranted
-  private repositories remain invisible and fail revalidation.
+  `~/.ssh/workbench_github_signing_key`, idempotently registers its public half
+  with the connected GitHub account, and sets `commit.gpgsign=true` with SSH
+  signing as the global Git default. The private key never leaves the instance.
+  Onboarding searches only repositories shared by the user and an App
+  installation, revalidates selected names at submission, and clones at most 20
+  during provision or rebuild. Ungranted private repositories remain invisible
+  and fail revalidation.
 
 ### Storage and delivery
 
@@ -864,7 +865,9 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. Google and GitHub sign-in callbacks in the production provider apps;
+1. Google and GitHub sign-in callbacks in the production provider apps,
+   including an instance-pushed commit verified with its registered SSH signing
+   key;
 2. passkey-first registration, subsequent passkey sign-in, and backup passkey attachment;
 3. World ID verification, invite verification, attempted nullifier/invite reuse,
    and the all-optional-onboarding-fields-skipped path;

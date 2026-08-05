@@ -384,6 +384,14 @@ endpoint only after the certificate is trusted and installed.
 The release identity is the clean checkout's Git commit. Preview selection and
 sequencing without host changes:
 
+If the daemon release starts using a new GitHub API permission, update the
+production GitHub App first and have existing installations approve the change.
+In particular, commit-signing-key registration requires the user-level **SSH
+signing keys: read and write** permission. Reconnect a staging account and
+confirm its user token can list and create signing keys before rolling that
+daemon release; otherwise GitHub credential refresh jobs will fail in the
+instances.
+
     npm run hostctl -- deploy --all --dry-run
     npm run hostctl -- deploy --type budget --dry-run
     npm run hostctl -- deploy --host HOST_ID --dry-run

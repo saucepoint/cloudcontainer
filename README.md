@@ -263,11 +263,12 @@ Configure the first callback URL as:
 
 Enable **Request user authorization (OAuth) during installation** and expiring
 user-to-server tokens. Grant **Contents: read-only** repository permission
-(Metadata read access is implicit), make the App installable on **Any account**,
-and do not request broader permissions. The single onboarding action opens the
-App installation chooser, where a user selects a personal or organization
-account and grants all or specific repositories. GitHub then continues into
-user authorization and returns to the callback.
+(Metadata read access is implicit) and **SSH signing keys: read and write** user
+permission, make the App installable on **Any account**, and do not request
+other permissions. The single onboarding action opens the App installation
+chooser, where a user selects a personal or organization account and grants all
+or specific repositories. GitHub then continues into user authorization and
+returns to the callback.
 
 Installation and authorization remain distinct GitHub grants even though the
 product presents one browser journey. The installation grant is not a `gh`
@@ -278,19 +279,21 @@ and HTTPS Git access.
 Organization installations may require owner approval. If the organization
 uses SAML SSO, the user must start an active SAML session before using
 **Connect or update GitHub** again. When permissions change, owners of existing
-installations must approve the new permissions in GitHub. Before release, use
-the single action on a test account, grant one private repository, verify that
-search and `gh repo clone` can access it, and verify that an ungranted private
-repository is rejected.
+installations must approve the new permissions in GitHub. Add or update the
+**SSH signing keys** user permission and obtain that approval before deploying
+a daemon release that registers keys. Before release, use the single action on
+a test account, grant one private repository, verify that search and `gh repo
+clone` can access it, verify that a commit pushed from the instance is
+**Verified**, and verify that an ungranted private repository is rejected.
 
 The control plane refreshes access tokens; refresh tokens never leave it.
 Provisioning writes the current short-lived token once to `gh` configuration
 and runs `gh auth setup-git`, so Git reuses `gh auth git-credential` rather than
 storing a duplicate token in `.git-credentials`. It also creates a persistent
-SSH signing key at `~/.ssh/workbench_github_signing_key` and enables Git commit
-signing by default. To have GitHub show the resulting commits as **Verified**,
-upload `~/.ssh/workbench_github_signing_key.pub` to the account's GitHub signing
-keys.
+SSH signing key at `~/.ssh/workbench_github_signing_key`, idempotently registers
+the public half with the connected GitHub account, and enables Git commit
+signing by default. GitHub can therefore verify commits pushed from the
+instance without a separate manual key upload.
 Access remains limited to the intersection of the user grant and each App
 installation.
 

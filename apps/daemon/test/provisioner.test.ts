@@ -264,7 +264,7 @@ describe("provision command construction", () => {
     for (const command of commands) expect(command).not.toContain("CANARY-");
   });
 
-  it("configures Git to sign commits by default when GitHub is connected", async () => {
+  it("registers an SSH signing key and signs commits when GitHub is connected", async () => {
     const calls: Call[] = [];
     const sealed = sealJson(
       { githubToken: "CANARY-gh-access", githubLogin: "octocat" },
@@ -277,6 +277,12 @@ describe("provision command construction", () => {
     expect(commands.some((command) =>
       command.includes("ssh-keygen -q -t ed25519") &&
       command.includes("workbench_github_signing_key"),
+    )).toBe(true);
+    expect(commands.some((command) =>
+      command.includes("gh api --paginate user/ssh_signing_keys") &&
+      command.includes("grep -Fqx") &&
+      command.includes("gh api --method POST user/ssh_signing_keys") &&
+      command.includes("-F key=@/home/dev/.ssh/workbench_github_signing_key.pub"),
     )).toBe(true);
     expect(commands.some((command) => command.includes("git config --global gpg.format ssh"))).toBe(true);
     expect(commands.some((command) => command.includes("git config --global user.signingkey /home/dev/.ssh/workbench_github_signing_key"))).toBe(true);
