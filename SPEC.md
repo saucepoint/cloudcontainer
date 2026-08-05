@@ -495,10 +495,14 @@ the upstream flow changes. In-shell login remains the recovery path.
   reconciler refreshes expiring user access; the refresh token never goes to a
   host. The short-lived user access token configures `gh`; Git reuses it through
   `gh auth git-credential`, without a second `.git-credentials` token copy.
-  Onboarding searches only repositories shared by the user and an App
-  installation, revalidates selected names at submission, and clones at most 20
-  during provision or rebuild. Ungranted private repositories remain invisible
-  and fail revalidation.
+  When GitHub is configured, the daemon creates a persistent SSH signing key at
+  `~/.ssh/workbench_github_signing_key` and sets `commit.gpgsign=true` with SSH signing
+  as the global Git default. The public key can be uploaded to GitHub as a
+  signing key for **Verified** badges; the control plane does not upload it or
+  grant key-management permissions. Onboarding searches only repositories
+  shared by the user and an App installation, revalidates selected names at
+  submission, and clones at most 20 during provision or rebuild. Ungranted
+  private repositories remain invisible and fail revalidation.
 
 ### Storage and delivery
 

@@ -286,8 +286,13 @@ repository is rejected.
 The control plane refreshes access tokens; refresh tokens never leave it.
 Provisioning writes the current short-lived token once to `gh` configuration
 and runs `gh auth setup-git`, so Git reuses `gh auth git-credential` rather than
-storing a duplicate token in `.git-credentials`. Access remains limited to the
-intersection of the user grant and each App installation.
+storing a duplicate token in `.git-credentials`. It also creates a persistent
+SSH signing key at `~/.ssh/workbench_github_signing_key` and enables Git commit
+signing by default. To have GitHub show the resulting commits as **Verified**,
+upload `~/.ssh/workbench_github_signing_key.pub` to the account's GitHub signing
+keys.
+Access remains limited to the intersection of the user grant and each App
+installation.
 
 ## Repeat deployment
 

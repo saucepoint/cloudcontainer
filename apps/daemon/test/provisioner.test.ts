@@ -264,6 +264,25 @@ describe("provision command construction", () => {
     for (const command of commands) expect(command).not.toContain("CANARY-");
   });
 
+  it("configures Git to sign commits by default when GitHub is connected", async () => {
+    const calls: Call[] = [];
+    const sealed = sealJson(
+      { githubToken: "CANARY-gh-access", githubLogin: "octocat" },
+      hostKeys.publicKey,
+    );
+    const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());
+    await provisioner.run(provisionRequest(sealed));
+
+    const commands = calls.map((call) => call.args.join(" "));
+    expect(commands.some((command) =>
+      command.includes("ssh-keygen -q -t ed25519") &&
+      command.includes("workbench_github_signing_key"),
+    )).toBe(true);
+    expect(commands.some((command) => command.includes("git config --global gpg.format ssh"))).toBe(true);
+    expect(commands.some((command) => command.includes("git config --global user.signingkey /home/dev/.ssh/workbench_github_signing_key"))).toBe(true);
+    expect(commands.some((command) => command.includes("git config --global commit.gpgsign true"))).toBe(true);
+  });
+
   it("rejects repository selections that would clone into the same directory", async () => {
     const calls: Call[] = [];
     const request = provisionRequest();
