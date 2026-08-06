@@ -363,7 +363,11 @@ async function connectGithub(api: ApiClient, baseUrl: string): Promise<void> {
   throw new Error("GitHub authorization did not finish before the sign-in window expired.");
 }
 
-async function chooseGithubRepositories(api: ApiClient, initial: string[] = []): Promise<string[]> {
+async function chooseGithubRepositories(
+  api: ApiClient,
+  initial: string[] = [],
+  onSelectionChanged?: (repositories: string[]) => Promise<void>,
+): Promise<string[]> {
   const selected = new Set(initial);
   if (selected.size) console.log(`Restored ${selected.size} saved GitHub ${selected.size === 1 ? "repository" : "repositories"}.`);
   while (selected.size < GITHUB_REPOSITORY_LIMIT) {
@@ -389,19 +393,34 @@ async function chooseGithubRepositories(api: ApiClient, initial: string[] = []):
       ...(repository.description ? { description: repository.description } : {}),
       checked: selected.has(repository.fullName),
     }));
+    const visibleSelected = repositories.filter((repository) => selected.has(repository.fullName)).length;
+    const retainedSelected = selected.size - visibleSelected;
     const picked = await checkbox<string>({
       message: "Choose repositories to clone",
       choices,
       required: false,
-      validate: (values) => values.length <= GITHUB_REPOSITORY_LIMIT - selected.size
-        || `Choose at most ${GITHUB_REPOSITORY_LIMIT - selected.size} more.`,
+      validate: (values) => values.length <= GITHUB_REPOSITORY_LIMIT - retainedSelected
+        || `Choose at most ${GITHUB_REPOSITORY_LIMIT - retainedSelected} more.`,
     });
+    for (const repository of repositories) selected.delete(repository.fullName);
     for (const repository of picked) selected.add(repository);
+    if (onSelectionChanged) {
+      try {
+        await onSelectionChanged([...selected]);
+      } catch {
+        console.warn("Could not save the latest repository selection; it will retry at the next setup step.");
+      }
+    }
   }
   return [...selected];
 }
 
-async function configureGithub(api: ApiClient, state: SessionState, initial: string[] = []): Promise<string[]> {
+async function configureGithub(
+  api: ApiClient,
+  state: SessionState,
+  initial: string[] = [],
+  onSelectionChanged?: (repositories: string[]) => Promise<void>,
+): Promise<string[]> {
   if (!state.githubAvailable) {
     console.log("GitHub repository setup is unavailable on this deployment; skipping it.");
     return initial;
@@ -410,7 +429,7 @@ async function configureGithub(api: ApiClient, state: SessionState, initial: str
   if (!alreadyConnected && await confirm({ message: "Connect GitHub for private repository access?", default: true })) {
     await connectGithub(api, api.baseUrl);
   }
-  return chooseGithubRepositories(api, initial);
+  return chooseGithubRepositories(api, initial, onSelectionChanged);
 }
 
 async function review(inputValue: ProvisionInput): Promise<void> {
@@ -501,7 +520,14 @@ export async function runOnboarding(
     githubRepos,
     sshKeyChoice: draft?.sshKeyChoice ?? "none",
   });
-  if (needsSetupStep(draft, "github")) githubRepos = await configureGithub(api, state, githubRepos);
+  if (needsSetupStep(draft, "github")) {
+    githubRepos = await configureGithub(api, state, githubRepos, (repositories) => saveSetupDraft(api, {
+      step: "github",
+      agents,
+      githubRepos: repositories,
+      sshKeyChoice: draft?.sshKeyChoice ?? "none",
+    }));
+  }
 
   await saveSetupDraft(api, {
     step: "tools",

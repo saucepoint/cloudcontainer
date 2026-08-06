@@ -260,6 +260,7 @@ type GithubRepository = {
   fullName: string;
   private: boolean;
   archived: boolean;
+  saved?: boolean;
   description?: string | null;
 };
 
@@ -299,7 +300,9 @@ function renderGithubRepositories(repositories: GithubRepository[]): void {
     input.disabled =
       !input.checked && selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
     name.textContent = repository.fullName;
-    metadata.textContent = `${repository.private ? "private" : "public"}${repository.archived ? " · archived" : ""}`;
+    metadata.textContent = repository.saved
+      ? "saved selection"
+      : `${repository.private ? "private" : "public"}${repository.archived ? " · archived" : ""}`;
     copy.append(name, metadata);
     if (repository.description) {
       const description = document.createElement("small");
@@ -359,6 +362,7 @@ githubRepoList?.addEventListener("change", (event: Event) => {
   for (const input of githubRepoList.querySelectorAll<HTMLInputElement>("input:not(:checked)")) {
     input.disabled = selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
   }
+  scheduleDraftSave();
 });
 
 let githubSearchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -419,6 +423,16 @@ function restoreDraft(draft: SetupDraft): void {
     input.checked = selectedAgents.has(input.value);
   }
   for (const repository of draft.githubRepos) selectedGithubRepositories.add(repository);
+  for (const repository of draft.githubRepos) {
+    if (!knownGithubRepositories.has(repository)) {
+      knownGithubRepositories.set(repository, {
+        fullName: repository,
+        private: false,
+        archived: false,
+        saved: true,
+      });
+    }
+  }
 
   const status = element<HTMLElement>("setup-draft-status");
   const message = element<HTMLElement>("setup-draft-message");
