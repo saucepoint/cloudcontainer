@@ -64,10 +64,9 @@ describe("landing page call to action", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain("<title>usebench.dev</title>");
     expect(html).toContain('work<span class="logo-bench">bench</span>');
-    expect(html).toContain("A cloud terminal");
+    expect(html).toContain('Your <i>free</i> cloud terminal');
     expect(html).toContain("an always-on container, accessed from any terminal client on any device");
     expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
-    expect(html).toContain("free for each unique person");
     expect(html).toContain('id="landing-terminal-root"');
     expect(html).toContain("ssh workbench");
     expect(html).toContain("Welcome to Debian GNU/Linux 13 (trixie)");

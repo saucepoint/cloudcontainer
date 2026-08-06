@@ -58,10 +58,8 @@ const LandingTerminalFallback: FC = () => (
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
     <div class="landing-hero">
-      <h1 class="landing-title">A cloud terminal <br/>for agents</h1>
+      <h1 class="landing-title">Your <i>free</i> cloud terminal</h1>
       <p class="lead">
-        free for each unique person
-        <br />
         an always-on container, accessed from any terminal client on any device
         <br />
         <i>your workflows, your environment, your terminal</i>
@@ -723,7 +721,7 @@ export const OnboardingPage: FC<{
           <p id="ssh-key-help" class="muted">
             Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
             of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
-            without <code>.pub</code>). Until a key exists the workbench accepts no logins.
+            without <code>.pub</code>).
           </p>
         </details>
         <details>
