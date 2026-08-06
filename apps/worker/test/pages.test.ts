@@ -421,6 +421,21 @@ describe("onboarding wizard order", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
     expect(html).toContain("Set up a workbench.");
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
+    for (const button of [
+      "clear-agent-credentials",
+      "clear-agent-draft",
+      "clear-github-credentials",
+      "clear-github-draft",
+      "clear-tools-credentials",
+      "clear-ssh-draft",
+    ]) {
+      expect(html).toContain(`id="${button}"`);
+    }
+    expect(onboardingClient).toContain("`/api/credentials/${category}`");
+    expect(onboardingClient).toContain("`/api/setup-draft/${category}`");
+    for (const category of ["agents", "github", "tools", "ssh"]) {
+      expect(onboardingClient).toContain(`"${category}"`);
+    }
   });
 });
 

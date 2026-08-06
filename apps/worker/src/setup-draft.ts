@@ -18,6 +18,9 @@ export const SETUP_DRAFT_STEPS = [
 ] as const;
 export type SetupDraftStep = (typeof SETUP_DRAFT_STEPS)[number];
 
+export const SETUP_DRAFT_CATEGORIES = ["agents", "github", "ssh"] as const;
+export type SetupDraftCategory = (typeof SETUP_DRAFT_CATEGORIES)[number];
+
 export const SETUP_SSH_CHOICES = ["none", "default", "dedicated", "manual"] as const;
 export type SetupSshChoice = (typeof SETUP_SSH_CHOICES)[number];
 
@@ -156,4 +159,33 @@ export async function putSetupDraft(
 
 export async function deleteSetupDraft(env: Bindings, userId: string): Promise<void> {
   await env.DB.prepare("DELETE FROM setup_drafts WHERE user_id = ?").bind(userId).run();
+}
+
+/** Clear one non-secret part of a saved setup draft without touching the rest. */
+export async function clearSetupDraftCategory(
+  env: Bindings,
+  userId: string,
+  category: SetupDraftCategory,
+  now = Date.now(),
+): Promise<SetupDraft | null> {
+  const draft = await getSetupDraft(env, userId, now);
+  if (!draft) return null;
+
+  const next = {
+    step: draft.step,
+    agents: category === "agents" ? [] : draft.agents,
+    githubRepos: category === "github" ? [] : draft.githubRepos,
+    sshKeyChoice: category === "ssh" ? "none" as const : draft.sshKeyChoice,
+  };
+  if (next.agents.length === 0 && next.githubRepos.length === 0 && next.sshKeyChoice === "none") {
+    await deleteSetupDraft(env, userId);
+    return null;
+  }
+
+  await env.DB.prepare(
+    "UPDATE setup_drafts SET draft = ?, updated_at = ? WHERE user_id = ?",
+  )
+    .bind(JSON.stringify(next), now, userId)
+    .run();
+  return { ...next, updatedAt: now, expiresAt: draft.expiresAt };
 }
