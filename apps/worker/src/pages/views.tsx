@@ -60,7 +60,9 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
     <div class="landing-hero">
       <h1 class="landing-title">Your <i>free</i> cloud terminal</h1>
       <p class="lead">
-        an always-on container, accessed from any terminal client on any device
+        an always-on container
+        <br />
+        access from any terminal client, on any device
         <br />
         <i>your workflows, your environment, your terminal</i>
       </p>
@@ -687,10 +689,12 @@ export const OnboardingPage: FC<{
       {githubAvailable ? (
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
-          <p class="muted">
-            Connect GitHub and choose personal or organization repositories. usebench.dev uses the
-            resulting short-lived access to search, clone into <code>~/repos</code>, and sign in <code>gh</code>.
-          </p>
+          <ul class="github-points">
+            <li>clone projects to <code>~/repos</code></li>
+            <li>authenticate <code>gh</code> CLI</li>
+            <li>set ssh signing key for verified commits</li>
+            <li>set git identity</li>
+          </ul>
           <div class="row">
             <a
               id="github-connect"
@@ -699,12 +703,11 @@ export const OnboardingPage: FC<{
               target="_blank"
               rel="noopener noreferrer"
             >
-              <GitHubLogoIcon />Connect or update GitHub
+              <GitHubLogoIcon />Connect GitHub
             </a>
+            <span id="github-connected" class="github-connected" role="status" hidden></span>
           </div>
-          <p id="github-status" class="muted" role="status" aria-live="polite">
-            Search by repository name after connecting, or paste a public GitHub URL. Private repositories require a GitHub connection.
-          </p>
+          <p id="github-status" class="muted" role="status" aria-live="polite"></p>
           <label for="github-repo-search">Search or paste a repository URL</label>
           <input id="github-repo-search" type="search" placeholder="repository name, owner/repository, or GitHub URL" maxLength={256} autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>

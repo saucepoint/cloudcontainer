@@ -201,6 +201,11 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .key-fingerprint { font-family: var(--mono); font-size: 0.8rem; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; max-width: 75%; }
 .check { list-style: none; padding: 0; margin: 0.25rem 0 0; }
+.github-points { list-style: none; padding: 0; margin: 0.25rem 0 0; color: var(--muted);
+  font-size: 0.86rem; }
+.github-points li { position: relative; padding: 0.2rem 0 0.2rem 1.1rem; }
+.github-points li::before { content: ""; position: absolute; left: 0.2rem; top: 0.66rem;
+  width: 0.34rem; height: 0.34rem; border-radius: 50%; background: var(--line-strong); }
 .check li { min-height: 2.2rem; padding: 0.38rem 0; display: grid;
   grid-template-columns: 0.34rem minmax(0, 1fr) auto; column-gap: 0.75rem;
   align-items: start; font-size: 0.9rem; }
@@ -231,6 +236,10 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .onboarding-api-keys { margin-top: 1.35rem; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
 .row.flush, form.flush { margin: 0; }
+.github-connected { display: inline-flex; align-items: center; gap: 0.45rem; align-self: center;
+  color: var(--muted); font-size: 0.86rem; }
+.github-connected::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: #28643b; }
 .create-workbench-btn { margin: 1.5rem 0 0; padding: 0.7rem 1.35rem; font-size: 1.02rem; }
 .notice { margin: 0.75rem 0; padding: 0.65rem 0 0.65rem 0.8rem; background: transparent;
   border-left: 2px solid var(--line-strong); border-radius: 0; }
@@ -314,7 +323,12 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .terminal-codex-footer { margin-top: auto; padding-top: 0.5rem; color: #8b949e; font-size: 0.68em; }
 .agent-logo-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; align-items: center;
   margin: -1rem 0 2.5rem; padding: 0.35rem 0; }
-.agent-logo-item { display: grid; min-height: 3.5rem; place-items: center; }
+.agent-logo-item { display: grid; min-height: 3.5rem; place-items: center; text-decoration: none;
+  border-radius: var(--radius); transition: background 0.15s ease, transform 0.15s ease; }
+.agent-logo-item:hover, .agent-logo-item:focus-visible { background: var(--surface-strong);
+  transform: translateY(-2px); }
+.agent-logo-item .agent-logo { transition: opacity 0.15s ease; }
+.agent-logo-item:hover .agent-logo { opacity: 0.85; }
 .landing-signin-content { width: 100%; }
 .auth-provider-list { display: grid; width: min(100%, 25rem); gap: 0.55rem; margin: 1rem auto 0;
   padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); }
@@ -371,6 +385,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .account-link.has-notifications::after { top: -0.2rem; right: -0.3rem; }
   .command-row, .device-flow-code { grid-template-columns: 1fr; }
   .command-row .btn, .device-flow-code .btn { justify-self: start; }
+  .github-connected { flex-basis: 100%; align-self: flex-start; }
   .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
   .auth-code-row .btn { justify-self: start; }
   .terminal-titlebar { grid-template-columns: 4rem minmax(0, 1fr) 4rem; padding: 0 0.65rem; }

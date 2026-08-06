@@ -321,7 +321,7 @@ async function loadGithubRepositories(query: string): Promise<void> {
   const status = requiredElement<HTMLElement>("github-status");
   if (!query.trim()) {
     renderGithubRepositories([]);
-    status.textContent = "Search by name after connecting, or paste a public GitHub URL.";
+    status.textContent = "";
     return;
   }
   const spinner = document.createElement("span");
@@ -411,9 +411,10 @@ function restoreCredentialPresence(presence: CredentialsPresence): void {
     const status = element<HTMLElement>(`${provider}-token-status`);
     if (status) status.hidden = !present;
   }
-  const githubStatus = element<HTMLElement>("github-status");
-  if (githubStatus && presence.github) {
-    githubStatus.textContent = `GitHub connected as ${presence.github}. Search by repository name or paste a public GitHub URL.`;
+  const githubConnected = element<HTMLElement>("github-connected");
+  if (githubConnected && presence.github) {
+    githubConnected.textContent = `Connected as ${presence.github}`;
+    githubConnected.hidden = false;
   }
 }
 

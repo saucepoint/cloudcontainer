@@ -65,7 +65,9 @@ describe("landing page call to action", () => {
     expect(html).toContain("<title>usebench.dev</title>");
     expect(html).toContain('work<span class="logo-bench">bench</span>');
     expect(html).toContain('Your <i>free</i> cloud terminal');
-    expect(html).toContain("an always-on container, accessed from any terminal client on any device");
+    expect(html).toContain("an always-on container");
+    expect(html).toContain("access from any terminal client, on any device");
+    expect(html).not.toContain("accessed from any terminal client on any device");
     expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
     expect(html).toContain('id="landing-terminal-root"');
     expect(html).toContain("ssh workbench");
@@ -88,6 +90,10 @@ describe("landing page call to action", () => {
     expect(html).toContain('class="agent-logo agent-logo-claude"');
     expect(html).toContain('class="agent-logo agent-logo-codex"');
     expect(html).toContain('class="agent-logo agent-logo-opencode"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://pi.dev" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://claude.com/claude-code" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://openai.com/codex" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://opencode.ai" target="_blank"');
     expect(html).toContain('id="codex-gradient"');
     expect(html).toContain('stop-color="#B1A7FF"');
     expect(html).toContain('stop-color="#3941FF"');
@@ -164,7 +170,8 @@ describe("sign-in button icons", () => {
       html.indexOf('id="github-connect"') + 2000,
     );
     expect(connect).toContain('viewBox="0 0 15 15"');
-    expect(connect).toContain("Connect or update GitHub");
+    expect(connect).toContain("Connect GitHub");
+    expect(connect).toContain('id="github-connected"');
     expect(connect).toContain('target="_blank"');
     expect(connect).toContain('rel="noopener noreferrer"');
     expect(html).toContain(".btn svg, .link-btn svg { width: 1em; height: 1em;");
@@ -427,7 +434,8 @@ describe("onboarding wizard order", () => {
 describe("GitHub repository onboarding", () => {
   it("offers one combined GitHub connection action and repository selection", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect or update GitHub");
+    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).not.toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).not.toContain("Reauthorize GitHub");
     expect(enabled).not.toContain("/auth/github/install");
@@ -436,17 +444,23 @@ describe("GitHub repository onboarding", () => {
     expect(onboardingClient).toContain("githubRequired");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
-    expect(enabled).toContain("paste a public GitHub URL");
+    expect(enabled).not.toContain("Search by repository name after connecting");
+    expect(enabled).not.toContain("Private repositories require a GitHub connection");
     expect(enabled).toContain('id="github-repo-search"');
+    expect(enabled).toContain("authenticate <code>gh</code> CLI");
+    expect(enabled).toContain("set ssh signing key for verified commits");
+    expect(enabled).toContain("set git identity");
+    expect(enabled).not.toContain("Connect GitHub and choose personal or organization repositories");
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
-    expect(disabled).not.toContain("Connect or update GitHub");
+    expect(disabled).not.toContain("Connect GitHub");
     expect(disabled).not.toContain('id="github-repos"');
   });
 
   it("keeps repository selection visible when GitHub is configured", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect or update GitHub");
+    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).not.toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).toContain('id="github-repo-search"');
     expect(enabled).toContain('id="github-repos"');

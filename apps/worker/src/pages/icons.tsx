@@ -1,4 +1,4 @@
-import { AGENT_LABELS, type Agent } from "@workbench/contract";
+import { AGENT_HOMES, AGENT_LABELS, type Agent } from "@workbench/contract";
 import type { FC } from "hono/jsx";
 
 /**
@@ -82,7 +82,13 @@ export const AgentLogo: FC<{ agent: Agent }> = ({ agent }) => {
 };
 
 export const AgentLogoItem: FC<{ agent: Agent }> = ({ agent }) => (
-  <span class="agent-logo-item" role="img" aria-label={`${AGENT_LABELS[agent]} logo`}>
+  <a
+    class="agent-logo-item"
+    href={AGENT_HOMES[agent]}
+    target="_blank"
+    rel="noreferrer"
+    aria-label={`${AGENT_LABELS[agent]} — visit the ${AGENT_LABELS[agent]} home page`}
+  >
     <AgentLogo agent={agent} />
-  </span>
+  </a>
 );
