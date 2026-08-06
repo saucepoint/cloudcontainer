@@ -10,6 +10,8 @@ import {
   requireUser,
 } from "./auth.js";
 import {
+  CREDENTIAL_CATEGORIES,
+  deleteStoredCredentialCategory,
   deleteStoredCredentials,
   upsertCredentials,
   validateCloudflareToken,
@@ -44,6 +46,8 @@ import {
 } from "./notifications.js";
 import { allowedUserOps } from "./state.js";
 import {
+  SETUP_DRAFT_CATEGORIES,
+  clearSetupDraftCategory,
   deleteSetupDraft,
   getSetupDraft,
   normalizeSetupDraftInput,
@@ -66,6 +70,14 @@ interface DeveloperTokens {
   cloudflareToken?: string;
   supabaseToken?: string;
   convexToken?: string;
+}
+
+function isCredentialCategory(value: string): value is (typeof CREDENTIAL_CATEGORIES)[number] {
+  return (CREDENTIAL_CATEGORIES as readonly string[]).includes(value);
+}
+
+function isSetupDraftCategory(value: string): value is (typeof SETUP_DRAFT_CATEGORIES)[number] {
+  return (SETUP_DRAFT_CATEGORIES as readonly string[]).includes(value);
 }
 
 async function validateDeveloperTokens(
@@ -134,6 +146,12 @@ export const apiRoutes = new Hono<AppContext>()
   .delete("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
     await deleteSetupDraft(c.env, c.get("user").id);
     return c.json({ ok: true });
+  })
+  .delete("/api/setup-draft/:category", requireUser, requireCredentialSetup, async (c) => {
+    const category = c.req.param("category");
+    if (!isSetupDraftCategory(category)) return c.json({ error: "unknown setup draft category" }, 400);
+    const draft = await clearSetupDraftCategory(c.env, c.get("user").id, category);
+    return c.json({ ok: true, draft });
   })
 
   // ------------------------------------------------------------------ provision
@@ -363,6 +381,12 @@ export const apiRoutes = new Hono<AppContext>()
     return c.json(await credentialsView(c.env, c.get("user").id));
   })
   .delete("/api/credentials", requireUser, deleteCredentials)
+  .delete("/api/credentials/:category", requireUser, requireCredentialSetup, async (c) => {
+    const category = c.req.param("category");
+    if (!isCredentialCategory(category)) return c.json({ error: "unknown credential category" }, 400);
+    await deleteStoredCredentialCategory(c.env, c.get("user").id, category);
+    return c.json({ ok: true });
+  })
   // Keep a POST form for clients that do not issue DELETE requests.
   .post("/api/credentials/delete", requireUser, deleteCredentials)
   .post("/api/credentials", requireUser, requireCredentialSetup, async (c) => {

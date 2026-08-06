@@ -120,6 +120,40 @@ describe("setup drafts", () => {
     expect(await response.json()).toEqual({ draft: null });
     expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
   });
+
+  it("clears only the requested setup draft category", async () => {
+    const { env, headers } = await setup();
+    await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          step: "review",
+          agents: ["claude"],
+          githubRepos: ["octocat/public"],
+          sshKeyChoice: "manual",
+        }),
+      },
+      env,
+    );
+
+    const github = await app().request("/api/setup-draft/github", { method: "DELETE", headers }, env);
+    expect(github.status).toBe(200);
+    expect(await github.json()).toMatchObject({
+      draft: { agents: ["claude"], githubRepos: [], sshKeyChoice: "manual" },
+    });
+
+    const agents = await app().request("/api/setup-draft/agents", { method: "DELETE", headers }, env);
+    expect(agents.status).toBe(200);
+    expect(await agents.json()).toMatchObject({
+      draft: { agents: [], githubRepos: [], sshKeyChoice: "manual" },
+    });
+
+    const ssh = await app().request("/api/setup-draft/ssh", { method: "DELETE", headers }, env);
+    expect(ssh.status).toBe(200);
+    expect(await ssh.json()).toEqual({ ok: true, draft: null });
+  });
 });
 
 describe("request limits", () => {
@@ -837,6 +871,59 @@ describe("credentials endpoint", () => {
       id_token: null,
       provider_id: "google",
     });
+  });
+
+  it("clears credentials by onboarding category without touching other categories", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    await upsertCredentials(env, user.id, {
+      llmKeys: { openai: "CANARY-agent", github_copilot: "CANARY-copilot" },
+      cloudflareToken: "CANARY-cloudflare",
+      supabaseToken: "CANARY-supabase",
+      convexToken: "CANARY-convex",
+      wranglerOauth: '{"oauth_token":"CANARY-wrangler"}',
+    });
+    await env.DB.prepare(
+      `UPDATE credentials_encrypted SET
+         github_token = ?, github_refresh_token = ?, github_expires_at = ?, github_login = ?
+       WHERE user_id = ?`,
+    ).bind(
+      encryptJsonAtRest("CANARY-github", env.CREDENTIAL_MASTER_KEY),
+      encryptJsonAtRest("CANARY-refresh", env.CREDENTIAL_MASTER_KEY),
+      Date.now() + 60_000,
+      "octocat",
+      user.id,
+    ).run();
+
+    expect((await app().request("/api/credentials/agents", { method: "DELETE", headers }, env)).status).toBe(200);
+    let presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({
+      llm: {},
+      github: "octocat",
+      cloudflare: true,
+      supabase: true,
+      convex: true,
+      wrangler: true,
+    });
+
+    expect((await app().request("/api/credentials/github", { method: "DELETE", headers }, env)).status).toBe(200);
+    presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({ github: null, cloudflare: true, supabase: true, convex: true, wrangler: true });
+
+    expect((await app().request("/api/credentials/tools", { method: "DELETE", headers }, env)).status).toBe(200);
+    presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({
+      llm: {},
+      github: null,
+      cloudflare: false,
+      supabase: false,
+      convex: false,
+      wrangler: false,
+    });
+
+    const unknown = await app().request("/api/credentials/unknown", { method: "DELETE", headers }, env);
+    expect(unknown.status).toBe(400);
   });
 
   it("rejects unknown providers, non-text values, oversized secrets, and pasted OAuth-only credentials", async () => {

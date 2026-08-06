@@ -15,6 +15,7 @@ import {
   isAuthFlowActive,
   wranglerOauthFlow,
 } from "./auth-flows.js";
+import { askConfirmation } from "./confirmation.js";
 import { errorMessage, HttpError, requestJson } from "./http.js";
 
 const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
@@ -29,6 +30,9 @@ type SetupDraft = {
   updatedAt: number;
   expiresAt: number;
 };
+
+type DraftCategory = "agents" | "github" | "ssh";
+type CredentialCategory = "agents" | "github" | "tools";
 
 type CredentialsPresence = {
   llm: Record<string, boolean>;
@@ -65,6 +69,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const form = requiredElement<HTMLFormElement>("wizard");
 let credentialsPresence: CredentialsPresence | null = null;
+let setupDraft: SetupDraft | null = null;
 let pendingProvision: ProvisionBody | null = null;
 let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -418,7 +423,60 @@ function restoreCredentialPresence(presence: CredentialsPresence): void {
   }
 }
 
+function updateDraftStatus(): void {
+  const status = element<HTMLElement>("setup-draft-status");
+  const message = element<HTMLElement>("setup-draft-message");
+  if (!status) return;
+  status.hidden = !setupDraft;
+  if (!setupDraft || !message) return;
+  const expires = new Date(setupDraft.expiresAt).toLocaleString();
+  message.textContent = setupDraft.sshKeyChoice === "manual"
+    ? `Saved choices expire ${expires}. Pasted secrets are never saved; paste your SSH public key again before creating the workbench.`
+    : `Saved choices expire ${expires}. Pasted secrets are never saved and may need to be entered again.`;
+}
+
+function applyDraftCategory(category: DraftCategory): void {
+  if (category === "agents") {
+    for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) input.checked = false;
+  } else if (category === "github") {
+    selectedGithubRepositories.clear();
+    const search = element<HTMLInputElement>("github-repo-search");
+    if (search) search.value = "";
+    if (element("github-repos")) renderGithubRepositories([]);
+  } else {
+    const sshKey = element<HTMLTextAreaElement>("ssh-pubkey");
+    if (sshKey) sshKey.value = "";
+  }
+}
+
+async function clearDraftCategory(
+  category: DraftCategory,
+  buttonId: string,
+  statusId: string,
+  successMessage: string,
+): Promise<void> {
+  const button = requiredElement<HTMLButtonElement>(buttonId);
+  const status = requiredElement<HTMLElement>(statusId);
+  clearTimeout(draftSaveTimer);
+  button.disabled = true;
+  try {
+    const result = await requestJson<{ draft: SetupDraft | null }>(
+      `/api/setup-draft/${category}`,
+      { method: "DELETE" },
+    );
+    setupDraft = result.draft;
+    applyDraftCategory(category);
+    updateDraftStatus();
+    status.textContent = successMessage;
+  } catch (error) {
+    status.textContent = errorMessage(error, "Could not clear the saved setup choices.");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function restoreDraft(draft: SetupDraft): void {
+  setupDraft = draft;
   const selectedAgents = new Set(draft.agents);
   for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) {
     input.checked = selectedAgents.has(input.value);
@@ -435,15 +493,7 @@ function restoreDraft(draft: SetupDraft): void {
     }
   }
 
-  const status = element<HTMLElement>("setup-draft-status");
-  const message = element<HTMLElement>("setup-draft-message");
-  if (status) status.hidden = false;
-  if (message) {
-    const expires = new Date(draft.expiresAt).toLocaleString();
-    message.textContent = draft.sshKeyChoice === "manual"
-      ? `Saved choices expire ${expires}. Pasted secrets are never saved; paste your SSH public key again before creating the workbench.`
-      : `Saved choices expire ${expires}. Pasted secrets are never saved and may need to be entered again.`;
-  }
+  updateDraftStatus();
   const githubStatus = element<HTMLElement>("github-status");
   if (githubStatus && draft.githubRepos.length > 0 && !credentialsPresence?.github) {
     githubStatus.textContent = `${draft.githubRepos.length} repository selection${draft.githubRepos.length === 1 ? "" : "s"} restored. Search again to refresh access details.`;
@@ -453,15 +503,15 @@ function restoreDraft(draft: SetupDraft): void {
 
 async function clearDraft(): Promise<void> {
   const button = requiredElement<HTMLButtonElement>("clear-setup-draft");
+  clearTimeout(draftSaveTimer);
   button.disabled = true;
   try {
     await requestJson("/api/setup-draft", { method: "DELETE" });
-    for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) input.checked = false;
-    selectedGithubRepositories.clear();
-    const sshKey = element<HTMLTextAreaElement>("ssh-pubkey");
-    if (sshKey) sshKey.value = "";
-    requiredElement<HTMLElement>("setup-draft-status").hidden = true;
-    if (element("github-repos")) renderGithubRepositories([]);
+    setupDraft = null;
+    applyDraftCategory("agents");
+    applyDraftCategory("github");
+    applyDraftCategory("ssh");
+    updateDraftStatus();
   } catch (error) {
     const errorElement = requiredElement<HTMLElement>("err");
     errorElement.textContent = errorMessage(error, "Could not clear the saved setup choices.");
@@ -472,6 +522,141 @@ async function clearDraft(): Promise<void> {
 }
 
 element<HTMLButtonElement>("clear-setup-draft")?.addEventListener("click", () => void clearDraft());
+
+function markSigninDisconnected(id: string): void {
+  const button = element<HTMLButtonElement>(`${id}-signin`);
+  const connected = element<HTMLElement>(`${id}-connected`);
+  const flow = element<HTMLElement>(`${id}-flow`);
+  if (button) button.style.display = "";
+  if (connected) connected.style.display = "none";
+  flow?.replaceChildren();
+}
+
+function clearAgentCredentialUi(): void {
+  for (const id of Object.keys(SIGNIN_CREDENTIALS)) markSigninDisconnected(id);
+  for (const provider of PASTEABLE_PROVIDERS) {
+    const input = element<HTMLInputElement>(`llm-${provider}`);
+    const status = element<HTMLElement>(`llm-${provider}-status`);
+    if (input) {
+      input.value = "";
+      input.placeholder = "API key";
+    }
+    if (status) status.hidden = true;
+  }
+  if (credentialsPresence) credentialsPresence = { ...credentialsPresence, llm: {} };
+}
+
+function clearGithubCredentialUi(): void {
+  if (credentialsPresence) credentialsPresence = { ...credentialsPresence, github: null };
+  const status = element<HTMLElement>("github-status");
+  if (status) status.textContent = "Search by repository name after connecting, or paste a public GitHub URL.";
+}
+
+function clearToolCredentialUi(): void {
+  markSigninDisconnected("wrangler");
+  markSigninDisconnected("convex");
+  for (const [provider, present] of [
+    ["cloudflare", false],
+    ["supabase", false],
+    ["convex", false],
+  ] as const) {
+    const input = element<HTMLInputElement>(`${provider}-token`);
+    const status = element<HTMLElement>(`${provider}-token-status`);
+    if (input) input.value = "";
+    if (status) status.hidden = !present;
+  }
+  if (credentialsPresence) {
+    credentialsPresence = {
+      ...credentialsPresence,
+      cloudflare: false,
+      supabase: false,
+      convex: false,
+      wrangler: false,
+    };
+  }
+}
+
+async function clearCredentialCategory(
+  category: CredentialCategory,
+  buttonId: string,
+  statusId: string,
+  successMessage: string,
+): Promise<void> {
+  const button = requiredElement<HTMLButtonElement>(buttonId);
+  const status = requiredElement<HTMLElement>(statusId);
+  button.disabled = true;
+  try {
+    await requestJson(`/api/credentials/${category}`, { method: "DELETE" });
+    if (category === "agents") clearAgentCredentialUi();
+    else if (category === "github") clearGithubCredentialUi();
+    else clearToolCredentialUi();
+    status.textContent = successMessage;
+  } catch (error) {
+    status.textContent = errorMessage(error, "Could not clear the saved credentials.");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+element<HTMLButtonElement>("clear-agent-draft")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear agent choices?",
+    "This removes the saved agent selections from your setup draft.",
+    "Clear choices",
+    () => void clearDraftCategory("agents", "clear-agent-draft", "agent-clear-status", "Agent choices cleared."),
+    true,
+  );
+});
+
+element<HTMLButtonElement>("clear-github-draft")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear GitHub choices?",
+    "This removes the saved repository selections from your setup draft.",
+    "Clear choices",
+    () => void clearDraftCategory("github", "clear-github-draft", "github-clear-status", "GitHub choices cleared."),
+    true,
+  );
+});
+
+element<HTMLButtonElement>("clear-ssh-draft")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear SSH choice?",
+    "This removes the saved SSH setup choice and clears the public key field.",
+    "Clear choice",
+    () => void clearDraftCategory("ssh", "clear-ssh-draft", "tools-clear-status", "SSH choice cleared."),
+    true,
+  );
+});
+
+element<HTMLButtonElement>("clear-agent-credentials")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear agent credentials?",
+    "This permanently removes saved model API keys and agent sign-ins.",
+    "Clear credentials",
+    () => void clearCredentialCategory("agents", "clear-agent-credentials", "agent-clear-status", "Agent credentials cleared."),
+    true,
+  );
+});
+
+element<HTMLButtonElement>("clear-github-credentials")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear GitHub credentials?",
+    "This permanently removes the saved GitHub connection. Repository choices are kept until you clear them.",
+    "Clear credentials",
+    () => void clearCredentialCategory("github", "clear-github-credentials", "github-clear-status", "GitHub credentials cleared."),
+    true,
+  );
+});
+
+element<HTMLButtonElement>("clear-tools-credentials")?.addEventListener("click", () => {
+  askConfirmation(
+    "Clear tool credentials?",
+    "This permanently removes saved Cloudflare, Supabase, Convex, and Wrangler credentials.",
+    "Clear credentials",
+    () => void clearCredentialCategory("tools", "clear-tools-credentials", "tools-clear-status", "Tool credentials cleared."),
+    true,
+  );
+});
 
 async function restoreSetupState(): Promise<void> {
   const [draftResult, presenceResult] = await Promise.all([

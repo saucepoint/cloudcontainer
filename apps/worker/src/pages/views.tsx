@@ -684,6 +684,15 @@ export const OnboardingPage: FC<{
             />
           ))}
         </details>
+        <div class="setup-category-actions" aria-label="Coding agents saved setup actions">
+          <button id="clear-agent-credentials" class="btn danger" type="button">
+            Clear agent credentials
+          </button>
+          <button id="clear-agent-draft" class="btn secondary" type="button">
+            Clear agent choices
+          </button>
+          <p id="agent-clear-status" class="muted" role="status" aria-live="polite"></p>
+        </div>
       </div>
 
       {githubAvailable ? (
@@ -711,6 +720,15 @@ export const OnboardingPage: FC<{
           <label for="github-repo-search">Search or paste a repository URL</label>
           <input id="github-repo-search" type="search" placeholder="repository name, owner/repository, or GitHub URL" maxLength={256} autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
+          <div class="setup-category-actions" aria-label="GitHub saved setup actions">
+            <button id="clear-github-credentials" class="btn danger" type="button">
+              Clear GitHub credentials
+            </button>
+            <button id="clear-github-draft" class="btn secondary" type="button">
+              Clear GitHub choices
+            </button>
+            <p id="github-clear-status" class="muted" role="status" aria-live="polite"></p>
+          </div>
         </div>
       ) : null}
 
@@ -796,6 +814,15 @@ export const OnboardingPage: FC<{
           <input id="convex-token" type="password" name="convexToken" autocomplete="off" />
           <p id="convex-token-status" class="muted" hidden role="status" aria-live="polite">A Convex token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
+        <div class="setup-category-actions" aria-label="Advanced saved setup actions">
+          <button id="clear-tools-credentials" class="btn danger" type="button">
+            Clear tool credentials
+          </button>
+          <button id="clear-ssh-draft" class="btn secondary" type="button">
+            Clear SSH choice
+          </button>
+          <p id="tools-clear-status" class="muted" role="status" aria-live="polite"></p>
+        </div>
       </div>
 
       <section id="setup-review" class="card" hidden aria-labelledby="setup-review-heading">
