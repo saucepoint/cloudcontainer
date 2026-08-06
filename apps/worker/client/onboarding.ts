@@ -449,32 +449,6 @@ function applyDraftCategory(category: DraftCategory): void {
   }
 }
 
-async function clearDraftCategory(
-  category: DraftCategory,
-  buttonId: string,
-  statusId: string,
-  successMessage: string,
-): Promise<void> {
-  const button = requiredElement<HTMLButtonElement>(buttonId);
-  const status = requiredElement<HTMLElement>(statusId);
-  clearTimeout(draftSaveTimer);
-  button.disabled = true;
-  try {
-    const result = await requestJson<{ draft: SetupDraft | null }>(
-      `/api/setup-draft/${category}`,
-      { method: "DELETE" },
-    );
-    setupDraft = result.draft;
-    applyDraftCategory(category);
-    updateDraftStatus();
-    status.textContent = successMessage;
-  } catch (error) {
-    status.textContent = errorMessage(error, "Could not clear the saved setup choices.");
-  } finally {
-    button.disabled = false;
-  }
-}
-
 function restoreDraft(draft: SetupDraft): void {
   setupDraft = draft;
   const selectedAgents = new Set(draft.agents);
@@ -576,6 +550,12 @@ function clearToolCredentialUi(): void {
   }
 }
 
+const DRAFT_CATEGORY_BY_CREDENTIALS: Record<CredentialCategory, DraftCategory> = {
+  agents: "agents",
+  github: "github",
+  tools: "ssh",
+};
+
 async function clearCredentialCategory(
   category: CredentialCategory,
   buttonId: string,
@@ -590,6 +570,15 @@ async function clearCredentialCategory(
     if (category === "agents") clearAgentCredentialUi();
     else if (category === "github") clearGithubCredentialUi();
     else clearToolCredentialUi();
+    clearTimeout(draftSaveTimer);
+    const draftCategory = DRAFT_CATEGORY_BY_CREDENTIALS[category];
+    const result = await requestJson<{ draft: SetupDraft | null }>(
+      `/api/setup-draft/${draftCategory}`,
+      { method: "DELETE" },
+    );
+    setupDraft = result.draft;
+    applyDraftCategory(draftCategory);
+    updateDraftStatus();
     status.textContent = successMessage;
   } catch (error) {
     status.textContent = errorMessage(error, "Could not clear the saved credentials.");
@@ -598,42 +587,12 @@ async function clearCredentialCategory(
   }
 }
 
-element<HTMLButtonElement>("clear-agent-draft")?.addEventListener("click", () => {
-  askConfirmation(
-    "Clear agent choices?",
-    "This removes the saved agent selections from your setup draft.",
-    "Clear choices",
-    () => void clearDraftCategory("agents", "clear-agent-draft", "agent-clear-status", "Agent choices cleared."),
-    true,
-  );
-});
-
-element<HTMLButtonElement>("clear-github-draft")?.addEventListener("click", () => {
-  askConfirmation(
-    "Clear GitHub choices?",
-    "This removes the saved repository selections from your setup draft.",
-    "Clear choices",
-    () => void clearDraftCategory("github", "clear-github-draft", "github-clear-status", "GitHub choices cleared."),
-    true,
-  );
-});
-
-element<HTMLButtonElement>("clear-ssh-draft")?.addEventListener("click", () => {
-  askConfirmation(
-    "Clear SSH choice?",
-    "This removes the saved SSH setup choice and clears the public key field.",
-    "Clear choice",
-    () => void clearDraftCategory("ssh", "clear-ssh-draft", "tools-clear-status", "SSH choice cleared."),
-    true,
-  );
-});
-
 element<HTMLButtonElement>("clear-agent-credentials")?.addEventListener("click", () => {
   askConfirmation(
     "Clear agent credentials?",
-    "This permanently removes saved model API keys and agent sign-ins.",
+    "This permanently removes saved model API keys and agent sign-ins, and clears your saved agent choices.",
     "Clear credentials",
-    () => void clearCredentialCategory("agents", "clear-agent-credentials", "agent-clear-status", "Agent credentials cleared."),
+    () => void clearCredentialCategory("agents", "clear-agent-credentials", "agent-clear-status", "Agent credentials and choices cleared."),
     true,
   );
 });
@@ -641,9 +600,9 @@ element<HTMLButtonElement>("clear-agent-credentials")?.addEventListener("click",
 element<HTMLButtonElement>("clear-github-credentials")?.addEventListener("click", () => {
   askConfirmation(
     "Clear GitHub credentials?",
-    "This permanently removes the saved GitHub connection. Repository choices are kept until you clear them.",
+    "This permanently removes the saved GitHub connection and your saved repository choices.",
     "Clear credentials",
-    () => void clearCredentialCategory("github", "clear-github-credentials", "github-clear-status", "GitHub credentials cleared."),
+    () => void clearCredentialCategory("github", "clear-github-credentials", "github-clear-status", "GitHub credentials and choices cleared."),
     true,
   );
 });
@@ -651,9 +610,9 @@ element<HTMLButtonElement>("clear-github-credentials")?.addEventListener("click"
 element<HTMLButtonElement>("clear-tools-credentials")?.addEventListener("click", () => {
   askConfirmation(
     "Clear tool credentials?",
-    "This permanently removes saved Cloudflare, Supabase, Convex, and Wrangler credentials.",
+    "This permanently removes saved Cloudflare, Supabase, Convex, and Wrangler credentials, and clears your saved SSH choice.",
     "Clear credentials",
-    () => void clearCredentialCategory("tools", "clear-tools-credentials", "tools-clear-status", "Tool credentials cleared."),
+    () => void clearCredentialCategory("tools", "clear-tools-credentials", "tools-clear-status", "Tool credentials and SSH choice cleared."),
     true,
   );
 });

@@ -430,16 +430,16 @@ describe("onboarding wizard order", () => {
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
     for (const button of [
       "clear-agent-credentials",
-      "clear-agent-draft",
       "clear-github-credentials",
-      "clear-github-draft",
       "clear-tools-credentials",
-      "clear-ssh-draft",
     ]) {
       expect(html).toContain(`id="${button}"`);
     }
+    expect(html).not.toContain("clear-agent-draft");
+    expect(html).not.toContain("clear-github-draft");
+    expect(html).not.toContain("clear-ssh-draft");
     expect(onboardingClient).toContain("`/api/credentials/${category}`");
-    expect(onboardingClient).toContain("`/api/setup-draft/${category}`");
+    expect(onboardingClient).toContain("`/api/setup-draft/${draftCategory}`");
     for (const category of ["agents", "github", "tools", "ssh"]) {
       expect(onboardingClient).toContain(`"${category}"`);
     }

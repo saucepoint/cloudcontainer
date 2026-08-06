@@ -247,8 +247,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .notice.warning { color: var(--ink); border-left-color: #b88a12; }
 .notice #setup-draft-message { display: block; margin-top: 0.2rem; }
 .notice #clear-setup-draft { margin-top: 0.35rem; }
-.setup-category-actions { display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap; margin-top: 1rem;
-  padding-top: 0.85rem; border-top: 1px solid var(--line); }
+.setup-category-actions { display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
 .setup-category-actions p { flex-basis: 100%; margin: 0; }
 .setup-review-items { margin-top: 0.75rem; }
 .setup-review-items li { grid-template-columns: 0.34rem minmax(0, 1fr); }
