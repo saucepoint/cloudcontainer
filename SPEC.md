@@ -197,7 +197,14 @@ environment, although a user can run any baked binary.
 
 The interface explains where a beginner can find an SSH public key and offers
 the agent-assisted enrollment path when they do not have one. Secret fields use
-password inputs and are never echoed back.
+password inputs and are never echoed back. The browser and CLI may save a
+short-lived, account-bound setup draft containing only agent choices, selected
+repository names, the setup step, and an SSH-key choice. Drafts expire after
+24 hours, are deleted after provisioning or explicit clearing, and never
+contain API tokens, OAuth tokens, authorization codes, or SSH key material.
+Reloads and OAuth round trips restore that non-secret state. Credential
+connections already stored server-side are shown as saved, and the user gets
+a final review step before the provisioning request is submitted.
 
 Submitting valid choices returns HTTP 202 with the initial container view. It
 does not wait for Incus or package installation.
@@ -217,6 +224,9 @@ flow. The CLI must:
   Cloudflare, Supabase, and Convex setup;
 - persist only the Better Auth session cookie locally, under the user's config
   directory with restrictive permissions, and support clearing that session;
+- resume from the server-side non-secret setup draft after interruption or a
+  browser OAuth round trip; pasted secrets must be requested again, while
+  already stored credential connections remain connected;
 - reuse `~/.ssh/id_ed25519.pub`, generate
   `~/.ssh/workbench_id_ed25519` when requested, or continue without a key; and
 - after a successful build, ask before adding a managed `Host workbench` block
@@ -725,6 +735,7 @@ operations synchronize keys and credentials.
 | host_history | Immutable class, capacity, release, and hardware snapshot for each retired host ID/generation |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
+| setup_drafts | One expiring, non-secret onboarding draft per user; selections only, never credentials or key material |
 | enrollment_tokens | Hash only; one-hour expiry; single use |
 | oauth_states | Short-lived, user-bound authorization attempts |
 | waitlist | One row per user; requested_at ordering and admitted_at audit |
@@ -852,7 +863,7 @@ Current automated coverage includes:
 - authenticated host registration/probe/state APIs, daemon release telemetry,
   and fleet-controller release ordering;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
-  deletion, and external-call validation;
+  deletion, setup-draft expiry/secret exclusion, and external-call validation;
 - CLI browser-auth handoff, one-time code exchange, session-state redaction,
   CLI package type-check/build, and SSH configuration rendering;
 - Codex device-flow state and authorization binding;

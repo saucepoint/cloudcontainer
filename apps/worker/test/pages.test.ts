@@ -473,9 +473,9 @@ describe("GitHub repository onboarding", () => {
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
-    expect(onboardingClient).toContain("const selected = new Set(");
-    expect(onboardingClient).toContain("input.checked = selected.has(input.value)");
-    expect(onboardingClient).toContain("sessionStorage.removeItem(agentSelectionKey)");
+    expect(onboardingClient).toContain('requestJson("/api/setup-draft"');
+    expect(onboardingClient).toContain("input.checked = selectedAgents.has(input.value)");
+    expect(onboardingClient).not.toContain("sessionStorage");
     expect(String(OnboardingPage({ githubAvailable: true }))).not.toContain("data-checked");
   });
 });

@@ -332,7 +332,8 @@ const ApiKeyProvider: FC<{
       </a>
     </div>
     <label for={id} class="sr-only">{title}</label>
-    <input id={id} type="password" name={name} autocomplete="off" placeholder={title} />
+    <input id={id} type="password" name={name} autocomplete="off" placeholder={title} data-credential-provider={name.replace("llm_", "")} />
+    <p id={`${id}-status`} class="muted" hidden role="status" aria-live="polite">Saved for this setup. Leave the field blank to keep it.</p>
   </div>
 );
 
@@ -636,6 +637,11 @@ export const OnboardingPage: FC<{
       Configure your workbench with agents, models, and credentials. After it is provisioned, changes require
       manual terminal commands.
     </p>
+    <div id="setup-draft-status" class="notice" hidden role="status" aria-live="polite">
+      <strong>We restored your saved setup choices.</strong>
+      <span id="setup-draft-message">Pasted secrets are never saved and may need to be entered again.</span>
+      <button id="clear-setup-draft" class="btn secondary" type="button">Clear saved choices</button>
+    </div>
     <form id="wizard">
       <div class="card">
         <fieldset>
@@ -749,6 +755,7 @@ export const OnboardingPage: FC<{
             .
           </label>
           <input id="cloudflare-token" type="password" name="cloudflareToken" autocomplete="off" />
+          <p id="cloudflare-token-status" class="muted" hidden role="status" aria-live="polite">A Cloudflare token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
         <details>
           <summary>Connect Supabase</summary>
@@ -760,6 +767,7 @@ export const OnboardingPage: FC<{
             . It will be available to the Supabase CLI as <code>SUPABASE_ACCESS_TOKEN</code>.
           </label>
           <input id="supabase-token" type="password" name="supabaseToken" autocomplete="off" />
+          <p id="supabase-token-status" class="muted" hidden role="status" aria-live="polite">A Supabase token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
         <details>
           <summary>Connect Convex</summary>
@@ -783,8 +791,21 @@ export const OnboardingPage: FC<{
             CLI for this workbench.
           </label>
           <input id="convex-token" type="password" name="convexToken" autocomplete="off" />
+          <p id="convex-token-status" class="muted" hidden role="status" aria-live="polite">A Convex token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
       </div>
+
+      <section id="setup-review" class="card" hidden aria-labelledby="setup-review-heading">
+        <h2 id="setup-review-heading" tabindex={-1}>Review your setup</h2>
+        <p class="muted">
+          Confirm the choices below before provisioning. Secret values are never shown here or stored in the setup draft.
+        </p>
+        <ul id="setup-review-items" class="check"></ul>
+        <div class="row">
+          <button id="review-back" class="btn secondary" type="button">Back to editing</button>
+          <button id="review-confirm" class="btn primary" type="button">Create workbench →</button>
+        </div>
+      </section>
 
       <button id="go" class="btn primary create-workbench-btn" type="submit">
         Create workbench →

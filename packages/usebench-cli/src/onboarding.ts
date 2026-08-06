@@ -22,7 +22,21 @@ import { verifyWithWorldId } from "./world-id.js";
 import type { SessionState } from "./session.js";
 
 interface CredentialsView {
+  llm: Record<string, boolean>;
+  cloudflare: boolean;
+  supabase: boolean;
+  convex: boolean;
+  wrangler: boolean;
   github: string | null;
+}
+
+interface SetupDraft {
+  step: "agents" | "agent-auth" | "github" | "tools" | "ssh" | "review";
+  agents: Agent[];
+  githubRepos: string[];
+  sshKeyChoice: "none" | "default" | "dedicated" | "manual";
+  updatedAt: number;
+  expiresAt: number;
 }
 
 interface Repository {
@@ -60,6 +74,40 @@ type AuthTarget =
   | { kind: "claude"; agent: "claude" | "pi" | "opencode" }
   | { kind: "chatgpt"; agent: "codex" | "pi" | "opencode" };
 
+const SETUP_STEP_ORDER: SetupDraft["step"][] = [
+  "agents",
+  "agent-auth",
+  "github",
+  "tools",
+  "ssh",
+  "review",
+];
+
+function needsSetupStep(draft: SetupDraft | null, step: SetupDraft["step"]): boolean {
+  if (!draft) return true;
+  return SETUP_STEP_ORDER.indexOf(draft.step) <= SETUP_STEP_ORDER.indexOf(step);
+}
+
+async function getSetupDraft(api: ApiClient): Promise<SetupDraft | null> {
+  try {
+    return (await api.get<{ draft: SetupDraft | null }>("/api/setup-draft")).draft;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) return null;
+    throw error;
+  }
+}
+
+async function saveSetupDraft(
+  api: ApiClient,
+  input: Pick<SetupDraft, "step" | "agents" | "githubRepos" | "sshKeyChoice">,
+): Promise<void> {
+  await api.put("/api/setup-draft", input);
+}
+
+async function clearSetupDraft(api: ApiClient): Promise<void> {
+  await api.delete("/api/setup-draft");
+}
+
 function agentAuthTargets(agents: Agent[]): AuthTarget[] {
   return agents.flatMap((agent): AuthTarget[] => {
     if (agent === "claude") return [{ kind: "claude", agent }];
@@ -73,6 +121,13 @@ function agentAuthTargets(agents: Agent[]): AuthTarget[] {
 
 function authTargetLabel(target: AuthTarget): string {
   return `${target.kind === "claude" ? "Claude" : "ChatGPT"} for ${AGENT_LABELS[target.agent]}`;
+}
+
+function authProvider(target: AuthTarget): string {
+  if (target.kind === "claude") {
+    return target.agent === "claude" ? "claude_subscription_token" : `${target.agent}_claude_subscription_token`;
+  }
+  return target.agent === "codex" ? "codex_subscription_token" : `${target.agent}_codex_subscription_token`;
 }
 
 async function chooseAgents(): Promise<Agent[]> {
@@ -136,8 +191,17 @@ async function runChatGptSignIn(api: ApiClient, agent: AuthTarget["agent"]): Pro
 }
 
 async function configureAgentAuth(api: ApiClient, agents: Agent[]): Promise<void> {
-  const targets = agentAuthTargets(agents);
+  let credentials: CredentialsView | null = null;
+  try {
+    credentials = await api.get<CredentialsView>("/api/credentials");
+  } catch {
+    // The choices are still useful if an older deployment does not expose presence data.
+  }
+  const targets = agentAuthTargets(agents).filter((target) => !credentials?.llm[authProvider(target)]);
   if (!targets.length) return;
+  if (credentials && targets.length < agentAuthTargets(agents).length) {
+    console.log("Some agent sign-ins are already connected; showing only the remaining choices.");
+  }
   const selected = await checkbox<AuthTarget>({
     message: "Optional agent sign-ins",
     choices: targets.map((target) => ({ name: authTargetLabel(target), value: target })),
@@ -208,52 +272,73 @@ async function runConvexSignIn(api: ApiClient): Promise<void> {
 
 async function configureAdditionalTools(api: ApiClient): Promise<AdditionalTools> {
   const result: AdditionalTools = { llmKeys: {} };
-  const selectedProviders = await checkbox<PasteableProvider>({
-    message: "Optional model API keys",
-    choices: PASTEABLE_PROVIDERS.map((provider) => ({
-      name: PROVIDER_LABELS[provider],
-      value: provider,
-    })),
-    required: false,
-  });
+  let credentials: CredentialsView | null = null;
+  try {
+    credentials = await api.get<CredentialsView>("/api/credentials");
+  } catch {
+    // Continue with the full set of choices if presence data is unavailable.
+  }
+  const availableProviders = PASTEABLE_PROVIDERS.filter((provider) => !credentials?.llm[provider]);
+  const selectedProviders = availableProviders.length
+    ? await checkbox<PasteableProvider>({
+      message: "Optional model API keys",
+      choices: availableProviders.map((provider) => ({
+        name: PROVIDER_LABELS[provider],
+        value: provider,
+      })),
+      required: false,
+    })
+    : [];
   for (const provider of selectedProviders) {
     const value = await password({ message: `${PROVIDER_LABELS[provider]} API key` });
     if (value.trim()) result.llmKeys[provider] = value.trim();
   }
 
-  if (await confirm({ message: "Connect GitHub Copilot?", default: false })) await runCopilotSignIn(api);
-
-  const cloudflare = await select({
-    message: "Cloudflare access",
-    choices: [
-      { name: "Skip", value: "skip" as const },
-      { name: "Sign in with Cloudflare / Wrangler", value: "oauth" as const },
-      { name: "Paste a Cloudflare API token", value: "token" as const },
-    ],
-  });
-  if (cloudflare === "oauth") await runWranglerSignIn(api);
-  if (cloudflare === "token") {
-    const value = await password({ message: "Cloudflare API token" });
-    if (value.trim()) result.cloudflareToken = value.trim();
+  if (!credentials?.llm.github_copilot && await confirm({ message: "Connect GitHub Copilot?", default: false })) {
+    await runCopilotSignIn(api);
   }
 
-  if (await confirm({ message: "Connect Supabase?", default: false })) {
+  if (credentials?.cloudflare || credentials?.wrangler) {
+    console.log("Cloudflare access is already connected; keeping the saved connection.");
+  } else {
+    const cloudflare = await select({
+      message: "Cloudflare access",
+      choices: [
+        { name: "Skip", value: "skip" as const },
+        { name: "Sign in with Cloudflare / Wrangler", value: "oauth" as const },
+        { name: "Paste a Cloudflare API token", value: "token" as const },
+      ],
+    });
+    if (cloudflare === "oauth") await runWranglerSignIn(api);
+    if (cloudflare === "token") {
+      const value = await password({ message: "Cloudflare API token" });
+      if (value.trim()) result.cloudflareToken = value.trim();
+    }
+  }
+
+  if (credentials?.supabase) {
+    console.log("Supabase is already connected; keeping the saved connection.");
+  } else if (await confirm({ message: "Connect Supabase?", default: false })) {
     const value = await password({ message: "Supabase personal or OAuth access token" });
     if (value.trim()) result.supabaseToken = value.trim();
   }
 
-  const convex = await select({
-    message: "Convex access",
-    choices: [
-      { name: "Skip", value: "skip" as const },
-      { name: "Sign in with Convex", value: "oauth" as const },
-      { name: "Paste a Convex personal token", value: "token" as const },
-    ],
-  });
-  if (convex === "oauth") await runConvexSignIn(api);
-  if (convex === "token") {
-    const value = await password({ message: "Convex personal access token" });
-    if (value.trim()) result.convexToken = value.trim();
+  if (credentials?.convex) {
+    console.log("Convex is already connected; keeping the saved connection.");
+  } else {
+    const convex = await select({
+      message: "Convex access",
+      choices: [
+        { name: "Skip", value: "skip" as const },
+        { name: "Sign in with Convex", value: "oauth" as const },
+        { name: "Paste a Convex personal token", value: "token" as const },
+      ],
+    });
+    if (convex === "oauth") await runConvexSignIn(api);
+    if (convex === "token") {
+      const value = await password({ message: "Convex personal access token" });
+      if (value.trim()) result.convexToken = value.trim();
+    }
   }
   return result;
 }
@@ -278,8 +363,9 @@ async function connectGithub(api: ApiClient, baseUrl: string): Promise<void> {
   throw new Error("GitHub authorization did not finish before the sign-in window expired.");
 }
 
-async function chooseGithubRepositories(api: ApiClient): Promise<string[]> {
-  const selected = new Set<string>();
+async function chooseGithubRepositories(api: ApiClient, initial: string[] = []): Promise<string[]> {
+  const selected = new Set(initial);
+  if (selected.size) console.log(`Restored ${selected.size} saved GitHub ${selected.size === 1 ? "repository" : "repositories"}.`);
   while (selected.size < GITHUB_REPOSITORY_LIMIT) {
     const query = await input({
       message: selected.size
@@ -315,16 +401,16 @@ async function chooseGithubRepositories(api: ApiClient): Promise<string[]> {
   return [...selected];
 }
 
-async function configureGithub(api: ApiClient, state: SessionState): Promise<string[]> {
+async function configureGithub(api: ApiClient, state: SessionState, initial: string[] = []): Promise<string[]> {
   if (!state.githubAvailable) {
     console.log("GitHub repository setup is unavailable on this deployment; skipping it.");
-    return [];
+    return initial;
   }
   const alreadyConnected = await connectedGithub(api);
   if (!alreadyConnected && await confirm({ message: "Connect GitHub for private repository access?", default: true })) {
     await connectGithub(api, api.baseUrl);
   }
-  return chooseGithubRepositories(api);
+  return chooseGithubRepositories(api, initial);
 }
 
 async function review(inputValue: ProvisionInput): Promise<void> {
@@ -334,6 +420,11 @@ async function review(inputValue: ProvisionInput): Promise<void> {
   console.log(`Model API keys: ${Object.keys(inputValue.llmKeys).length || "none"}`);
   console.log(`SSH: ${inputValue.sshPubkey ? "public key configured" : "no key (SSH disabled until later)"}`);
   if (!(await confirm({ message: "Create this workbench?", default: true }))) throw new Error("Onboarding cancelled.");
+}
+
+function sshKeyChoice(key: SelectedSshKey): SetupDraft["sshKeyChoice"] {
+  if (!key.privatePath) return "none";
+  return key.privatePath.endsWith("workbench_id_ed25519") ? "dedicated" : "default";
 }
 
 async function waitForReady(api: ApiClient): Promise<ContainerView> {
@@ -379,11 +470,56 @@ export async function runOnboarding(
   }
 
   console.log("\nWelcome to usebench.dev. Set up your cloud workbench.\n");
-  const agents = await chooseAgents();
-  await configureAgentAuth(api, agents);
-  const githubRepos = await configureGithub(api, state);
+  let draft = await getSetupDraft(api);
+  if (draft) {
+    const expires = new Date(draft.expiresAt).toLocaleString();
+    const resume = await confirm({
+      message: `Resume your saved setup choices? They expire ${expires}.`,
+      default: true,
+    });
+    if (!resume) {
+      await clearSetupDraft(api);
+      draft = null;
+    } else {
+      console.log("Saved setup choices restored. Pasted secrets are never saved, so enter those again.");
+    }
+  }
+
+  const agents = draft?.agents.length ? draft.agents : await chooseAgents();
+  await saveSetupDraft(api, {
+    step: "agent-auth",
+    agents,
+    githubRepos: draft?.githubRepos ?? [],
+    sshKeyChoice: draft?.sshKeyChoice ?? "none",
+  });
+  if (needsSetupStep(draft, "agent-auth")) await configureAgentAuth(api, agents);
+
+  let githubRepos = draft?.githubRepos ?? [];
+  await saveSetupDraft(api, {
+    step: "github",
+    agents,
+    githubRepos,
+    sshKeyChoice: draft?.sshKeyChoice ?? "none",
+  });
+  if (needsSetupStep(draft, "github")) githubRepos = await configureGithub(api, state, githubRepos);
+
+  await saveSetupDraft(api, {
+    step: "tools",
+    agents,
+    githubRepos,
+    sshKeyChoice: draft?.sshKeyChoice ?? "none",
+  });
+  // Secret values are deliberately not part of the draft. A resumed session must
+  // collect them again, while OAuth connections already stored on the server are
+  // detected by configureAdditionalTools and left untouched.
   let tools = await configureAdditionalTools(api);
   const sshKey: SelectedSshKey = await chooseSshKey();
+  await saveSetupDraft(api, {
+    step: "review",
+    agents,
+    githubRepos,
+    sshKeyChoice: sshKeyChoice(sshKey),
+  });
   let container: ContainerView;
   while (true) {
     const provisionInput: ProvisionInput = {
@@ -405,6 +541,12 @@ export async function runOnboarding(
         console.error(`\n${error.message}`);
         if (await confirm({ message: "Review optional tools and try again?", default: true })) {
           tools = await configureAdditionalTools(api);
+          await saveSetupDraft(api, {
+            step: "review",
+            agents,
+            githubRepos,
+            sshKeyChoice: sshKeyChoice(sshKey),
+          });
           continue;
         }
       }
