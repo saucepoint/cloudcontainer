@@ -236,6 +236,11 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   border-left: 2px solid var(--line-strong); border-radius: 0; }
 .notice.error { color: var(--danger); border-left-color: var(--danger); }
 .notice.warning { color: var(--ink); border-left-color: #b88a12; }
+.notice #setup-draft-message { display: block; margin-top: 0.2rem; }
+.notice #clear-setup-draft { margin-top: 0.35rem; }
+.setup-review-items { margin-top: 0.75rem; }
+.setup-review-items li { grid-template-columns: 0.34rem minmax(0, 1fr); }
+.setup-review-items li::before { background: var(--accent); }
 .spinner { display: inline-block; width: 12px; height: 12px; border: 1.5px solid var(--line-strong);
   border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite;
   vertical-align: -1px; margin-right: 0.35rem; }

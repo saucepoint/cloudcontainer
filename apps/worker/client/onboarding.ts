@@ -1,4 +1,10 @@
-import { INPUT_LIMITS, LLM_PROVIDERS, OAUTH_ONLY_LLM_PROVIDERS } from "@workbench/contract";
+import {
+  AGENT_LABELS,
+  INPUT_LIMITS,
+  LLM_PROVIDER_LABELS,
+  LLM_PROVIDERS,
+  OAUTH_ONLY_LLM_PROVIDERS,
+} from "@workbench/contract";
 import {
   claudeOauthFlow,
   claudeOauthFlowFor,
@@ -15,6 +21,34 @@ const PASTEABLE_PROVIDERS = LLM_PROVIDERS.filter(
   (provider) => !(OAUTH_ONLY_LLM_PROVIDERS as readonly string[]).includes(provider),
 );
 
+type SetupDraft = {
+  step: "agents" | "agent-auth" | "github" | "tools" | "ssh" | "review";
+  agents: string[];
+  githubRepos: string[];
+  sshKeyChoice: "none" | "default" | "dedicated" | "manual";
+  updatedAt: number;
+  expiresAt: number;
+};
+
+type CredentialsPresence = {
+  llm: Record<string, boolean>;
+  cloudflare: boolean;
+  supabase: boolean;
+  convex: boolean;
+  wrangler: boolean;
+  github: string | null;
+};
+
+type ProvisionBody = {
+  agents: string[];
+  sshPubkey: string;
+  llmKeys: Record<string, string>;
+  cloudflareToken?: string;
+  supabaseToken?: string;
+  convexToken?: string;
+  githubRepos: string[];
+};
+
 function element<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
@@ -30,38 +64,108 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const form = requiredElement<HTMLFormElement>("wizard");
+let credentialsPresence: CredentialsPresence | null = null;
+let pendingProvision: ProvisionBody | null = null;
+let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
-form.addEventListener("submit", async (event: SubmitEvent) => {
-  event.preventDefault();
-  const button = requiredElement<HTMLButtonElement>("go");
-  const errorElement = requiredElement<HTMLElement>("err");
-  errorElement.textContent = "";
+function collectProvisionBody(): ProvisionBody {
   const data = new FormData(form);
   const llmKeys: Record<string, string> = {};
   for (const provider of PASTEABLE_PROVIDERS) {
     const value = (data.get(`llm_${provider}`) || "").toString().trim();
     if (value) llmKeys[provider] = value;
   }
-  const body = {
+  const cloudflareToken = (data.get("cloudflareToken") || "").toString().trim();
+  const supabaseToken = (data.get("supabaseToken") || "").toString().trim();
+  const convexToken = (data.get("convexToken") || "").toString().trim();
+  return {
     agents: data.getAll("agent").map((agent) => agent.toString()),
     sshPubkey: (data.get("sshPubkey") || "").toString().trim(),
     llmKeys,
-    cloudflareToken: (data.get("cloudflareToken") || "").toString().trim() || undefined,
-    supabaseToken: (data.get("supabaseToken") || "").toString().trim() || undefined,
-    convexToken: (data.get("convexToken") || "").toString().trim() || undefined,
-    githubRepos: data.getAll("githubRepo").map((repository) => repository.toString()),
+    ...(cloudflareToken ? { cloudflareToken } : {}),
+    ...(supabaseToken ? { supabaseToken } : {}),
+    ...(convexToken ? { convexToken } : {}),
+    githubRepos: [...selectedGithubRepositories],
   };
-  if (body.agents.length === 0) {
-    errorElement.textContent = "Pick at least one agent first.";
-    errorElement.focus();
-    return;
+}
+
+function draftPayload(step: SetupDraft["step"] = "agents") {
+  return {
+    step,
+    agents: new FormData(form).getAll("agent").map((agent) => agent.toString()),
+    githubRepos: [...selectedGithubRepositories],
+    // The public key itself is deliberately not persisted. This records only
+    // whether the user chose the manual-key path so the UI can explain why it
+    // must be pasted again after a refresh.
+    sshKeyChoice: ((element<HTMLTextAreaElement>("ssh-pubkey")?.value.trim())
+      ? "manual"
+      : "none") as SetupDraft["sshKeyChoice"],
+  };
+}
+
+async function saveDraft(step: SetupDraft["step"] = "agents"): Promise<void> {
+  await requestJson("/api/setup-draft", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(draftPayload(step)),
+  });
+}
+
+function scheduleDraftSave(): void {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(() => {
+    void saveDraft().catch(() => undefined);
+  }, 350);
+}
+
+function reviewItems(body: ProvisionBody): string[] {
+  const items = [
+    `Agents: ${body.agents.map((agent) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent).join(", ")}`,
+    `GitHub repositories: ${body.githubRepos.length ? body.githubRepos.join(", ") : "none"}`,
+    `SSH: ${body.sshPubkey ? "public key ready" : "add a key after the workbench is ready"}`,
+  ];
+  const connected = new Set<string>();
+  for (const provider of Object.keys(credentialsPresence?.llm ?? {})) {
+    if (credentialsPresence?.llm[provider]) connected.add(provider);
   }
+  for (const provider of Object.keys(body.llmKeys)) connected.add(provider);
+  if (credentialsPresence?.cloudflare || body.cloudflareToken) connected.add("Cloudflare");
+  if (credentialsPresence?.supabase || body.supabaseToken) connected.add("Supabase");
+  if (credentialsPresence?.convex || body.convexToken) connected.add("Convex");
+  if (credentialsPresence?.wrangler) connected.add("Cloudflare Wrangler");
+  if (credentialsPresence?.github || body.githubRepos.length) connected.add("GitHub");
+  const integrations = [...connected].map((provider) =>
+    LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider,
+  );
+  items.splice(1, 0, `Saved integrations: ${integrations.length ? integrations.join(", ") : "none"}`);
+  return items;
+}
+
+function showReview(body: ProvisionBody): void {
+  const review = requiredElement<HTMLElement>("setup-review");
+  const items = requiredElement<HTMLElement>("setup-review-items");
+  items.replaceChildren(...reviewItems(body).map((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    return li;
+  }));
+  pendingProvision = body;
+  review.hidden = false;
+  requiredElement<HTMLButtonElement>("go").hidden = true;
+  review.querySelector<HTMLElement>("h2")?.focus();
+}
+
+async function provision(body: ProvisionBody): Promise<void> {
+  const button = requiredElement<HTMLButtonElement>("review-confirm");
+  const errorElement = requiredElement<HTMLElement>("err");
+  errorElement.textContent = "";
   button.disabled = true;
   const spinner = document.createElement("span");
   spinner.className = "spinner";
   spinner.setAttribute("aria-hidden", "true");
   button.replaceChildren(spinner, "Starting…");
   try {
+    await saveDraft("review");
     await requestJson("/api/provision", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -73,6 +177,37 @@ form.addEventListener("submit", async (event: SubmitEvent) => {
     errorElement.focus();
     button.disabled = false;
     button.textContent = "Create workbench →";
+  }
+}
+
+form.addEventListener("submit", (event: SubmitEvent) => {
+  event.preventDefault();
+  const body = collectProvisionBody();
+  const errorElement = requiredElement<HTMLElement>("err");
+  errorElement.textContent = "";
+  if (body.agents.length === 0) {
+    errorElement.textContent = "Pick at least one agent first.";
+    errorElement.focus();
+    return;
+  }
+  void saveDraft("review").catch(() => undefined);
+  showReview(body);
+});
+
+requiredElement<HTMLButtonElement>("review-back").addEventListener("click", () => {
+  requiredElement<HTMLElement>("setup-review").hidden = true;
+  requiredElement<HTMLButtonElement>("go").hidden = false;
+  requiredElement<HTMLButtonElement>("go").focus();
+});
+
+requiredElement<HTMLButtonElement>("review-confirm").addEventListener("click", () => {
+  if (pendingProvision) void provision(pendingProvision);
+});
+
+form.addEventListener("change", scheduleDraftSave);
+form.addEventListener("input", (event: Event) => {
+  if (event.target instanceof HTMLTextAreaElement && event.target.name === "sshPubkey") {
+    scheduleDraftSave();
   }
 });
 
@@ -87,6 +222,17 @@ function wireSignin(id: string, flow: (target: HTMLElement, done: () => void) =>
       target.replaceChildren();
       button.style.display = "none";
       connected.style.display = "";
+      if (credentialsPresence) {
+        const provider = SIGNIN_CREDENTIALS[id];
+        if (provider) {
+          credentialsPresence = {
+            ...credentialsPresence,
+            llm: { ...credentialsPresence.llm, [provider]: true },
+          };
+        } else if (id === "wrangler" || id === "convex") {
+          credentialsPresence = { ...credentialsPresence, [id]: true };
+        }
+      }
     });
   });
 }
@@ -103,41 +249,18 @@ wireSignin("convex", convexOauthFlow);
 
 const githubConnect = element<HTMLAnchorElement>("github-connect");
 if (githubConnect) {
-  const agentSelectionKey = "workbench-github-agents";
-  try {
-    const saved: unknown = JSON.parse(sessionStorage.getItem(agentSelectionKey) || "[]");
-    const selected = new Set(
-      Array.isArray(saved) ? saved.filter((agent): agent is string => typeof agent === "string") : [],
-    );
-    for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) {
-      input.checked = selected.has(input.value);
-    }
-  } catch {
-    // Storage can be unavailable or contain data from an older UI.
-  }
-  try {
-    sessionStorage.removeItem(agentSelectionKey);
-  } catch {
-    // Storage is an optional convenience.
-  }
-
-  const saveGithubAgents = () => {
-    try {
-      sessionStorage.setItem(
-        agentSelectionKey,
-        JSON.stringify(new FormData(form).getAll("agent").map((agent) => agent.toString())),
-      );
-    } catch {
-      // Storage is an optional convenience.
-    }
-  };
-  githubConnect.addEventListener("click", saveGithubAgents);
+  // Save immediately before leaving for GitHub so a pending debounce cannot
+  // lose the latest agent selection during the external round trip.
+  githubConnect.addEventListener("click", () => {
+    void saveDraft().catch(() => undefined);
+  });
 }
 
 type GithubRepository = {
   fullName: string;
   private: boolean;
   archived: boolean;
+  saved?: boolean;
   description?: string | null;
 };
 
@@ -177,7 +300,9 @@ function renderGithubRepositories(repositories: GithubRepository[]): void {
     input.disabled =
       !input.checked && selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
     name.textContent = repository.fullName;
-    metadata.textContent = `${repository.private ? "private" : "public"}${repository.archived ? " · archived" : ""}`;
+    metadata.textContent = repository.saved
+      ? "saved selection"
+      : `${repository.private ? "private" : "public"}${repository.archived ? " · archived" : ""}`;
     copy.append(name, metadata);
     if (repository.description) {
       const description = document.createElement("small");
@@ -237,6 +362,7 @@ githubRepoList?.addEventListener("change", (event: Event) => {
   for (const input of githubRepoList.querySelectorAll<HTMLInputElement>("input:not(:checked)")) {
     input.disabled = selectedGithubRepositories.size >= INPUT_LIMITS.githubReposPerProvision;
   }
+  scheduleDraftSave();
 });
 
 let githubSearchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -244,3 +370,115 @@ githubSearch?.addEventListener("input", () => {
   clearTimeout(githubSearchTimer);
   githubSearchTimer = setTimeout(() => loadGithubRepositories(githubSearch.value), 250);
 });
+
+const SIGNIN_CREDENTIALS: Record<string, string> = {
+  claude: "claude_subscription_token",
+  codex: "codex_subscription_token",
+  "pi-chatgpt": "pi_codex_subscription_token",
+  "pi-claude": "pi_claude_subscription_token",
+  "opencode-chatgpt": "opencode_codex_subscription_token",
+  "opencode-claude": "opencode_claude_subscription_token",
+  copilot: "github_copilot",
+};
+
+function markSigninConnected(id: string): void {
+  const button = element<HTMLButtonElement>(`${id}-signin`);
+  const connected = element<HTMLElement>(`${id}-connected`);
+  if (button) button.style.display = "none";
+  if (connected) connected.style.display = "";
+}
+
+function restoreCredentialPresence(presence: CredentialsPresence): void {
+  credentialsPresence = presence;
+  for (const [id, provider] of Object.entries(SIGNIN_CREDENTIALS)) {
+    if (presence.llm[provider]) markSigninConnected(id);
+  }
+  if (presence.wrangler) markSigninConnected("wrangler");
+  if (presence.convex) markSigninConnected("convex");
+
+  for (const provider of PASTEABLE_PROVIDERS) {
+    if (!presence.llm[provider]) continue;
+    const input = element<HTMLInputElement>(`llm-${provider}`);
+    const status = element<HTMLElement>(`llm-${provider}-status`);
+    if (input) input.placeholder = "Already saved — leave blank to keep it";
+    if (status) status.hidden = false;
+  }
+  for (const [provider, present] of [
+    ["cloudflare", presence.cloudflare],
+    ["supabase", presence.supabase],
+    ["convex", presence.convex],
+  ] as const) {
+    const status = element<HTMLElement>(`${provider}-token-status`);
+    if (status) status.hidden = !present;
+  }
+  const githubStatus = element<HTMLElement>("github-status");
+  if (githubStatus && presence.github) {
+    githubStatus.textContent = `GitHub connected as ${presence.github}. Search by repository name or paste a public GitHub URL.`;
+  }
+}
+
+function restoreDraft(draft: SetupDraft): void {
+  const selectedAgents = new Set(draft.agents);
+  for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) {
+    input.checked = selectedAgents.has(input.value);
+  }
+  for (const repository of draft.githubRepos) selectedGithubRepositories.add(repository);
+  for (const repository of draft.githubRepos) {
+    if (!knownGithubRepositories.has(repository)) {
+      knownGithubRepositories.set(repository, {
+        fullName: repository,
+        private: false,
+        archived: false,
+        saved: true,
+      });
+    }
+  }
+
+  const status = element<HTMLElement>("setup-draft-status");
+  const message = element<HTMLElement>("setup-draft-message");
+  if (status) status.hidden = false;
+  if (message) {
+    const expires = new Date(draft.expiresAt).toLocaleString();
+    message.textContent = draft.sshKeyChoice === "manual"
+      ? `Saved choices expire ${expires}. Pasted secrets are never saved; paste your SSH public key again before creating the workbench.`
+      : `Saved choices expire ${expires}. Pasted secrets are never saved and may need to be entered again.`;
+  }
+  const githubStatus = element<HTMLElement>("github-status");
+  if (githubStatus && draft.githubRepos.length > 0 && !credentialsPresence?.github) {
+    githubStatus.textContent = `${draft.githubRepos.length} repository selection${draft.githubRepos.length === 1 ? "" : "s"} restored. Search again to refresh access details.`;
+  }
+  if (element("github-repos")) renderGithubRepositories([]);
+}
+
+async function clearDraft(): Promise<void> {
+  const button = requiredElement<HTMLButtonElement>("clear-setup-draft");
+  button.disabled = true;
+  try {
+    await requestJson("/api/setup-draft", { method: "DELETE" });
+    for (const input of form.querySelectorAll<HTMLInputElement>('input[name="agent"]')) input.checked = false;
+    selectedGithubRepositories.clear();
+    const sshKey = element<HTMLTextAreaElement>("ssh-pubkey");
+    if (sshKey) sshKey.value = "";
+    requiredElement<HTMLElement>("setup-draft-status").hidden = true;
+    if (element("github-repos")) renderGithubRepositories([]);
+  } catch (error) {
+    const errorElement = requiredElement<HTMLElement>("err");
+    errorElement.textContent = errorMessage(error, "Could not clear the saved setup choices.");
+    errorElement.focus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+element<HTMLButtonElement>("clear-setup-draft")?.addEventListener("click", () => void clearDraft());
+
+async function restoreSetupState(): Promise<void> {
+  const [draftResult, presenceResult] = await Promise.all([
+    requestJson<{ draft: SetupDraft | null }>("/api/setup-draft").catch(() => ({ draft: null })),
+    requestJson<CredentialsPresence>("/api/credentials").catch(() => null),
+  ]);
+  if (presenceResult) restoreCredentialPresence(presenceResult);
+  if (draftResult.draft) restoreDraft(draftResult.draft);
+}
+
+void restoreSetupState();

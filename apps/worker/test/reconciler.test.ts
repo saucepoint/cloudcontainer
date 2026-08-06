@@ -860,7 +860,7 @@ describe("github token refresh loop", () => {
 });
 
 describe("expired-row cleanup", () => {
-  it("prunes oauth states, old enrollment tokens, and expired Better Auth state", async () => {
+  it("prunes oauth states, setup drafts, old enrollment tokens, and expired Better Auth state", async () => {
     const { env } = makeEnv();
     await seedUser(env);
     const t0 = Date.now();
@@ -868,6 +868,11 @@ describe("expired-row cleanup", () => {
       "INSERT INTO oauth_states (state, user_id, created_at, expires_at) VALUES ('s1', 'user-1', ?, ?)",
     )
       .bind(t0 - 1000, t0 - 1)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO setup_drafts (user_id, draft, updated_at, expires_at) VALUES ('user-1', ?, ?, ?)",
+    )
+      .bind(JSON.stringify({ agents: ["claude"] }), t0 - 1000, t0 - 1)
       .run();
     await env.DB.prepare(
       "INSERT INTO enrollment_tokens (token_hash, user_id, expires_at) VALUES ('h1', 'user-1', ?)",
@@ -890,6 +895,7 @@ describe("expired-row cleanup", () => {
     await reconcile(env, () => t0);
 
     expect((await env.DB.prepare("SELECT * FROM oauth_states").all()).results).toHaveLength(0);
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
     expect((await env.DB.prepare("SELECT * FROM enrollment_tokens").all()).results).toHaveLength(0);
     const sessions = await env.DB.prepare("SELECT id FROM auth_sessions").all<{ id: string }>();
     expect(sessions.results.map((session) => session.id)).toEqual(["recent"]);

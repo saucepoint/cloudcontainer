@@ -44,6 +44,12 @@ import {
 } from "./notifications.js";
 import { allowedUserOps } from "./state.js";
 import {
+  deleteSetupDraft,
+  getSetupDraft,
+  normalizeSetupDraftInput,
+  putSetupDraft,
+} from "./setup-draft.js";
+import {
   insertSshKey,
   sshCommandFor,
   sshKeysView,
@@ -105,6 +111,30 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 export const apiRoutes = new Hono<AppContext>()
+
+  // ------------------------------------------------------------ setup draft
+  // Drafts contain only non-secret selections and expire after one day. The
+  // credential flows continue to persist their encrypted values separately.
+  .get("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json({ draft: await getSetupDraft(c.env, c.get("user").id) });
+  })
+  .put("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+    const body = await readJsonBody<unknown>(c);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json({ error: "bad request" }, 400);
+    }
+    const normalized = normalizeSetupDraftInput(body);
+    if ("error" in normalized) return c.json({ error: normalized.error }, 400);
+    c.header("cache-control", "no-store");
+    return c.json({
+      draft: await putSetupDraft(c.env, c.get("user").id, normalized.value),
+    });
+  })
+  .delete("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+    await deleteSetupDraft(c.env, c.get("user").id);
+    return c.json({ ok: true });
+  })
 
   // ------------------------------------------------------------------ provision
   .post("/api/provision", requireUser, async (c) => {
@@ -202,6 +232,7 @@ export const apiRoutes = new Hono<AppContext>()
       throw error;
     }
     const job = await latestJob(c.env, container.id);
+    await deleteSetupDraft(c.env, user.id);
     return c.json({ container: await containerView(c.env, container, job) }, 202);
   })
 

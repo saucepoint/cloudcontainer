@@ -42,6 +42,86 @@ describe("auth gating", () => {
   });
 });
 
+describe("setup drafts", () => {
+  async function setup() {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    return { env, headers: await login(env, user) };
+  }
+
+  it("stores only resumable, non-secret setup choices and clears them", async () => {
+    const { env, headers } = await setup();
+    const response = await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          step: "github",
+          agents: ["claude", "pi"],
+          githubRepos: ["octocat/public"],
+          sshKeyChoice: "manual",
+          llmKeys: { anthropic: "DO-NOT-STORE" },
+        }),
+      },
+      env,
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { draft: Record<string, unknown> };
+    expect(body.draft).toMatchObject({
+      step: "github",
+      agents: ["pi", "claude"],
+      githubRepos: ["octocat/public"],
+      sshKeyChoice: "manual",
+    });
+
+    const row = await env.DB.prepare("SELECT draft FROM setup_drafts WHERE user_id = ?")
+      .bind("user-1")
+      .first<{ draft: string }>();
+    expect(row?.draft).not.toContain("DO-NOT-STORE");
+
+    const restored = await app().request("/api/setup-draft", { headers }, env);
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({ draft: body.draft });
+
+    const cleared = await app().request("/api/setup-draft", { method: "DELETE", headers }, env);
+    expect(cleared.status).toBe(200);
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
+  });
+
+  it("rejects invalid draft selections and removes expired drafts", async () => {
+    const { env, headers } = await setup();
+    for (const body of [
+      "not-an-object",
+      null,
+      { agents: ["claude", "claude"] },
+      { agents: ["claude"], githubRepos: ["not-a-repository"] },
+      { agents: ["claude"], sshKeyChoice: "private-key" },
+    ]) {
+      const response = await app().request(
+        "/api/setup-draft",
+        {
+          method: "PUT",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+      expect(response.status).toBe(400);
+    }
+
+    await env.DB.prepare(
+      "INSERT INTO setup_drafts (user_id, draft, updated_at, expires_at) VALUES (?, ?, ?, ?)",
+    )
+      .bind("user-1", JSON.stringify({ agents: ["claude"] }), 1, 1)
+      .run();
+    const response = await app().request("/api/setup-draft", { headers }, env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ draft: null });
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
+  });
+});
+
 describe("request limits", () => {
   async function setup() {
     const { env } = makeEnv();
@@ -160,6 +240,16 @@ describe("POST /api/provision", () => {
 
   it("provisions: stores the key, encrypts credentials, dispatches the job", async () => {
     const { env, headers, daemon } = await setup();
+    const draft = await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ step: "review", agents: ["codex", "claude"] }),
+      },
+      env,
+    );
+    expect(draft.status).toBe(200);
     const res = await app().request(
       "/api/provision",
       json(
@@ -191,6 +281,7 @@ describe("POST /api/provision", () => {
     );
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
     expect(JSON.stringify(daemon.submitted)).not.toContain("CANARY-");
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
   });
 
   it("verifies and carries a public GitHub repository into provisioning without a token", async () => {

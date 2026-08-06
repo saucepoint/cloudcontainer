@@ -65,6 +65,18 @@ export class ApiClient {
     return this.request<T>(path, init);
   }
 
+  put<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  delete<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: "DELETE" });
+  }
+
   async exchangeSession(code: string): Promise<string> {
     const response = await this.fetcher(`${this.baseUrl}/api/cli/auth/exchange`, {
       method: "POST",

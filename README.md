@@ -325,6 +325,9 @@ reservations.
 `0017_cli_auth.sql` adds expiring, one-time browser-to-terminal authentication
 handoffs for the `usebench` CLI. Apply the Worker migration and deploy the
 compatible Worker before publishing a CLI version that uses it.
+`0018_setup_drafts.sql` adds expiring, non-secret onboarding checkpoints so the
+browser and CLI can resume setup without storing pasted credentials or SSH key
+material. Apply the Worker migration before publishing a client that uses it.
 
 The CLI package can be built and inspected without publishing:
 
