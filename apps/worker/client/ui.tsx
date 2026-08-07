@@ -5,9 +5,14 @@ import { createRoot } from "react-dom/client";
 import type { Confirmation } from "./confirmation.js";
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+// motion/mini's animate() is Web Animations API-only. Without WAAPI (older
+// webviews, enterprise animation policies, some headless browsers) every call
+// throws, so feature-detect once and degrade to static presentation instead
+// of crashing the shared bundle at module scope.
+const animationsAvailable = typeof Element.prototype.animate === "function";
 
 function reveal(elements: Element | Element[] | NodeListOf<Element>): void {
-  if (reducedMotion.matches) return;
+  if (reducedMotion.matches || !animationsAvailable) return;
   const targets = elements instanceof Element ? [elements] : Array.from(elements);
   if (targets.length === 0) return;
   animate(
@@ -35,7 +40,7 @@ function animateDetailsToggle(
   details: HTMLDetailsElement,
   summary: HTMLElement,
 ): void {
-  if (event.defaultPrevented || reducedMotion.matches) return;
+  if (event.defaultPrevented || reducedMotion.matches || !animationsAvailable) return;
   event.preventDefault();
   if (detailAnimations.has(details)) return;
 
@@ -65,6 +70,41 @@ function animateDetailsToggle(
     if (!opening) details.open = false;
     reset();
   }, reset);
+}
+
+function showToast(message: string): void {
+  document.querySelector(".site-toast")?.remove();
+  const toast = document.createElement("div");
+  toast.className = "site-toast";
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
+  toast.textContent = message;
+  document.body.append(toast);
+  window.setTimeout(() => toast.remove(), 2400);
+}
+
+async function copyContactAddress(address: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(address);
+    showToast("Email copied to clipboard");
+  } catch {
+    showToast("Could not copy email");
+  }
+}
+
+function wireContactLinks(): void {
+  document.querySelectorAll<HTMLAnchorElement>("[data-contact-code]").forEach((link) => {
+    const code = link.dataset.contactCode;
+    if (!code) return;
+    const codePoints = code.split(",").map(Number);
+    if (codePoints.length === 0 || codePoints.some((point) => !Number.isInteger(point) || point < 0 || point > 0x10ffff)) return;
+    const address = String.fromCodePoint(...codePoints);
+    link.href = `mailto:${address}`;
+    link.removeAttribute("data-contact-code");
+    link.addEventListener("click", () => {
+      void copyContactAddress(address);
+    });
+  });
 }
 
 function ConfirmationDialog(): React.JSX.Element {
@@ -116,6 +156,8 @@ function ConfirmationDialog(): React.JSX.Element {
 
 const root = document.getElementById("ui-root");
 if (root) createRoot(root).render(<ConfirmationDialog />);
+
+wireContactLinks();
 
 reveal(document.querySelectorAll("main > h1, main > .lead, main > .landing-hero, main > .card, main > form > .card"));
 

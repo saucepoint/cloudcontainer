@@ -42,6 +42,120 @@ describe("auth gating", () => {
   });
 });
 
+describe("setup drafts", () => {
+  async function setup() {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    return { env, headers: await login(env, user) };
+  }
+
+  it("stores only resumable, non-secret setup choices and clears them", async () => {
+    const { env, headers } = await setup();
+    const response = await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          step: "github",
+          agents: ["claude", "pi"],
+          githubRepos: ["octocat/public"],
+          sshKeyChoice: "manual",
+          llmKeys: { anthropic: "DO-NOT-STORE" },
+        }),
+      },
+      env,
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { draft: Record<string, unknown> };
+    expect(body.draft).toMatchObject({
+      step: "github",
+      agents: ["pi", "claude"],
+      githubRepos: ["octocat/public"],
+      sshKeyChoice: "manual",
+    });
+
+    const row = await env.DB.prepare("SELECT draft FROM setup_drafts WHERE user_id = ?")
+      .bind("user-1")
+      .first<{ draft: string }>();
+    expect(row?.draft).not.toContain("DO-NOT-STORE");
+
+    const restored = await app().request("/api/setup-draft", { headers }, env);
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({ draft: body.draft });
+
+    const cleared = await app().request("/api/setup-draft", { method: "DELETE", headers }, env);
+    expect(cleared.status).toBe(200);
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
+  });
+
+  it("rejects invalid draft selections and removes expired drafts", async () => {
+    const { env, headers } = await setup();
+    for (const body of [
+      "not-an-object",
+      null,
+      { agents: ["claude", "claude"] },
+      { agents: ["claude"], githubRepos: ["not-a-repository"] },
+      { agents: ["claude"], sshKeyChoice: "private-key" },
+    ]) {
+      const response = await app().request(
+        "/api/setup-draft",
+        {
+          method: "PUT",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+      expect(response.status).toBe(400);
+    }
+
+    await env.DB.prepare(
+      "INSERT INTO setup_drafts (user_id, draft, updated_at, expires_at) VALUES (?, ?, ?, ?)",
+    )
+      .bind("user-1", JSON.stringify({ agents: ["claude"] }), 1, 1)
+      .run();
+    const response = await app().request("/api/setup-draft", { headers }, env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ draft: null });
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
+  });
+
+  it("clears only the requested setup draft category", async () => {
+    const { env, headers } = await setup();
+    await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          step: "review",
+          agents: ["claude"],
+          githubRepos: ["octocat/public"],
+          sshKeyChoice: "manual",
+        }),
+      },
+      env,
+    );
+
+    const github = await app().request("/api/setup-draft/github", { method: "DELETE", headers }, env);
+    expect(github.status).toBe(200);
+    expect(await github.json()).toMatchObject({
+      draft: { agents: ["claude"], githubRepos: [], sshKeyChoice: "manual" },
+    });
+
+    const agents = await app().request("/api/setup-draft/agents", { method: "DELETE", headers }, env);
+    expect(agents.status).toBe(200);
+    expect(await agents.json()).toMatchObject({
+      draft: { agents: [], githubRepos: [], sshKeyChoice: "manual" },
+    });
+
+    const ssh = await app().request("/api/setup-draft/ssh", { method: "DELETE", headers }, env);
+    expect(ssh.status).toBe(200);
+    expect(await ssh.json()).toEqual({ ok: true, draft: null });
+  });
+});
+
 describe("request limits", () => {
   async function setup() {
     const { env } = makeEnv();
@@ -160,12 +274,23 @@ describe("POST /api/provision", () => {
 
   it("provisions: stores the key, encrypts credentials, dispatches the job", async () => {
     const { env, headers, daemon } = await setup();
+    const draft = await app().request(
+      "/api/setup-draft",
+      {
+        method: "PUT",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ step: "review", agents: ["codex", "claude"] }),
+      },
+      env,
+    );
+    expect(draft.status).toBe(200);
     const res = await app().request(
       "/api/provision",
       json(
         {
           agents: ["codex", "claude"],
           sshPubkey: PUBKEY,
+          sshKeyLabel: "main laptop",
           llmKeys: { anthropic: "CANARY-llm" },
           cloudflareToken: "cf-token",
           supabaseToken: "CANARY-supabase",
@@ -180,8 +305,8 @@ describe("POST /api/provision", () => {
     expect(body.container.status).toBe("provisioning");
     expect(body.container.agents).toEqual(["codex", "claude"]); // canonical order
 
-    const keys = await env.DB.prepare("SELECT pubkey FROM ssh_keys").all<{ pubkey: string }>();
-    expect(keys.results.map((k) => k.pubkey)).toEqual([PUBKEY]);
+    const keys = await env.DB.prepare("SELECT pubkey, label FROM ssh_keys").all<{ pubkey: string; label: string }>();
+    expect(keys.results).toEqual([{ pubkey: PUBKEY, label: "main laptop" }]);
 
     // Secrets hygiene: canary encrypted in D1, sealed on the wire, absent from job rows.
     const credRow = await env.DB.prepare("SELECT * FROM credentials_encrypted").first();
@@ -191,6 +316,36 @@ describe("POST /api/provision", () => {
     );
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
     expect(JSON.stringify(daemon.submitted)).not.toContain("CANARY-");
+    expect((await env.DB.prepare("SELECT * FROM setup_drafts").all()).results).toHaveLength(0);
+  });
+
+  it("verifies and carries a public GitHub repository into provisioning without a token", async () => {
+    const { env, headers, daemon } = await setup();
+    stubFetch(
+      daemon.route,
+      (url, init) => {
+        if (url.hostname !== "api.github.com" || url.pathname !== "/repos/octocat/public") {
+          return null;
+        }
+        expect(new Headers(init.headers).get("authorization")).toBeNull();
+        return Response.json({
+          full_name: "octocat/public",
+          private: false,
+          archived: false,
+        });
+      },
+    );
+
+    const response = await app().request(
+      "/api/provision",
+      json({ agents: ["codex"], githubRepos: ["octocat/public"] }, headers),
+      env,
+    );
+    expect(response.status).toBe(202);
+    expect(daemon.submitted[0]).toMatchObject({
+      op: "provision",
+      githubRepos: ["octocat/public"],
+    });
   });
 
   it("verifies and carries selected GitHub repositories into provisioning", async () => {
@@ -558,6 +713,106 @@ describe("POST /api/container/:op", () => {
 });
 
 describe("SSH key management", () => {
+  it("shows previously stored keys before a workbench exists", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
+    ).bind(user.id, "old laptop", PUBKEY, Date.now()).run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/keys", { headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      keys: [{ label: "old laptop", pubkey: PUBKEY }],
+    });
+  });
+
+  it("loads public keys from a GitHub username", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    stubFetch((url) => url.hostname === "github.com" && url.pathname === "/octocat.keys"
+      ? new Response(`${PUBKEY}\nssh-rsa AAAAB3NzaC1yc2E= octocat@desktop\n`)
+      : null);
+
+    const response = await app().request("/api/keys/github?username=octocat", { headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      username: "octocat",
+      keys: [
+        { pubkey: PUBKEY, label: "test@laptop" },
+        { label: "octocat@desktop" },
+      ],
+    });
+  });
+
+  it("imports GitHub keys and supports owner-scoped renaming", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "running" });
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      (url) => url.hostname === "github.com" && url.pathname === "/octocat.keys"
+        ? new Response(`${PUBKEY}\nssh-rsa AAAAB3NzaC1yc2E= octocat@desktop\n`)
+        : null,
+    );
+
+    const imported = await app().request(
+      "/api/keys/import/github",
+      json({ username: "octocat", label: "GitHub device" }, headers),
+      env,
+    );
+
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({ imported: 2, duplicates: 0 });
+    const list = await app().request("/api/keys", { headers }, env);
+    const { keys } = (await list.json()) as { keys: Array<{ id: number; label: string }> };
+    expect(keys.map((key) => key.label)).toEqual(["GitHub device 1", "GitHub device 2"]);
+
+    const renamed = await app().request(
+      `/api/keys/${keys[0]!.id}`,
+      { ...json({ label: "home desktop" }, headers), method: "PATCH" },
+      env,
+    );
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({
+      keys: [{ label: "home desktop" }, { label: "GitHub device 2" }],
+    });
+    expect(daemon.submitted).toMatchObject([{ op: "sync-keys" }]);
+  });
+
+  it("provisions multiple imported keys with their optional names", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const response = await app().request(
+      "/api/provision",
+      json({
+        agents: ["claude"],
+        sshKeys: [
+          { pubkey: PUBKEY, label: "laptop" },
+          { pubkey: "ssh-rsa AAAAB3NzaC1yc2E= desktop@home", label: "desktop" },
+        ],
+      }, headers),
+      env,
+    );
+
+    expect(response.status).toBe(202);
+    const keys = await env.DB.prepare("SELECT label FROM ssh_keys ORDER BY id").all<{ label: string }>();
+    expect(keys.results).toEqual([{ label: "laptop" }, { label: "desktop" }]);
+    expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
   it("does not allow key changes or SSH setup prompts until the server is ready", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -717,6 +972,59 @@ describe("credentials endpoint", () => {
       id_token: null,
       provider_id: "google",
     });
+  });
+
+  it("clears credentials by onboarding category without touching other categories", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    await upsertCredentials(env, user.id, {
+      llmKeys: { openai: "CANARY-agent", github_copilot: "CANARY-copilot" },
+      cloudflareToken: "CANARY-cloudflare",
+      supabaseToken: "CANARY-supabase",
+      convexToken: "CANARY-convex",
+      wranglerOauth: '{"oauth_token":"CANARY-wrangler"}',
+    });
+    await env.DB.prepare(
+      `UPDATE credentials_encrypted SET
+         github_token = ?, github_refresh_token = ?, github_expires_at = ?, github_login = ?
+       WHERE user_id = ?`,
+    ).bind(
+      encryptJsonAtRest("CANARY-github", env.CREDENTIAL_MASTER_KEY),
+      encryptJsonAtRest("CANARY-refresh", env.CREDENTIAL_MASTER_KEY),
+      Date.now() + 60_000,
+      "octocat",
+      user.id,
+    ).run();
+
+    expect((await app().request("/api/credentials/agents", { method: "DELETE", headers }, env)).status).toBe(200);
+    let presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({
+      llm: {},
+      github: "octocat",
+      cloudflare: true,
+      supabase: true,
+      convex: true,
+      wrangler: true,
+    });
+
+    expect((await app().request("/api/credentials/github", { method: "DELETE", headers }, env)).status).toBe(200);
+    presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({ github: null, cloudflare: true, supabase: true, convex: true, wrangler: true });
+
+    expect((await app().request("/api/credentials/tools", { method: "DELETE", headers }, env)).status).toBe(200);
+    presence = await (await app().request("/api/credentials", { headers }, env)).json();
+    expect(presence).toMatchObject({
+      llm: {},
+      github: null,
+      cloudflare: false,
+      supabase: false,
+      convex: false,
+      wrangler: false,
+    });
+
+    const unknown = await app().request("/api/credentials/unknown", { method: "DELETE", headers }, env);
+    expect(unknown.status).toBe(400);
   });
 
   it("rejects unknown providers, non-text values, oversized secrets, and pasted OAuth-only credentials", async () => {

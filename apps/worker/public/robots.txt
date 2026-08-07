@@ -1,0 +1,5 @@
+# usebench.dev — allow all crawlers; the site is a public landing page.
+User-agent: *
+Allow: /
+
+Sitemap: https://usebench.dev/sitemap.xml

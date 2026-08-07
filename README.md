@@ -17,6 +17,8 @@ release contract.
 
     packages/contract   Shared Zod wire schemas, Ed25519 request signing,
                         X25519 sealed delivery, and at-rest crypto
+    packages/usebench-cli Keyboard-driven `npx usebench` onboarding CLI;
+                        browser SSO handoff and local SSH setup
     apps/worker         Hono SSR pages and JSON APIs on Cloudflare Workers;
                         Better Auth, D1, and the Cron reconciler
     apps/daemon         Hono on Node.js; verifies signed RPC, opens sealed
@@ -29,7 +31,10 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
 ## User flow
 
 1. The user signs in with Google, GitHub, or an existing passkey, or creates a
-   new passkey-first account through Better Auth.
+   new passkey-first account through Better Auth. The same flow is available
+   from a terminal with `npx usebench`: the CLI opens Google or GitHub in the
+   browser, receives a one-time loopback callback, and resumes onboarding in
+   the terminal.
 2. A new or previously unverified account proves one-person eligibility with
    World ID or redeems an eight-character, single-use administrator invite.
    Existing verified accounts skip this step.
@@ -58,6 +63,16 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
 
+The CLI mirrors the web onboarding choices: it can render a World ID QR code or
+accept an invite, select and authenticate agents, connect GitHub and choose
+repositories, configure model/developer tools, and provision the environment.
+It reuses `~/.ssh/id_ed25519.pub` when requested or can create
+`~/.ssh/workbench_id_ed25519`; after the environment is ready it offers to add
+an explicit managed `Host workbench` entry to `~/.ssh/config`. The local CLI
+session is stored at `~/.config/usebench/session.json` (or under
+`$XDG_CONFIG_HOME`) with restrictive permissions. Use `npx usebench
+--clear-session` to remove it.
+
 The dashboard loads container, credential-presence, and SSH-key data with one
 aggregate request. While work is active, it polls only container state: every
 five seconds for jobs/transitions and every thirty seconds on the waitlist.
@@ -82,7 +97,7 @@ Prepare local D1 and start the Worker:
 
     cd apps/worker
     npm run db:migrate:local
-    npx wrangler dev --var DEV_AUTH:1
+    npx wrangler dev --var DEV_AUTH:1 --var BASE_URL:http://localhost:8787
 
 The dashboard is normally at http://localhost:8787. DEV_AUTH=1 exposes the
 visible local development login and must not be committed as a deployed value.
@@ -95,6 +110,16 @@ To exercise real provisioning, use a Debian 12/13 Linux box or VM with Incus.
 Bootstrap it with [infra/RUNBOOK.md](./infra/RUNBOOK.md), register the host in
 the local D1 database, then run the Worker locally. A file-backed ZFS pool is
 acceptable only for development.
+
+Build and exercise the terminal client against a local Worker with:
+
+    npm run build -w usebench
+    npx usebench --base-url http://localhost:8787
+
+The published package is named `usebench`, so the production entry point is
+`npx usebench`. `--help` documents the non-interactive options; the onboarding
+itself requires a TTY. CLI browser sign-in requires Google or GitHub provider
+secrets in the target Worker; the local `DEV_AUTH=1` shortcut is web-only.
 
 ### Test architecture
 
@@ -238,11 +263,12 @@ Configure the first callback URL as:
 
 Enable **Request user authorization (OAuth) during installation** and expiring
 user-to-server tokens. Grant **Contents: read-only** repository permission
-(Metadata read access is implicit), make the App installable on **Any account**,
-and do not request broader permissions. The single onboarding action opens the
-App installation chooser, where a user selects a personal or organization
-account and grants all or specific repositories. GitHub then continues into
-user authorization and returns to the callback.
+(Metadata read access is implicit) and **SSH signing keys: read and write** user
+permission, make the App installable on **Any account**, and do not request
+other permissions. The single onboarding action opens the App installation
+chooser, where a user selects a personal or organization account and grants all
+or specific repositories. GitHub then continues into user authorization and
+returns to the callback.
 
 Installation and authorization remain distinct GitHub grants even though the
 product presents one browser journey. The installation grant is not a `gh`
@@ -253,16 +279,23 @@ and HTTPS Git access.
 Organization installations may require owner approval. If the organization
 uses SAML SSO, the user must start an active SAML session before using
 **Connect or update GitHub** again. When permissions change, owners of existing
-installations must approve the new permissions in GitHub. Before release, use
-the single action on a test account, grant one private repository, verify that
-search and `gh repo clone` can access it, and verify that an ungranted private
-repository is rejected.
+installations must approve the new permissions in GitHub. Add or update the
+**SSH signing keys** user permission and obtain that approval before deploying
+a daemon release that registers keys. Before release, use the single action on
+a test account, grant one private repository, verify that search and `gh repo
+clone` can access it, verify that a commit pushed from the instance is
+**Verified**, and verify that an ungranted private repository is rejected.
 
 The control plane refreshes access tokens; refresh tokens never leave it.
 Provisioning writes the current short-lived token once to `gh` configuration
 and runs `gh auth setup-git`, so Git reuses `gh auth git-credential` rather than
-storing a duplicate token in `.git-credentials`. Access remains limited to the
-intersection of the user grant and each App installation.
+storing a duplicate token in `.git-credentials`. It also creates a persistent
+SSH signing key at `~/.ssh/workbench_github_signing_key`, idempotently registers
+the public half with the connected GitHub account, and enables Git commit
+signing by default. GitHub can therefore verify commits pushed from the
+instance without a separate manual key upload.
+Access remains limited to the intersection of the user grant and each App
+installation.
 
 ## Repeat deployment
 
@@ -289,6 +322,18 @@ control-plane rollout in the runbook before applying it.
 `0015_host_lifecycle.sql` adds generation history and orderly re-home state.
 `0016_free_tier_cpu.sql` repairs host CPU accounting to the actual 1/3-vCPU
 reservations.
+`0017_cli_auth.sql` adds expiring, one-time browser-to-terminal authentication
+handoffs for the `usebench` CLI. Apply the Worker migration and deploy the
+compatible Worker before publishing a CLI version that uses it.
+`0018_setup_drafts.sql` adds expiring, non-secret onboarding checkpoints so the
+browser and CLI can resume setup without storing pasted credentials or SSH key
+material. Apply the Worker migration before publishing a client that uses it.
+
+The CLI package can be built and inspected without publishing:
+
+    npm run build -w usebench
+    npm run typecheck -w usebench
+    npm pack --dry-run -w usebench
 
 If apps/daemon, packages/contract, its dependencies, the systemd unit, or host
 infrastructure changed, use the fleet controller and the compatibility order

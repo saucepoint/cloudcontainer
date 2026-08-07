@@ -14,6 +14,14 @@ export const AGENT_LABELS: Record<Agent, string> = {
   opencode: "OpenCode",
 };
 
+/** Official home pages for each supported coding agent. */
+export const AGENT_HOMES: Record<Agent, string> = {
+  pi: "https://pi.dev",
+  claude: "https://claude.com/claude-code",
+  codex: "https://openai.com/codex",
+  opencode: "https://opencode.ai",
+};
+
 export const LLM_PROVIDERS = [
   "anthropic",
   "openai",

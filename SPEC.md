@@ -95,6 +95,11 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Optional SSH key, enrollment-token flow, model credentials, Cloudflare, Supabase, and Convex tokens,
   Codex subscription sign-in, and optional GitHub App integration with
   repository selection and automatic cloning.
+- A publishable `usebench` terminal client. `npx usebench` provides a
+  keyboard-driven alternative to the web onboarding flow, with browser-based
+  Google/GitHub SSO, World ID QR or invite verification, agent authentication,
+  GitHub repository selection, optional tool credentials, asynchronous status,
+  and local SSH setup.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
   credential-refresh jobs.
 - Automatic FIFO waitlist admission when host capacity becomes available.
@@ -192,10 +197,45 @@ environment, although a user can run any baked binary.
 
 The interface explains where a beginner can find an SSH public key and offers
 the agent-assisted enrollment path when they do not have one. Secret fields use
-password inputs and are never echoed back.
+password inputs and are never echoed back. The browser and CLI may save a
+short-lived, account-bound setup draft containing only agent choices, selected
+repository names, the setup step, and an SSH-key choice. Drafts expire after
+24 hours, are deleted after provisioning or explicit clearing, and never
+contain API tokens, OAuth tokens, authorization codes, or SSH key material.
+Reloads and OAuth round trips restore that non-secret state. Credential
+connections already stored server-side are shown as saved, and the user gets
+a final review step before the provisioning request is submitted.
 
 Submitting valid choices returns HTTP 202 with the initial container view. It
 does not wait for Incus or package installation.
+
+### 4.2.1 Terminal onboarding
+
+`npx usebench` is a supported onboarding surface for a real TTY. It uses the
+same account, verification, provisioning, and integration APIs as the web
+flow. The CLI must:
+
+- open Google or GitHub SSO in the user's browser and receive the result only
+  through a short-lived, one-time loopback callback;
+- offer World ID Proof of Human through a rendered QR code or accept an
+  administrator invite code;
+- provide keyboard selection for agents, per-agent Claude/ChatGPT sign-in,
+  GitHub App authorization and repository selection, and the supported model,
+  Cloudflare, Supabase, and Convex setup;
+- persist only the Better Auth session cookie locally, under the user's config
+  directory with restrictive permissions, and support clearing that session;
+- resume from the server-side non-secret setup draft after interruption or a
+  browser OAuth round trip; pasted secrets must be requested again, while
+  already stored credential connections remain connected;
+- reuse `~/.ssh/id_ed25519.pub`, generate
+  `~/.ssh/workbench_id_ed25519` when requested, or continue without a key; and
+- after a successful build, ask before adding a managed `Host workbench` block
+  to `~/.ssh/config`. It must never overwrite an unrelated existing
+  `Host workbench` block.
+
+The terminal client does not receive OAuth provider secrets, World ID signing
+keys, stored integration tokens, or credential plaintext from the Worker.
+Browser SSO handoff records and exchange codes expire and are single-use.
 
 ### 4.3 Provisioning, waitlist, and readiness
 
@@ -457,14 +497,19 @@ the upstream flow changes. In-shell login remains the recovery path.
   OAuth or destructive reauthorization action. A working token remains stored
   unless a replacement callback succeeds. The live App must be public and
   installable on any account, request OAuth during installation, use expiring
-  user tokens, and request only read-only Contents permission (plus implicit
-  Metadata). Organization approval, permission-change approval, and an active
-  SAML session remain GitHub-side prerequisites where applicable.
+  user tokens, and request read-only Contents permission (plus implicit
+  Metadata) and user-level SSH signing-key write permission. Organization
+  approval, permission-change approval, and an active SAML session remain
+  GitHub-side prerequisites where applicable.
 - GitHub user-to-server access and refresh tokens are stored encrypted. The App
   installation itself is not an authentication credential. The control-plane
   reconciler refreshes expiring user access; the refresh token never goes to a
   host. The short-lived user access token configures `gh`; Git reuses it through
   `gh auth git-credential`, without a second `.git-credentials` token copy.
+  When GitHub is configured, the daemon creates a persistent SSH signing key at
+  `~/.ssh/workbench_github_signing_key`, idempotently registers its public half
+  with the connected GitHub account, and sets `commit.gpgsign=true` with SSH
+  signing as the global Git default. The private key never leaves the instance.
   Onboarding searches only repositories shared by the user and an App
   installation, revalidates selected names at submission, and clones at most 20
   during provision or rebuild. Ungranted private repositories remain invisible
@@ -690,6 +735,7 @@ operations synchronize keys and credentials.
 | host_history | Immutable class, capacity, release, and hardware snapshot for each retired host ID/generation |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
+| setup_drafts | One expiring, non-secret onboarding draft per user; selections only, never credentials or key material |
 | enrollment_tokens | Hash only; one-hour expiry; single use |
 | oauth_states | Short-lived, user-bound authorization attempts |
 | waitlist | One row per user; requested_at ordering and admitted_at audit |
@@ -817,7 +863,9 @@ Current automated coverage includes:
 - authenticated host registration/probe/state APIs, daemon release telemetry,
   and fleet-controller release ordering;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
-  deletion, and external-call validation;
+  deletion, setup-draft expiry/secret exclusion, and external-call validation;
+- CLI browser-auth handoff, one-time code exchange, session-state redaction,
+  CLI package type-check/build, and SSH configuration rendering;
 - Codex device-flow state and authorization binding;
 - server-rendered page/script smoke tests;
 - daemon config, RPC authorization, Incus command construction, provisioning,
@@ -828,7 +876,9 @@ Current automated coverage includes:
 The repository does not yet contain a nightly real-Incus E2E harness. Before a
 public release, an operator must record:
 
-1. Google and GitHub sign-in callbacks in the production provider apps;
+1. Google and GitHub sign-in callbacks in the production provider apps,
+   including an instance-pushed commit verified with its registered SSH signing
+   key;
 2. passkey-first registration, subsequent passkey sign-in, and backup passkey attachment;
 3. World ID verification, invite verification, attempted nullifier/invite reuse,
    and the all-optional-onboarding-fields-skipped path;
@@ -862,44 +912,48 @@ manual checks above have been completed for affected areas.
    World ID nullifier verifies at most one account; verified accounts route to
    onboarding or dashboard according to workbench existence; logout revokes the
    D1-backed application session.
-2. **Fast onboarding:** agent selection is the only configuration requirement.
+2. **Terminal parity:** `npx usebench` can complete the same verification,
+   agent, integration, provisioning, and readiness flow as the web app from a
+   keyboard-driven TTY; browser SSO codes and CLI sessions are expiring and
+   one-time where applicable.
+3. **Fast onboarding:** agent selection is the only configuration requirement.
    Skipping every credential and SSH field still creates a provisioning or
    waitlisted environment.
-3. **Image readiness:** the base image contains the complete toolchain and all
+4. **Image readiness:** the base image contains the complete toolchain and all
    four agents. Normal provisioning performs no agent package install; an
    intentionally missing selected binary triggers only its fallback installer.
-4. **Provisioning:** successful provisioning produces a Debian 13 environment,
+5. **Provisioning:** successful provisioning produces a Debian 13 environment,
    enforced RAM/CPU/home/root limits, a persistent home volume, and any selected
    GitHub repositories cloned under `~/repos/name` with `gh` authenticated. A
    copyable SSH command and matching host-key fingerprints appear only after an
    authorized key exists.
-5. **No-key safety:** without a key, SSH fails closed. After a successful build,
+6. **No-key safety:** without a key, SSH fails closed. After a successful build,
    a one-hour, single-use enrollment token can add a public key and allow SSH.
-6. **Waitlist:** insufficient capacity produces a clear waitlisted state.
+7. **Waitlist:** insufficient capacity produces a clear waitlisted state.
    Capacity release admits users automatically in deterministic FIFO order
    within the matching pool without double allocation; one exhausted class or
    dedicated account does not block an independent class/account pool.
-7. **Dashboard efficiency:** initial load uses one aggregate request. Only the
+8. **Dashboard efficiency:** initial load uses one aggregate request. Only the
    container view polls during transitional or waitlisted states using
    non-overlapping five-second or thirty-second schedules; one timeout is
    active, polling resumes after visibility/network interruptions, and key
    forms and enrollment output are preserved while available.
-8. **Lifecycle clarity:** failures become error with useful sanitized detail
+9. **Lifecycle clarity:** failures become error with useful sanitized detail
    and retry. Stop/start work, rebuild preserves /home/dev, and destroy removes
    the environment and volume.
-9. **Configuration boundaries:** SSH keys can be added or removed after a
+10. **Configuration boundaries:** SSH keys can be added or removed after a
    successful build. Credentials are set during onboarding and are read-only in
    the dashboard after server creation; later changes require manual terminal
    commands. APIs never return secret values.
-10. **Accessibility:** the core flow is keyboard operable, labels and state are
+11. **Accessibility:** the core flow is keyboard operable, labels and state are
     programmatic, asynchronous changes are announced without poll spam, focus
     remains predictable, and reduced-motion/contrast requirements hold.
-11. **Security:** passwords and root SSH are disabled; credential values are
+12. **Security:** passwords and root SSH are disabled; credential values are
     encrypted at rest, sealed to the host, absent from D1 jobs and logs, and
     written in-container with restrictive ownership/mode.
-12. **Account deletion:** a user can destroy their environment and then purge
+13. **Account deletion:** a user can destroy their environment and then purge
     account data; a hostless waitlist entry does not trap the account.
-13. **Operations:** remote migrations are current, the daemon and Worker can be
+14. **Operations:** remote migrations are current, the daemon and Worker can be
     deployed and verified independently, every active host reports the intended
     daemon release, host onboarding begins draining and requires a signed probe,
     and the documented fleet rollback path has been exercised for any release

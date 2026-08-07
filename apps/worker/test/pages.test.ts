@@ -2,12 +2,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { app as workerApp } from "../src/index.js";
 import { DashboardPage } from "../src/pages/dashboard.js";
+import { LANDING_TERMINAL_PROMPT } from "../client/landing-terminal-model.js";
 import {
   AccountPage,
+  CliAuthPage,
   LandingPage,
   NotFoundPage,
   OnboardingPage,
   SecurityPage,
+  TermsPage,
   VerificationPage,
 } from "../src/pages/views.js";
 import { PAGE_STYLES } from "../src/pages/styles.js";
@@ -30,6 +33,7 @@ const dashboardClient = [
   "dashboard-ssh.tsx",
 ].map((file) => readFileSync(new URL(`../client/${file}`, import.meta.url), "utf8")).join("\n");
 const uiClient = readFileSync(new URL("../client/ui.tsx", import.meta.url), "utf8");
+const cliAuthClient = readFileSync(new URL("../client/cli-auth.ts", import.meta.url), "utf8");
 
 const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false })],
@@ -40,6 +44,7 @@ const pages: Array<[string, () => unknown]> = [
   })],
   ["onboarding", () => OnboardingPage({})],
   ["dashboard", () => DashboardPage({})],
+  ["cli-auth", () => CliAuthPage({ attempt: "a".repeat(64), provider: "google" })],
 ];
 
 describe("compiled page clients", () => {
@@ -57,21 +62,76 @@ describe("compiled page clients", () => {
 describe("landing page call to action", () => {
   it("uses the terminal value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
-    expect(html).toContain("<title>usebench.dev</title>");
+    expect(html).toContain("<title>workbench — your free cloud terminal</title>");
+    expect(html).toContain('name="description"');
+    expect(html).toContain('property="og:title" content="workbench — your free cloud terminal"');
+    expect(html).toContain('property="og:site_name" content="workbench"');
+    expect(html).toContain('property="og:url" content="https://usebench.dev/"');
+    expect(html).toContain('property="og:image" content="https://usebench.dev/og.png"');
+    expect(html).toContain('property="og:image:width" content="1200"');
+    expect(html).toContain('name="twitter:card" content="summary_large_image"');
+    expect(html).toContain('rel="canonical" href="https://usebench.dev/"');
     expect(html).toContain('work<span class="logo-bench">bench</span>');
-    expect(html).toContain("A cloud terminal");
-    expect(html).toContain("an always-on container for long running coding agents");
-    expect(html).toContain("free for each unique person");
+    expect(html).toContain('Your <i>free</i> cloud terminal');
+    expect(html).toContain("an always-on container");
+    expect(html).toContain("access from any terminal client, on any device");
+    expect(html).not.toContain("accessed from any terminal client on any device");
+    expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
+    expect(html).toContain('id="landing-terminal-root"');
+    expect(landingClient).toContain("resumeFromRef");
+    expect(landingClient).toContain("performance.now() - resumeFromRef.current");
+    expect(html).toContain("ssh workbench");
+    expect(html).toContain("Welcome to Debian GNU/Linux 13 (trixie)");
+    expect(html).toContain("cd ~/repos/lantern");
+    expect(landingClient).toContain("OpenAI Codex");
+    expect(landingClient).toContain("(v0.146.0)");
+    expect(landingClient).toContain("gpt-5.6-luna xhigh");
+    expect(landingClient).toContain("/model to change");
+    expect(landingClient).toContain("Start a fresh idea with /new; the previous session stays in history.");
+    expect(html).toContain(LANDING_TERMINAL_PROMPT);
+    expect(html).toContain("Working");
+    expect(html).toContain("Found the app entrypoint");
+    expect(html).toContain("Mapped reusable UI components");
+    expect(html).toContain("Planning a tiny raccoon component heist");
+    expect(html).toContain("terminal-screen terminal-static-screen");
+    expect(html).toContain('class="agent-logo-strip"');
+    expect(html).toContain('aria-label="Supported coding agents"');
+    expect(html).toContain('class="agent-logo agent-logo-pi"');
+    expect(html).toContain('class="agent-logo agent-logo-claude"');
+    expect(html).toContain('class="agent-logo agent-logo-codex"');
+    expect(html).toContain('class="agent-logo agent-logo-opencode"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://pi.dev" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://claude.com/claude-code" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://openai.com/codex" target="_blank"');
+    expect(html).toContain('<a class="agent-logo-item" href="https://opencode.ai" target="_blank"');
+    expect(html).toContain('id="codex-gradient"');
+    expect(html).toContain('stop-color="#B1A7FF"');
+    expect(html).toContain('stop-color="#3941FF"');
+    expect(html).toContain('fill="#CFCECD"');
+    expect(html).toContain('fill="#656363"');
+    expect(html).not.toContain("Pi, Claude Code, Codex, OpenCode");
+    expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf("free tier"));
+    expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf('class="agent-logo-strip"'));
+    expect(html.indexOf('class="agent-logo-strip"')).toBeLessThan(html.indexOf("free tier"));
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
   it("presents the free capacity first and labels the larger tier as upcoming", () => {
     const html = String(LandingPage({ devAuth: false }));
-    const freeTier = "1 vCPU · 1.5 GB RAM · 5 GB Storage";
+    const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
-    const premiumTier = "2 vCPU · 4 GB RAM · 8 GB Storage";
+    const premiumTier = "2 vCPU · 4.0 GB RAM · ";
     expect(html).toContain(freeTier);
     expect(html).toContain(premiumTier);
+    // The copy wrapper keeps the responsive spans inside a single grid item so the
+    // tier badge stays in its own auto column, right-aligned (inline children of a
+    // grid container are blockified into separate items).
+    expect(html).toContain(
+      '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
+    );
+    expect(html).toContain(
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="muted tier-label">coming soon</span>'
+    );
     expect(html).toContain('<span class="muted tier-label">coming soon</span>');
     expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
     expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");
@@ -91,6 +151,18 @@ describe("landing page call to action", () => {
     expect(landingClient).toContain("authClient.signIn.social");
     expect(landingClient).toContain("authClient.passkey.addPasskey");
     expect(landingClient).toContain("authClient.signIn.passkey");
+  });
+});
+
+describe("CLI browser sign-in page", () => {
+  it("uses the selected provider and one-time attempt in the external client", () => {
+    const html = String(CliAuthPage({ attempt: "a".repeat(64), provider: "github" }));
+    expect(html).toContain('id="cli-auth-root"');
+    expect(html).toContain('data-provider="github"');
+    expect(html).toContain('data-attempt="' + "a".repeat(64) + '"');
+    expect(html).toContain('<script type="module" src="/cli-auth.js"></script>');
+    expect(cliAuthClient).toContain("authClient.signIn.social");
+    expect(cliAuthClient).toContain('callbackURL: `/cli/auth/callback?attempt=');
   });
 });
 
@@ -117,7 +189,8 @@ describe("sign-in button icons", () => {
       html.indexOf('id="github-connect"') + 2000,
     );
     expect(connect).toContain('viewBox="0 0 15 15"');
-    expect(connect).toContain("Connect or update GitHub");
+    expect(connect).toContain("Connect GitHub");
+    expect(connect).toContain('id="github-connected"');
     expect(connect).toContain('target="_blank"');
     expect(connect).toContain('rel="noopener noreferrer"');
     expect(html).toContain(".btn svg, .link-btn svg { width: 1em; height: 1em;");
@@ -132,6 +205,10 @@ describe("account eligibility verification", () => {
     expect(html).toContain('src="/account.js"');
     expect(html).toContain("World ID");
     expect(html).toContain("invite");
+    expect(html).toContain('href="http://x.com/messages/compose?recipient_id=1488260920564490242"');
+    expect(html).toContain(">Request Invite</a>");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
   });
 
   it("omits the World ID action when the deployment is not configured", () => {
@@ -291,6 +368,13 @@ describe("subscription sign-in wiring", () => {
     expect(authFlowsClient).toContain('id={config.inputId}');
   });
 
+  it("reuses the agent marks in every setup choice", () => {
+    const html = String(OnboardingPage({}));
+    for (const agent of ["pi", "claude", "codex", "opencode"]) {
+      expect(html).toContain(`class="agent-logo agent-logo-${agent}"`);
+    }
+  });
+
   it("keeps Claude sign-in instructions aligned with the flow container", () => {
     expect(PAGE_STYLES).toContain(".flow-steps { margin: 0.6rem 0; padding-left: 1.2rem; }");
     expect(PAGE_STYLES).not.toContain(".flow-steps { margin: 0.6rem 0 0.6rem 1.2rem; }");
@@ -325,7 +409,12 @@ describe("onboarding wizard order", () => {
     // The SSH key field stays behind the Advanced section.
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key manually");
-    expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
+    expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("Add an SSH public key manually");
+    expect(html).toContain('id="stored-ssh-keys"');
+    expect(html).toContain('id="show-github-ssh-import"');
+    expect(html).toContain('id="github-ssh-keys"');
+    expect(onboardingClient).toContain("/api/keys/github?username=");
+    expect(onboardingClient).toContain("sshKeyLabel");
   });
 
   it("places collapsed Supabase and Convex connections under Cloudflare in Advanced", () => {
@@ -363,30 +452,54 @@ describe("onboarding wizard order", () => {
     const html = String(OnboardingPage({ githubAvailable: true }));
     expect(html).toContain("Set up a workbench.");
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
+    for (const button of [
+      "clear-agent-credentials",
+      "clear-github-credentials",
+      "clear-tools-credentials",
+    ]) {
+      expect(html).toContain(`id="${button}"`);
+    }
+    expect(html).not.toContain("clear-agent-draft");
+    expect(html).not.toContain("clear-github-draft");
+    expect(html).not.toContain("clear-ssh-draft");
+    expect(onboardingClient).toContain("`/api/credentials/${category}`");
+    expect(onboardingClient).toContain("`/api/setup-draft/${draftCategory}`");
+    for (const category of ["agents", "github", "tools", "ssh"]) {
+      expect(onboardingClient).toContain(`"${category}"`);
+    }
   });
 });
 
 describe("GitHub repository onboarding", () => {
   it("offers one combined GitHub connection action and repository selection", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect or update GitHub");
+    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).not.toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).not.toContain("Reauthorize GitHub");
     expect(enabled).not.toContain("/auth/github/install");
     expect(onboardingClient).not.toContain("/auth/github/reauth");
     expect(onboardingClient).toContain("/api/github/repos");
+    expect(onboardingClient).toContain("githubRequired");
     expect(onboardingClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
+    expect(enabled).not.toContain("Search by repository name after connecting");
+    expect(enabled).not.toContain("Private repositories require a GitHub connection");
     expect(enabled).toContain('id="github-repo-search"');
+    expect(enabled).toContain("authenticate <code>gh</code> CLI");
+    expect(enabled).toContain("set ssh signing key for verified commits");
+    expect(enabled).toContain("set git identity");
+    expect(enabled).not.toContain("Connect GitHub and choose personal or organization repositories");
 
     const disabled = String(OnboardingPage({ githubAvailable: false }));
-    expect(disabled).not.toContain("Connect or update GitHub");
+    expect(disabled).not.toContain("Connect GitHub");
     expect(disabled).not.toContain('id="github-repos"');
   });
 
   it("keeps repository selection visible when GitHub is configured", () => {
     const enabled = String(OnboardingPage({ githubAvailable: true }));
-    expect(enabled).toContain("Connect or update GitHub");
+    expect(enabled).toContain("Connect GitHub");
+    expect(enabled).not.toContain("Connect or update GitHub");
     expect(enabled).toContain("/auth/github?return_to=/onboarding");
     expect(enabled).toContain('id="github-repo-search"');
     expect(enabled).toContain('id="github-repos"');
@@ -413,9 +526,9 @@ describe("GitHub repository onboarding", () => {
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
-    expect(onboardingClient).toContain("const selected = new Set(");
-    expect(onboardingClient).toContain("input.checked = selected.has(input.value)");
-    expect(onboardingClient).toContain("sessionStorage.removeItem(agentSelectionKey)");
+    expect(onboardingClient).toContain('requestJson("/api/setup-draft"');
+    expect(onboardingClient).toContain("input.checked = selectedAgents.has(input.value)");
+    expect(onboardingClient).not.toContain("sessionStorage");
     expect(String(OnboardingPage({ githubAvailable: true }))).not.toContain("data-checked");
   });
 });
@@ -468,12 +581,18 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain("SSH setup unlocks after the workbench is ready");
     expect(dashboardClient).not.toContain("Finish building the server before adding keys or creating an agent setup prompt");
     expect(dashboardClient).toContain('container.status === "running" && !hasKeys');
-    expect(dashboardClient).toContain("Add an SSH key to reveal your connection command");
-    expect(dashboardClient).toContain("You cannot see the SSH host or port until a key has been added");
+    expect(dashboardClient).toContain("SSH details are hidden until you add a key");
+    expect(dashboardClient).toContain("Your host, port, and connection command will appear here once a device has access");
     expect(dashboardClient.indexOf('container.status === "running" && !hasKeys')).toBeLessThan(
       dashboardClient.indexOf("if (container.sshCommand)"),
     );
     expect(dashboardClient).toContain("refreshKeysAndConnection");
+    expect(dashboardClient).toContain("Rename");
+    expect(dashboardClient).toContain("Import from GitHub");
+    expect(dashboardClient).toContain("/api/keys/import/github");
+    expect(dashboardClient).toContain("Copy public SSH key");
+    expect(dashboardClient).toContain("See more");
+    expect(dashboardClient).toContain("keys.slice(0, 4)");
   });
 
   it("keeps agent enrollment and manual key entry as exclusive, animated paths", () => {
@@ -482,9 +601,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain('const [enrollmentMode, setEnrollmentMode] = React.useState<EnrollmentMode | null>(null);');
     expect(dashboardClient).toContain('enrollmentMode === "agent" && enrollment');
     expect(dashboardClient).toContain('enrollmentMode === "manual"');
-    expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="wait">');
-    expect(dashboardClient).toContain('height: 0');
-    expect(dashboardClient).toContain('height: "auto"');
+    expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="sync"');
+    expect(dashboardClient).not.toContain('height: 0');
+    expect(dashboardClient).toContain('className="ssh-enrollment-view"');
+    expect(dashboardClient).toContain('mode="sync"');
     expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "agent"}');
     expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "manual"}');
     expect(dashboardClient).not.toContain('{enrollment ? <div>');
@@ -496,8 +616,9 @@ describe("beginner-friendly provisioning UI", () => {
       dashboardClient.indexOf('enrollmentMode === "agent" && enrollment'),
       dashboardClient.indexOf(') : enrollmentMode === "manual" ? ('),
     );
-    expect(enrollmentView.indexOf('Copy prompt')).toBeLessThan(enrollmentView.indexOf('<details>'));
-    expect(enrollmentView).toContain('<summary>Review the setup prompt</summary>');
+    expect(enrollmentView).toContain("Copy Prompt");
+    expect(enrollmentView).toContain('>prompt</button>');
+    expect(enrollmentView).not.toContain("Review the setup prompt");
     expect(enrollmentView).toContain('<pre className="ssh prompt" id="enrollprompt">{prompt}</pre>');
   });
 
@@ -524,6 +645,62 @@ describe("beginner-friendly provisioning UI", () => {
     expect(authFlowsClient).not.toContain("let active = false;");
     expect(authFlowsClient).not.toContain("let activeRoot: Root | null = null;");
     expect(onboardingClient).toContain("isAuthFlowActive(target)");
+  });
+});
+
+describe("site formalities", () => {
+  it("shows terms publicly but only exposes contact after authentication", () => {
+    const landing = String(LandingPage({ devAuth: false }));
+    const html = String(DashboardPage({}));
+    const contactAddress = ["hello", "usebench.dev"].join("@");
+    expect(landing).toContain('class="site-formalities"');
+    expect(landing).toContain('href="/terms">Terms of Service</a>');
+    expect(landing).not.toContain('>Contact</a>');
+    expect(landing).not.toContain("data-contact-code");
+    const contactCode = html.match(/data-contact-code="([^"]+)"/)?.[1];
+    expect(contactCode).toBeDefined();
+    expect(String.fromCodePoint(...(contactCode ?? "").split(",").map(Number))).toBe(contactAddress);
+    expect(html).toContain(">Contact</a>");
+    expect(html).not.toContain(contactAddress);
+    expect(html).not.toContain("mailto:");
+    expect(html).toContain(".site-formalities { position: fixed;");
+    expect(html).toContain(".site-formality { padding: 0.25rem 0; color: var(--line-strong);");
+    expect(html).toContain("font-size: 0.68rem;");
+    expect(html).toContain("body { display: flex; flex-direction: column; }");
+    expect(html).toContain("#app-root { flex: 1; }");
+    expect(html).toContain(".site-formalities { position: static; justify-content: flex-end;");
+    expect(html).toContain(".site-formality { padding: 0.55rem 0; }");
+    expect(html).toContain(".site-toast { bottom: 3.25rem;");
+    expect(html).toContain(".site-toast { position: fixed;");
+    expect(uiClient).toContain('querySelectorAll<HTMLAnchorElement>("[data-contact-code]")');
+    expect(uiClient).toContain("navigator.clipboard.writeText(address)");
+    expect(uiClient).toContain("Email copied to clipboard");
+    expect(uiClient).toContain("mailto:");
+    expect(uiClient).not.toContain(contactAddress);
+  });
+});
+
+describe("terms page", () => {
+  it("states the current service scope and abuse enforcement terms", () => {
+    const html = String(TermsPage({}));
+    expect(html).toContain("Terms of Service.");
+    expect(html).toContain('property="og:url" content="https://usebench.dev/terms"');
+    expect(html).toContain('rel="canonical" href="https://usebench.dev/terms"');
+    expect(html).toContain("no self-service paid subscription");
+    expect(html).toContain("force closure");
+    expect(html).toContain("cancel a subscription");
+    expect(html).toContain("New York");
+    expect(html).toContain("Authenticated users can use the Contact link in the footer");
+    expect(html).not.toContain('id="contact"');
+    expect(html).not.toContain(["hello", "usebench.dev"].join("@"));
+    expect(String(TermsPage({ loggedIn: true }))).toContain('id="contact"');
+  });
+
+  it("is publicly reachable", async () => {
+    const response = await workerApp.request("/terms", {}, makeEnv());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("force closure");
   });
 });
 
@@ -554,9 +731,38 @@ describe("page accessibility and recovery affordances", () => {
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
     expect(uiClient).toContain("HTMLDetailsElement");
+    expect(uiClient).toContain("animationsAvailable");
+    expect(uiClient).toContain('typeof Element.prototype.animate === "function"');
     expect(uiClient).toContain("details.open = true");
     expect(uiClient).toContain("details.open = false");
     expect(uiClient).toContain("animate(\n    details,");
+  });
+});
+
+describe("crawler and social metadata files", () => {
+  const robots = readFileSync(new URL("../public/robots.txt", import.meta.url), "utf8");
+  const sitemap = readFileSync(new URL("../public/sitemap.xml", import.meta.url), "utf8");
+  const ogImage = readFileSync(new URL("../public/og.png", import.meta.url));
+
+  it("lets crawlers in and points them at the sitemap", () => {
+    expect(robots).toContain("User-agent: *");
+    expect(robots).toContain("Allow: /");
+    expect(robots).toContain("Sitemap: https://usebench.dev/sitemap.xml");
+    expect(robots).not.toContain("Disallow");
+  });
+
+  it("lists every public page", () => {
+    expect(sitemap).toContain("https://usebench.dev/");
+    expect(sitemap).toContain("https://usebench.dev/terms");
+    expect(sitemap).toContain("<urlset");
+  });
+
+  it("serves a 1200x630 social card", () => {
+    const width = ogImage.readUInt32BE(16);
+    const height = ogImage.readUInt32BE(20);
+    expect([...ogImage.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(width).toBe(1200);
+    expect(height).toBe(630);
   });
 });
 
@@ -611,6 +817,12 @@ describe("interface foundation", () => {
     expect(html).toContain(".wrap { width: min(100% - 2.5rem, 731px);");
     expect(html).toContain(".landing-hero { text-align: left; }");
     expect(html).toContain(".landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }");
+    expect(html).toContain(".landing-hero .lead { font-size: 0.95rem; }");
+    expect(html).toContain(".landing-terminal-window { overflow: hidden; color: #c9d1d9; background: #0d1117;");
+    expect(html).toContain(".terminal-screen { min-height: 19.8rem;");
+    expect(html).toContain(".terminal-screen { min-height: 19.44rem;");
+    expect(html).toContain("@keyframes terminal-cursor-blink");
+    expect(html).toContain(".terminal-cursor { animation: none; }");
     expect(html).toContain(".spec-list .ok, .spec-list .tier-label { align-self: center;");
     expect(html).toContain(".auth-provider-list { display: grid;");
     expect(html).toContain("padding: 1.1rem 1.25rem;");

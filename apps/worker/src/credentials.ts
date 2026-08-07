@@ -8,6 +8,9 @@ import {
 } from "@workbench/contract";
 import type { Bindings, CredentialsRow } from "./types.js";
 
+export const CREDENTIAL_CATEGORIES = ["agents", "github", "tools"] as const;
+export type CredentialCategory = (typeof CREDENTIAL_CATEGORIES)[number];
+
 export async function getCredentialsRow(
   env: Bindings,
   userId: string,
@@ -46,6 +49,49 @@ export async function deleteStoredCredentials(env: Bindings, userId: string): Pr
     ).bind(Date.now(), userId),
     env.DB.prepare("DELETE FROM oauth_states WHERE user_id = ?").bind(userId),
   ]);
+}
+
+/** Remove only the credentials belonging to one onboarding category. */
+export async function deleteStoredCredentialCategory(
+  env: Bindings,
+  userId: string,
+  category: CredentialCategory,
+): Promise<void> {
+  const row = await getCredentialsRow(env, userId);
+  if (!row) return;
+
+  if (category === "github") {
+    await env.DB.prepare(
+      `UPDATE credentials_encrypted SET
+         github_token = NULL,
+         github_refresh_token = NULL,
+         github_expires_at = NULL,
+         github_login = NULL,
+         rotated_at = ?
+       WHERE user_id = ?`,
+    ).bind(Date.now(), userId).run();
+    return;
+  }
+
+  if (category === "agents") {
+    const llmKeys = decryptLlmKeys(env, row);
+    const removals = Object.fromEntries(
+      Object.keys(llmKeys).map((provider) => [provider, ""]),
+    );
+    if (Object.keys(removals).length > 0) {
+      await upsertCredentials(env, userId, { llmKeys: removals });
+    }
+    return;
+  }
+
+  // Tool credentials are separate from model/agent credentials and are all
+  // stored on the same encrypted row.
+  await upsertCredentials(env, userId, {
+    cloudflareToken: "",
+    supabaseToken: "",
+    convexToken: "",
+    wranglerOauth: "",
+  });
 }
 
 /** Merge new credentials into the encrypted row. Empty-string values delete a key. */

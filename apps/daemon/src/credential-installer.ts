@@ -38,6 +38,7 @@ const CLAUDE_STATE_PATH = "/home/dev/.claude.json";
 const OPENCODE_AUTH_PATH = "/home/dev/.local/share/opencode/auth.json";
 const WRANGLER_CONFIG_PATH = "/home/dev/.wrangler/config/default.toml";
 const CONVEX_CONFIG_PATH = "/home/dev/.convex/config.json";
+const GIT_SIGNING_KEY_PATH = "/home/dev/.ssh/workbench_github_signing_key";
 const MANAGED_CREDENTIAL_STATE_PATH = "/home/dev/.config/workbench/credential-state.json";
 
 type CodexAuthOwner = "pi" | "codex" | "opencode";
@@ -251,6 +252,7 @@ export class CredentialInstaller {
         name,
         'rm -f /home/dev/.git-credentials && su - dev -c "gh auth setup-git --hostname github.com"',
       );
+      await this.configureGitSigning(name, creds.githubLogin?.trim() || "workbench");
     } else {
       await this.incus.shell(
         name,
@@ -309,6 +311,25 @@ export class CredentialInstaller {
       // Best effort: an unreadable MOTD source should never fail a job.
     }
     return creds;
+  }
+
+  /** Configure GitHub identity, then create and register a persistent SSH signing key. */
+  private async configureGitSigning(name: string, githubLogin: string): Promise<void> {
+    const publicKeyPath = `${GIT_SIGNING_KEY_PATH}.pub`;
+    const script = [
+      "install -d -m 700 /home/dev/.ssh",
+      `if test ! -f ${GIT_SIGNING_KEY_PATH}; then rm -f ${publicKeyPath}; ssh-keygen -q -t ed25519 -N '' -C 'workbench commit signing' -f ${GIT_SIGNING_KEY_PATH}; fi`,
+      `if test ! -f ${publicKeyPath}; then ssh-keygen -y -f ${GIT_SIGNING_KEY_PATH} > ${publicKeyPath}; fi`,
+      `public_key="$(cut -d ' ' -f 1-2 ${publicKeyPath})"`,
+      `if ! gh api --paginate user/ssh_signing_keys --jq '.[].key' | cut -d ' ' -f 1-2 | grep -Fqx "$public_key"; then gh api --method POST user/ssh_signing_keys -f title='usebench.dev instance' -F key=@${publicKeyPath} --silent; fi`,
+      `git config --global user.name ${shellQuote(githubLogin)}`,
+      `git config --global user.email ${shellQuote(`${githubLogin}@users.noreply.github.com`)}`,
+      `git config --global gpg.format ssh`,
+      `git config --global user.signingkey ${GIT_SIGNING_KEY_PATH}`,
+      "git config --global commit.gpgsign true",
+      `chmod 600 ${GIT_SIGNING_KEY_PATH} && chmod 644 ${publicKeyPath}`,
+    ].join(" && ");
+    await this.incus.shell(name, `su - dev -c ${shellQuote(script)}`);
   }
 
   private async mergeAgentAuth(

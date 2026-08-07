@@ -7,7 +7,7 @@ import {
   type LlmProvider,
 } from "@workbench/contract";
 import type { NotificationView } from "../notifications.js";
-import { ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
+import { AgentLogo, AgentLogoItem, ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
 const AGENT_DESCRIPTIONS: Record<Agent, string> = {
@@ -17,30 +17,75 @@ const AGENT_DESCRIPTIONS: Record<Agent, string> = {
   opencode: "The open source AI coding agent.",
 };
 
+const LANDING_TERMINAL_PROMPT =
+  "Add a little mischievous raccoon to the web app; animate it as if it were stealing components from the app.";
+
+const LandingTerminalFallback: FC = () => (
+  <div
+    class="landing-terminal-window"
+    role="img"
+    aria-label="Terminal demo: SSH into workbench, open a project repository, launch Codex, and type a prompt."
+  >
+    <div class="terminal-titlebar">
+      <span class="terminal-dots" aria-hidden="true"><i /><i /><i /></span>
+      <span class="terminal-title">ssh workbench</span>
+      <span class="terminal-title-status">codex</span>
+    </div>
+    <div class="terminal-screen terminal-static-screen" aria-hidden="true">
+      <div class="terminal-shell-screen">
+        <div class="terminal-line"><span class="terminal-prompt-label">you@laptop:~$</span> ssh workbench</div>
+        <div class="terminal-line terminal-output yellow">Connecting to workbench...</div>
+        <div class="terminal-line terminal-output">Welcome to Debian GNU/Linux 13 (trixie)</div>
+        <div class="terminal-line terminal-output dim">bash 5.2.37 · x86_64</div>
+        <div class="terminal-line"><span class="terminal-prompt-label">dev@workbench:~$</span> cd ~/repos/lantern</div>
+        <div class="terminal-line"><span class="terminal-prompt-label">dev@workbench:~/repos/lantern$</span> codex</div>
+        <div class="terminal-line terminal-output green">Loading Codex...</div>
+      </div>
+      <div class="terminal-codex-screen">
+        <div class="terminal-codex-conversation">
+          <div class="terminal-codex-user-prompt"><span class="terminal-codex-chevron" aria-hidden="true">›</span><span>{LANDING_TERMINAL_PROMPT}</span></div>
+          <div class="terminal-codex-working"><span class="terminal-codex-working-dot" aria-hidden="true">•</span><strong>Working</strong><span>(3s • esc to interrupt)</span></div>
+          <div class="terminal-codex-result">Found the app entrypoint</div>
+          <div class="terminal-codex-result">Mapped reusable UI components</div>
+          <div class="terminal-codex-result">Planning a tiny raccoon component heist</div>
+        </div>
+        <div class="terminal-codex-footer"><span>gpt-5.6-luna xhigh · ~/repos/lantern</span></div>
+      </div>
+    </div>
+  </div>
+);
+
 export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
   <Layout>
     <div class="landing-hero">
-      <h1 class="landing-title">A cloud terminal <br/>for agents</h1>
+      <h1 class="landing-title">Your <i>free</i> cloud terminal</h1>
       <p class="lead">
-        free for each unique person
+        an always-on container
         <br />
-        an always-on container for long running coding agents
+        access from any terminal client, on any device
         <br />
-        access from any terminal client on any device
+        <i>your workflows, your environment, your terminal</i>
       </p>
+    </div>
+    <section class="landing-terminal" aria-labelledby="landing-terminal-heading">
+      <h2 id="landing-terminal-heading" class="sr-only">SSH terminal demo</h2>
+      <div id="landing-terminal-root">
+        <LandingTerminalFallback />
+      </div>
+      <p class="sr-only">An animated terminal session connects to workbench, opens a project repository, launches Codex, and types a playful request.</p>
+    </section>
+    <div class="agent-logo-strip" role="list" aria-label="Supported coding agents">
+      {AGENTS.map((a) => <AgentLogoItem agent={a} />)}
     </div>
     <div class="card">
       <ul class="check spec-list">
         <li>
-          1 vCPU · 1.5 GB RAM · 5 GB Storage
+          <span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span>
           <span class="ok">free tier</span>
         </li>
         <li>
-          2 vCPU · 4 GB RAM · 8 GB Storage
+          <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
           <span class="muted tier-label">coming soon</span>
-        </li>
-        <li>
-          Pi, Claude Code, Codex, OpenCode
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -70,7 +115,19 @@ export const VerificationPage: FC<{
   worldIdAvailable: boolean;
   notificationCount?: number;
 }> = ({ worldIdAvailable, notificationCount = 0 }) => (
-  <Layout title="Verify your account" loggedIn notificationCount={notificationCount}>
+  <Layout
+    title="Verify your account"
+    loggedIn
+    notificationCount={notificationCount}
+    footerLinks={
+      <a
+        class="site-formality"
+        href="http://x.com/messages/compose?recipient_id=1488260920564490242"
+        target="_blank"
+        rel="noopener noreferrer"
+      >Request Invite</a>
+    }
+  >
     <h1>Verify your account.</h1>
     <p class="lead">
       The free tier is limited to one account per person. {worldIdAvailable
@@ -83,6 +140,27 @@ export const VerificationPage: FC<{
       data-world-id-available={String(worldIdAvailable)}
     ></div>
     <script type="module" src="/account.js"></script>
+  </Layout>
+);
+
+export const CliAuthPage: FC<{
+  attempt: string;
+  provider: "google" | "github";
+}> = ({ attempt, provider }) => (
+  <Layout title="Sign in for the CLI">
+    <h1>Sign in to usebench.</h1>
+    <p class="lead">
+      Continue in this browser to finish the sign-in started by your terminal.
+      Your terminal will receive a separate short-lived session.
+    </p>
+    <section class="card" aria-labelledby="cli-auth-heading">
+      <h2 id="cli-auth-heading">Browser sign-in</h2>
+      <div id="cli-auth-root" data-attempt={attempt} data-provider={provider}>
+        <button class="btn primary" type="button">Continue with {provider === "google" ? "Google" : "GitHub"}</button>
+        <p data-status class="muted" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <script type="module" src="/cli-auth.js"></script>
   </Layout>
 );
 
@@ -256,7 +334,8 @@ const ApiKeyProvider: FC<{
       </a>
     </div>
     <label for={id} class="sr-only">{title}</label>
-    <input id={id} type="password" name={name} autocomplete="off" placeholder={title} />
+    <input id={id} type="password" name={name} autocomplete="off" placeholder={title} data-credential-provider={name.replace("llm_", "")} />
+    <p id={`${id}-status`} class="muted" hidden role="status" aria-live="polite">Saved for this setup. Leave the field blank to keep it.</p>
   </div>
 );
 
@@ -367,6 +446,179 @@ const AgentSignins: FC<{ agent: Agent }> = ({ agent }) => {
   </div>;
 };
 
+export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
+  <Layout title="Terms of Service" description="Terms of Service for usebench.dev: accounts, acceptable use, data, suspension, subscriptions, and liability." path="/terms" loggedIn={loggedIn}>
+    <article class="terms">
+      <h1>Terms of Service.</h1>
+      <p class="terms-meta">Effective August 4, 2026</p>
+
+      <p>
+        These Terms of Service govern your use of usebench.dev. By creating an account, accessing a
+        workbench, or using the site, you agree to these Terms. If you do not agree, do not use the service.
+      </p>
+
+      <h2>1. The service</h2>
+      <p>
+        usebench.dev provides persistent, remote Debian development environments with SSH access and
+        preconfigured coding tools. A workbench is a shared-kernel Linux container, not a hardware-isolated
+        virtual machine. We may change, suspend, or discontinue features, limits, images, or infrastructure.
+      </p>
+      <p>
+        As of the effective date, there is no self-service paid subscription or automatic recurring billing.
+        Free access and operator-entitled paid or dedicated access may be offered under
+        separate plan information. If self-service subscriptions are introduced, the checkout flow and the
+        subscription terms below will apply.
+      </p>
+
+      <h2>2. Accounts</h2>
+      <p>
+        You must provide accurate information, protect your sign-in methods, and promptly tell us about
+        unauthorized access. You are responsible for activity under your account and for complying with the
+        terms of any provider or integration you connect to the service.
+      </p>
+      <p>
+        You may not create or use accounts to evade an eligibility limit, a suspension, or a force closure.
+        We may require additional verification before granting or restoring access.
+      </p>
+
+      <h2>3. Acceptable use</h2>
+      <p>
+        You may use a workbench only for lawful development and related personal or business activities. You
+        must not:
+      </p>
+      <ul>
+        <li>use the service to violate law, court orders, sanctions, or another person’s rights;</li>
+        <li>probe, attack, disrupt, overload, or gain unauthorized access to systems, networks, or accounts;</li>
+        <li>send spam, phishing, malware, ransomware, abusive automation, or unsolicited bulk traffic;</li>
+        <li>mine cryptocurrency, operate persistent high-impact workloads, or evade resource limits;</li>
+        <li>store or distribute content that is unlawful, fraudulent, exploitative, or infringing;</li>
+        <li>resell, sublicense, share, or transfer access without our written permission; or</li>
+        <li>use credentials, tokens, repositories, or third-party services without authorization.</li>
+      </ul>
+      <p>
+        We may investigate suspected abuse using reasonable operational and security signals. Do not place
+        information in a workbench that you cannot risk losing or that requires a regulated hosting environment
+        unless we have expressly agreed to those requirements in writing.
+      </p>
+
+      <h2>4. Your content and integrations</h2>
+      <p>
+        You retain your rights in code, files, repositories, and other content you place in a workbench. You
+        grant us only the limited license needed to host, transmit, back up when explicitly provided, secure,
+        and operate that content for you. You are responsible for your content, licenses, credentials, and
+        actions taken by agents or programs running in your workbench.
+      </p>
+      <p>
+        Third-party agents, model providers, source-control services, and cloud integrations have their own
+        terms and policies. We do not control them and are not responsible for their availability, decisions,
+        charges, or handling of your data.
+      </p>
+
+      <h2>5. Availability and data</h2>
+      <p>
+        The service is provided without a backup, disaster-recovery, or availability guarantee. Provisioning,
+        maintenance, host failure, security response, or a lifecycle operation may make a workbench unavailable
+        or permanently remove its data. Keep independent copies of anything important before rebuilding,
+        stopping, or destroying a workbench.
+      </p>
+      <p>
+        We use reasonable safeguards for the service, but no internet service is completely secure. Never place
+        private keys, passwords, or other secrets in chat, tickets, repositories, or files that do not need them.
+      </p>
+
+      <h2>6. Suspension, termination, and force closure</h2>
+      <p>
+        We may suspend or terminate an account, restrict access, stop a workbench, remove content, or end a
+        placement when we reasonably believe that you violated these Terms, created a security or legal risk,
+        abused resources, used fraudulent credentials, failed to pay an amount due, or exposed us or another
+        person to harm.
+      </p>
+      <p>
+        A <strong>force closure</strong> may happen immediately and without advance notice when delay could
+        increase the risk. It may stop and permanently delete the workbench, release its storage and network
+        resources, and prevent replacement access. We will provide notice when reasonably practical, but notice
+        is not required for urgent security, legal, or abuse responses. Except where the law requires otherwise,
+        a force closure for abuse does not create a refund, credit, or data-recovery obligation.
+      </p>
+      <p>
+        You may stop using the service at any time. Account deletion and workbench destruction are permanent;
+        export anything you need first. Sections that should reasonably survive termination continue to apply.
+      </p>
+
+      <h2>7. Future subscriptions</h2>
+      <p>
+        If we offer a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
+        method will be shown before purchase. Unless the checkout terms say otherwise, a cancellation prevents
+        the next renewal and does not automatically refund the current period.
+      </p>
+      <p>
+        We may cancel a subscription immediately for abuse, a material violation of these Terms, fraud,
+        nonpayment, or a security or legal risk. We may also suspend the associated workbench and permanently
+        remove its data under Section 6. Except where required by law or the applicable checkout terms, an
+        abuse-related cancellation is not eligible for a refund or credit for unused time.
+      </p>
+
+      <h2>8. Intellectual property</h2>
+      <p>
+        The site, service software, branding, documentation, and content supplied by us belong to us or our
+        licensors. We grant you a limited, non-exclusive, revocable right to use them only as needed to use the
+        service. You may send feedback, and we may use it without restriction or payment.
+      </p>
+
+      <h2>9. Disclaimers</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SERVICE IS PROVIDED “AS IS” AND “AS AVAILABLE.” WE DISCLAIM
+        WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, SECURITY,
+        ACCURACY, AND UNINTERRUPTED OR ERROR-FREE OPERATION. WE DO NOT PROMISE THAT A WORKBENCH WILL BE AVAILABLE,
+        SAFE FROM ALL ATTACKS, OR SUITABLE FOR A PARTICULAR WORKLOAD.
+      </p>
+
+      <h2>10. Limitation of liability</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY LAW, usebench.dev and its providers will not be liable for indirect,
+        incidental, special, consequential, exemplary, or punitive damages, or for lost profits, revenue, data,
+        goodwill, or business interruption. Our total liability arising from the service will not exceed the
+        greater of the amounts you paid us for the service in the twelve months before the event or one hundred
+        U.S. dollars. This section does not limit liability that cannot lawfully be limited.
+      </p>
+
+      <h2>11. Indemnity</h2>
+      <p>
+        To the extent permitted by law, you will defend and indemnify usebench.dev and its providers from claims,
+        losses, liabilities, and reasonable costs arising from your content, your use of the service, your
+        violation of these Terms, or your violation of another person’s rights or law.
+      </p>
+
+      <h2>12. Changes</h2>
+      <p>
+        We may update these Terms by posting a revised version with a new effective date. For material changes,
+        we will provide reasonable notice through the service or to the contact information associated with your
+        account. Continuing to use the service after the effective date means you accept the revised Terms.
+      </p>
+
+      <h2>13. Governing law and venue</h2>
+      <p>
+        New York law governs these Terms, without regard to conflict-of-law rules. You and usebench.dev consent
+        to the exclusive jurisdiction and venue of the state and federal courts located in New York County, New
+        York, for disputes that are not otherwise required by law to be brought elsewhere.
+      </p>
+
+      <h2>14. General terms</h2>
+      <p>
+        These Terms are the agreement between you and usebench.dev about the service and replace earlier terms
+        on the same subject. If a provision is unenforceable, the rest remains effective. Our failure to enforce
+        a provision is not a waiver. You may not assign these Terms without our consent; we may assign them in
+        connection with a reorganization, sale, or transfer of the service.
+      </p>
+
+      <h2>15. Contact</h2>
+      <p>
+        Authenticated users can use the Contact link in the footer for questions about these Terms.
+      </p>
+    </article>
+  </Layout>
+);
+
 export const NotFoundPage: FC = () => (
   <Layout title="Page not found">
     <h1>Page not found.</h1>
@@ -387,6 +639,11 @@ export const OnboardingPage: FC<{
       Configure your workbench with agents, models, and credentials. After it is provisioned, changes require
       manual terminal commands.
     </p>
+    <div id="setup-draft-status" class="notice" hidden role="status" aria-live="polite">
+      <strong>We restored your saved setup choices.</strong>
+      <span id="setup-draft-message">Pasted secrets are never saved and may need to be entered again.</span>
+      <button id="clear-setup-draft" class="btn secondary" type="button">Clear saved choices</button>
+    </div>
     <form id="wizard">
       <div class="card">
         <fieldset>
@@ -398,7 +655,7 @@ export const OnboardingPage: FC<{
                   <input type="checkbox" name="agent" value={a} id={`agent-${a}`} />
                   <span class="agent-checkbox" aria-hidden="true">✓</span>
                   <span class="agent-copy">
-                    <span class="agent-title">{AGENT_LABELS[a]}</span>
+                    <span class="agent-title"><AgentLogo agent={a} />{AGENT_LABELS[a]}</span>
                     <small>{AGENT_DESCRIPTIONS[a]}</small>
                   </span>
                 </label>
@@ -427,15 +684,23 @@ export const OnboardingPage: FC<{
             />
           ))}
         </details>
+        <div class="setup-category-actions" aria-label="Coding agents saved setup actions">
+          <button id="clear-agent-credentials" class="btn" type="button">
+            Clear agent credentials
+          </button>
+          <p id="agent-clear-status" class="muted" role="status" aria-live="polite"></p>
+        </div>
       </div>
 
       {githubAvailable ? (
         <div class="card">
           <h2>2. GitHub <span class="muted">optional</span></h2>
-          <p class="muted">
-            Connect GitHub and choose personal or organization repositories. usebench.dev uses the
-            resulting short-lived access to search, clone into <code>~/repos</code>, and sign in <code>gh</code>.
-          </p>
+          <ul class="github-points">
+            <li>clone projects to <code>~/repos</code></li>
+            <li>authenticate <code>gh</code> CLI</li>
+            <li>set ssh signing key for verified commits</li>
+            <li>set git identity</li>
+          </ul>
           <div class="row">
             <a
               id="github-connect"
@@ -444,36 +709,71 @@ export const OnboardingPage: FC<{
               target="_blank"
               rel="noopener noreferrer"
             >
-              <GitHubLogoIcon />Connect or update GitHub
+              <GitHubLogoIcon />Connect GitHub
             </a>
+            <span id="github-connected" class="github-connected" role="status" hidden></span>
           </div>
-          <p id="github-status" class="muted" role="status" aria-live="polite">
-            After connecting, search by repository name or enter an exact owner/repository.
-          </p>
-          <label for="github-repo-search">Search repositories</label>
-          <input id="github-repo-search" type="search" placeholder="repository name or owner/repository" maxLength={256} autocomplete="off" />
+          <p id="github-status" class="muted" role="status" aria-live="polite"></p>
+          <label for="github-repo-search">Search or paste a repository URL</label>
+          <input id="github-repo-search" type="search" placeholder="repository name, owner/repository, or GitHub URL" maxLength={256} autocomplete="off" />
           <fieldset id="github-repos" class="repo-list" aria-label="Repositories to clone"></fieldset>
+          <div class="setup-category-actions" aria-label="GitHub saved setup actions">
+            <button id="clear-github-credentials" class="btn" type="button">
+              Clear GitHub credentials
+            </button>
+            <p id="github-clear-status" class="muted" role="status" aria-live="polite"></p>
+          </div>
         </div>
       ) : null}
 
 
       <div class="card">
         <h2>{githubAvailable ? "3" : "2"}. Advanced <span class="muted">optional</span></h2>
-        <details>
-          <summary>Add an SSH public key manually</summary>
-          <label for="ssh-pubkey">Public key</label>
-          <textarea
-            id="ssh-pubkey"
-            name="sshPubkey"
-            placeholder="ssh-ed25519 AAAA… you@laptop"
-            spellcheck={false}
-            aria-describedby="ssh-key-help"
-          ></textarea>
-          <p id="ssh-key-help" class="muted">
-            Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
-            of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
-            without <code>.pub</code>). Until a key exists the workbench accepts no logins.
-          </p>
+        <details open>
+          <summary>SSH keys</summary>
+          <p class="ssh-section-intro muted">Choose which devices can connect to this workbench. Only public keys are stored.</p>
+          <div class="ssh-saved-label">Previously saved</div>
+          <div id="stored-ssh-keys" class="ssh-key-list" aria-live="polite"></div>
+          <p id="stored-ssh-status" class="muted ssh-saved-status">Checking for previously saved SSH keys…</p>
+          <div class="ssh-key-toolbar">
+            <div class="ssh-key-toolbar-copy">
+              <strong>Add a device</strong>
+              <span class="muted">Import a key or paste one manually.</span>
+            </div>
+            <div class="ssh-key-toolbar-actions">
+            <button id="show-github-ssh-import" class="btn secondary" type="button" aria-expanded="false">
+              Import from GitHub
+            </button>
+            </div>
+          </div>
+          <div id="github-ssh-import" class="ssh-import-panel" hidden>
+            <label for="github-ssh-username">GitHub username</label>
+            <input id="github-ssh-username" type="text" placeholder="octocat" autocomplete="off" />
+            <p class="muted">We’ll read public keys from <code>github.com/username.keys</code>.</p>
+            <button id="load-github-ssh" class="btn" type="button">Load public keys</button>
+            <p id="github-ssh-status" class="muted" role="status" aria-live="polite"></p>
+            <fieldset id="github-ssh-keys" class="ssh-key-list" aria-label="GitHub public SSH keys"></fieldset>
+          </div>
+          <div class="ssh-manual-details">
+            <details open>
+              <summary>Add an SSH public key manually</summary>
+              <label for="ssh-key-label">Key name <span class="muted">optional</span></label>
+              <input id="ssh-key-label" name="sshKeyLabel" type="text" maxLength={64} placeholder="e.g. personal laptop" autocomplete="off" />
+              <label for="ssh-pubkey">Public key</label>
+              <textarea
+                id="ssh-pubkey"
+                name="sshPubkey"
+                placeholder="ssh-ed25519 AAAA… you@laptop"
+                spellcheck={false}
+                aria-describedby="ssh-key-help"
+              ></textarea>
+              <p id="ssh-key-help" class="muted">
+                Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
+                of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
+                without <code>.pub</code>).
+              </p>
+            </details>
+          </div>
         </details>
         <details>
           <summary>Connect Cloudflare</summary>
@@ -500,6 +800,7 @@ export const OnboardingPage: FC<{
             .
           </label>
           <input id="cloudflare-token" type="password" name="cloudflareToken" autocomplete="off" />
+          <p id="cloudflare-token-status" class="muted" hidden role="status" aria-live="polite">A Cloudflare token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
         <details>
           <summary>Connect Supabase</summary>
@@ -511,6 +812,7 @@ export const OnboardingPage: FC<{
             . It will be available to the Supabase CLI as <code>SUPABASE_ACCESS_TOKEN</code>.
           </label>
           <input id="supabase-token" type="password" name="supabaseToken" autocomplete="off" />
+          <p id="supabase-token-status" class="muted" hidden role="status" aria-live="polite">A Supabase token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
         <details>
           <summary>Connect Convex</summary>
@@ -534,8 +836,27 @@ export const OnboardingPage: FC<{
             CLI for this workbench.
           </label>
           <input id="convex-token" type="password" name="convexToken" autocomplete="off" />
+          <p id="convex-token-status" class="muted" hidden role="status" aria-live="polite">A Convex token is already saved for this setup. Leave the field blank to keep it.</p>
         </details>
+        <div class="setup-category-actions" aria-label="Advanced saved setup actions">
+          <button id="clear-tools-credentials" class="btn" type="button">
+            Clear tool credentials
+          </button>
+          <p id="tools-clear-status" class="muted" role="status" aria-live="polite"></p>
+        </div>
       </div>
+
+      <section id="setup-review" class="card" hidden aria-labelledby="setup-review-heading">
+        <h2 id="setup-review-heading" tabindex={-1}>Review your setup</h2>
+        <p class="muted">
+          Confirm the choices below before provisioning. Secret values are never shown here or stored in the setup draft.
+        </p>
+        <ul id="setup-review-items" class="check"></ul>
+        <div class="row">
+          <button id="review-back" class="btn secondary" type="button">Back to editing</button>
+          <button id="review-confirm" class="btn primary" type="button">Create workbench →</button>
+        </div>
+      </section>
 
       <button id="go" class="btn primary create-workbench-btn" type="submit">
         Create workbench →

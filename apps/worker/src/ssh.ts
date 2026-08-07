@@ -3,7 +3,7 @@ import { getContainerForUser, getHost } from "./jobs.js";
 import type { Bindings, ContainerRow } from "./types.js";
 
 const SSH_KEY_RE = /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?$/;
-const SSH_KEY_LABEL_MAX_LENGTH = 64;
+export const SSH_KEY_LABEL_MAX_LENGTH = 64;
 
 type SshKeyInsertResult = "inserted" | "duplicate" | "limit";
 
@@ -15,6 +15,10 @@ export function validPubkey(key: string): boolean {
     SSH_KEY_RE.test(normalized) &&
     new TextEncoder().encode(normalized).byteLength <= INPUT_LIMITS.sshKeyBytes
   );
+}
+
+export function normalizeSshKeyLabel(label: string): string {
+  return label.trim().slice(0, SSH_KEY_LABEL_MAX_LENGTH);
 }
 
 /** SSH key changes need a ready container so they can be applied immediately. */
@@ -40,7 +44,7 @@ export async function insertSshKey(
   )
     .bind(
       userId,
-      label.slice(0, SSH_KEY_LABEL_MAX_LENGTH),
+      normalizeSshKeyLabel(label),
       normalized,
       Date.now(),
       userId,
@@ -81,6 +85,6 @@ export async function sshKeysView(env: Bindings, userId: string) {
     "SELECT id, label, pubkey, created_at FROM ssh_keys WHERE user_id = ? ORDER BY created_at, id",
   )
     .bind(userId)
-    .all();
+    .all<{ id: number; label: string; pubkey: string; created_at: number }>();
   return rows.results;
 }
