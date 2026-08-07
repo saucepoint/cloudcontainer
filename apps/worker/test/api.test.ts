@@ -290,6 +290,7 @@ describe("POST /api/provision", () => {
         {
           agents: ["codex", "claude"],
           sshPubkey: PUBKEY,
+          sshKeyLabel: "main laptop",
           llmKeys: { anthropic: "CANARY-llm" },
           cloudflareToken: "cf-token",
           supabaseToken: "CANARY-supabase",
@@ -304,8 +305,8 @@ describe("POST /api/provision", () => {
     expect(body.container.status).toBe("provisioning");
     expect(body.container.agents).toEqual(["codex", "claude"]); // canonical order
 
-    const keys = await env.DB.prepare("SELECT pubkey FROM ssh_keys").all<{ pubkey: string }>();
-    expect(keys.results.map((k) => k.pubkey)).toEqual([PUBKEY]);
+    const keys = await env.DB.prepare("SELECT pubkey, label FROM ssh_keys").all<{ pubkey: string; label: string }>();
+    expect(keys.results).toEqual([{ pubkey: PUBKEY, label: "main laptop" }]);
 
     // Secrets hygiene: canary encrypted in D1, sealed on the wire, absent from job rows.
     const credRow = await env.DB.prepare("SELECT * FROM credentials_encrypted").first();
@@ -712,6 +713,106 @@ describe("POST /api/container/:op", () => {
 });
 
 describe("SSH key management", () => {
+  it("shows previously stored keys before a workbench exists", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await env.DB.prepare(
+      "INSERT INTO ssh_keys (user_id, label, pubkey, created_at) VALUES (?, ?, ?, ?)",
+    ).bind(user.id, "old laptop", PUBKEY, Date.now()).run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/keys", { headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      keys: [{ label: "old laptop", pubkey: PUBKEY }],
+    });
+  });
+
+  it("loads public keys from a GitHub username", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const headers = await login(env, user);
+    stubFetch((url) => url.hostname === "github.com" && url.pathname === "/octocat.keys"
+      ? new Response(`${PUBKEY}\nssh-rsa AAAAB3NzaC1yc2E= octocat@desktop\n`)
+      : null);
+
+    const response = await app().request("/api/keys/github?username=octocat", { headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      username: "octocat",
+      keys: [
+        { pubkey: PUBKEY, label: "test@laptop" },
+        { label: "octocat@desktop" },
+      ],
+    });
+  });
+
+  it("imports GitHub keys and supports owner-scoped renaming", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    await seedContainer(env, { status: "running" });
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(
+      daemon.route,
+      (url) => url.hostname === "github.com" && url.pathname === "/octocat.keys"
+        ? new Response(`${PUBKEY}\nssh-rsa AAAAB3NzaC1yc2E= octocat@desktop\n`)
+        : null,
+    );
+
+    const imported = await app().request(
+      "/api/keys/import/github",
+      json({ username: "octocat", label: "GitHub device" }, headers),
+      env,
+    );
+
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({ imported: 2, duplicates: 0 });
+    const list = await app().request("/api/keys", { headers }, env);
+    const { keys } = (await list.json()) as { keys: Array<{ id: number; label: string }> };
+    expect(keys.map((key) => key.label)).toEqual(["GitHub device 1", "GitHub device 2"]);
+
+    const renamed = await app().request(
+      `/api/keys/${keys[0]!.id}`,
+      { ...json({ label: "home desktop" }, headers), method: "PATCH" },
+      env,
+    );
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({
+      keys: [{ label: "home desktop" }, { label: "GitHub device 2" }],
+    });
+    expect(daemon.submitted).toMatchObject([{ op: "sync-keys" }]);
+  });
+
+  it("provisions multiple imported keys with their optional names", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
+    const headers = await login(env, user);
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const response = await app().request(
+      "/api/provision",
+      json({
+        agents: ["claude"],
+        sshKeys: [
+          { pubkey: PUBKEY, label: "laptop" },
+          { pubkey: "ssh-rsa AAAAB3NzaC1yc2E= desktop@home", label: "desktop" },
+        ],
+      }, headers),
+      env,
+    );
+
+    expect(response.status).toBe(202);
+    const keys = await env.DB.prepare("SELECT label FROM ssh_keys ORDER BY id").all<{ label: string }>();
+    expect(keys.results).toEqual([{ label: "laptop" }, { label: "desktop" }]);
+    expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
+  });
+
   it("does not allow key changes or SSH setup prompts until the server is ready", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);

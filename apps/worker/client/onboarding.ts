@@ -26,7 +26,7 @@ type SetupDraft = {
   step: "agents" | "agent-auth" | "github" | "tools" | "ssh" | "review";
   agents: string[];
   githubRepos: string[];
-  sshKeyChoice: "none" | "default" | "dedicated" | "manual";
+  sshKeyChoice: "none" | "default" | "dedicated" | "manual" | "github";
   updatedAt: number;
   expiresAt: number;
 };
@@ -46,6 +46,8 @@ type CredentialsPresence = {
 type ProvisionBody = {
   agents: string[];
   sshPubkey: string;
+  sshKeyLabel?: string;
+  sshKeys: Array<{ pubkey: string; label: string }>;
   llmKeys: Record<string, string>;
   cloudflareToken?: string;
   supabaseToken?: string;
@@ -73,6 +75,20 @@ let setupDraft: SetupDraft | null = null;
 let pendingProvision: ProvisionBody | null = null;
 let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
+type SetupSshKey = {
+  id: number;
+  label: string;
+  pubkey: string;
+  created_at: number;
+};
+
+type ImportedSshKey = Pick<SetupSshKey, "label" | "pubkey"> & { selected: boolean };
+const importedGithubKeys = new Map<string, ImportedSshKey>();
+
+function hasSelectedGithubKeys(): boolean {
+  return [...importedGithubKeys.values()].some((key) => key.selected);
+}
+
 function collectProvisionBody(): ProvisionBody {
   const data = new FormData(form);
   const llmKeys: Record<string, string> = {};
@@ -86,6 +102,12 @@ function collectProvisionBody(): ProvisionBody {
   return {
     agents: data.getAll("agent").map((agent) => agent.toString()),
     sshPubkey: (data.get("sshPubkey") || "").toString().trim(),
+    ...((data.get("sshKeyLabel") || "").toString().trim()
+      ? { sshKeyLabel: (data.get("sshKeyLabel") || "").toString().trim() }
+      : {}),
+    sshKeys: [...importedGithubKeys.values()]
+      .filter((key) => key.selected)
+      .map(({ pubkey, label }) => ({ pubkey, label })),
     llmKeys,
     ...(cloudflareToken ? { cloudflareToken } : {}),
     ...(supabaseToken ? { supabaseToken } : {}),
@@ -99,12 +121,13 @@ function draftPayload(step: SetupDraft["step"] = "agents") {
     step,
     agents: new FormData(form).getAll("agent").map((agent) => agent.toString()),
     githubRepos: [...selectedGithubRepositories],
-    // The public key itself is deliberately not persisted. This records only
-    // whether the user chose the manual-key path so the UI can explain why it
-    // must be pasted again after a refresh.
+    // Public key values are deliberately not persisted in drafts. This records
+    // only the selected path so the UI can explain what must be loaded again.
     sshKeyChoice: ((element<HTMLTextAreaElement>("ssh-pubkey")?.value.trim())
       ? "manual"
-      : "none") as SetupDraft["sshKeyChoice"],
+      : hasSelectedGithubKeys()
+        ? "github"
+        : "none") as SetupDraft["sshKeyChoice"],
   };
 }
 
@@ -124,10 +147,11 @@ function scheduleDraftSave(): void {
 }
 
 function reviewItems(body: ProvisionBody): string[] {
+  const newKeyCount = body.sshKeys.length + (body.sshPubkey ? 1 : 0);
   const items = [
     `Agents: ${body.agents.map((agent) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent).join(", ")}`,
     `GitHub repositories: ${body.githubRepos.length ? body.githubRepos.join(", ") : "none"}`,
-    `SSH: ${body.sshPubkey ? "public key ready" : "add a key after the workbench is ready"}`,
+    `SSH: ${newKeyCount ? `${newKeyCount} public key${newKeyCount === 1 ? "" : "s"} ready` : "add a key after the workbench is ready"}`,
   ];
   const connected = new Set<string>();
   for (const provider of Object.keys(credentialsPresence?.llm ?? {})) {
@@ -214,6 +238,116 @@ form.addEventListener("input", (event: Event) => {
   if (event.target instanceof HTMLTextAreaElement && event.target.name === "sshPubkey") {
     scheduleDraftSave();
   }
+  if (event.target instanceof HTMLInputElement && event.target.name === "sshKeyLabel") {
+    scheduleDraftSave();
+  }
+});
+
+function renderStoredSshKeys(keys: SetupSshKey[]): void {
+  const list = requiredElement<HTMLElement>("stored-ssh-keys");
+  const status = requiredElement<HTMLElement>("stored-ssh-status");
+  if (keys.length === 0) {
+    list.replaceChildren();
+    status.textContent = "No SSH keys are saved yet.";
+    return;
+  }
+  status.textContent = `${keys.length} saved SSH key${keys.length === 1 ? "" : "s"} will be available to this workbench.`;
+  list.replaceChildren(...keys.map((key) => {
+    const item = document.createElement("div");
+    const copy = document.createElement("div");
+    const title = document.createElement("div");
+    const indicator = document.createElement("span");
+    const name = document.createElement("strong");
+    const meta = document.createElement("code");
+    item.className = "ssh-key";
+    copy.className = "ssh-key-copy";
+    title.className = "ssh-key-title";
+    indicator.className = "ssh-key-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    name.textContent = key.label || "Unnamed key";
+    meta.className = "ssh-key-meta";
+    meta.textContent = key.pubkey;
+    title.append(indicator, name);
+    copy.append(title, meta);
+    item.append(copy);
+    return item;
+  }));
+}
+
+function renderGithubSshKeys(): void {
+  const list = requiredElement<HTMLElement>("github-ssh-keys");
+  const keys = [...importedGithubKeys.values()];
+  list.replaceChildren(...keys.map((key, index) => {
+    const choice = document.createElement("label");
+    const input = document.createElement("input");
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    const meta = document.createElement("small");
+    choice.className = "ssh-key-choice";
+    input.type = "checkbox";
+    input.id = `github-ssh-key-${index}`;
+    input.value = key.pubkey;
+    input.checked = key.selected;
+    name.textContent = key.label || "Unnamed key";
+    meta.textContent = key.pubkey;
+    copy.append(name, meta);
+    choice.append(input, copy);
+    return choice;
+  }));
+}
+
+async function loadGithubSshKeys(): Promise<void> {
+  const username = requiredElement<HTMLInputElement>("github-ssh-username").value.trim();
+  const status = requiredElement<HTMLElement>("github-ssh-status");
+  const button = requiredElement<HTMLButtonElement>("load-github-ssh");
+  if (!username) {
+    status.textContent = "Enter a GitHub username first.";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Loading public keys…";
+  try {
+    const result = await requestJson<{ keys?: unknown[] }>(
+      `/api/keys/github?username=${encodeURIComponent(username)}`,
+      undefined,
+      "Could not load GitHub SSH keys",
+    );
+    importedGithubKeys.clear();
+    for (const raw of result.keys ?? []) {
+      if (!isRecord(raw) || typeof raw.pubkey !== "string" || typeof raw.label !== "string") continue;
+      importedGithubKeys.set(raw.pubkey, {
+        pubkey: raw.pubkey,
+        label: raw.label,
+        selected: true,
+      });
+    }
+    renderGithubSshKeys();
+    status.textContent = importedGithubKeys.size
+      ? `Select the keys to add when you create the workbench.`
+      : "That GitHub account has no usable public SSH keys.";
+    scheduleDraftSave();
+  } catch (error) {
+    status.textContent = errorMessage(error, "Could not load GitHub SSH keys.");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+element<HTMLButtonElement>("show-github-ssh-import")?.addEventListener("click", () => {
+  const panel = requiredElement<HTMLElement>("github-ssh-import");
+  const button = requiredElement<HTMLButtonElement>("show-github-ssh-import");
+  const open = panel.hidden;
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  if (open) requiredElement<HTMLInputElement>("github-ssh-username").focus();
+});
+element<HTMLButtonElement>("load-github-ssh")?.addEventListener("click", () => void loadGithubSshKeys());
+element<HTMLElement>("github-ssh-keys")?.addEventListener("change", (event: Event) => {
+  if (!(event.target instanceof HTMLInputElement) || event.target.type !== "checkbox") return;
+  const key = importedGithubKeys.get(event.target.value);
+  if (!key) return;
+  key.selected = event.target.checked;
+  scheduleDraftSave();
 });
 
 // Sign-in flows store credentials server-side as soon as they complete.
@@ -432,7 +566,9 @@ function updateDraftStatus(): void {
   const expires = new Date(setupDraft.expiresAt).toLocaleString();
   message.textContent = setupDraft.sshKeyChoice === "manual"
     ? `Saved choices expire ${expires}. Pasted secrets are never saved; paste your SSH public key again before creating the workbench.`
-    : `Saved choices expire ${expires}. Pasted secrets are never saved and may need to be entered again.`;
+    : setupDraft.sshKeyChoice === "github"
+      ? `Saved choices expire ${expires}. GitHub key selections are not saved; load them again before creating the workbench.`
+      : `Saved choices expire ${expires}. Pasted secrets are never saved and may need to be entered again.`;
 }
 
 function applyDraftCategory(category: DraftCategory): void {
@@ -446,6 +582,10 @@ function applyDraftCategory(category: DraftCategory): void {
   } else {
     const sshKey = element<HTMLTextAreaElement>("ssh-pubkey");
     if (sshKey) sshKey.value = "";
+    const sshKeyLabel = element<HTMLInputElement>("ssh-key-label");
+    if (sshKeyLabel) sshKeyLabel.value = "";
+    importedGithubKeys.clear();
+    renderGithubSshKeys();
   }
 }
 
@@ -618,11 +758,20 @@ element<HTMLButtonElement>("clear-tools-credentials")?.addEventListener("click",
 });
 
 async function restoreSetupState(): Promise<void> {
-  const [draftResult, presenceResult] = await Promise.all([
+  const [draftResult, presenceResult, keysResult] = await Promise.all([
     requestJson<{ draft: SetupDraft | null }>("/api/setup-draft").catch(() => ({ draft: null })),
     requestJson<CredentialsPresence>("/api/credentials").catch(() => null),
+    requestJson<{ keys?: unknown[] }>("/api/keys").catch(() => ({ keys: [] })),
   ]);
   if (presenceResult) restoreCredentialPresence(presenceResult);
+  const storedKeys = (keysResult.keys ?? []).filter((key): key is SetupSshKey =>
+    isRecord(key)
+      && typeof key.id === "number"
+      && typeof key.label === "string"
+      && typeof key.pubkey === "string"
+      && typeof key.created_at === "number",
+  );
+  renderStoredSshKeys(storedKeys);
   if (draftResult.draft) restoreDraft(draftResult.draft);
 }
 

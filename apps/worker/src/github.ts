@@ -24,6 +24,7 @@ import {
   getCredentialsRow,
 } from "./credentials.js";
 import { enqueueJobForUser } from "./jobs.js";
+import { normalizeSshKeyLabel, validPubkey } from "./ssh.js";
 import type { AppContext, Bindings } from "./types.js";
 
 interface TokenResponse {
@@ -45,6 +46,49 @@ interface GithubRepositoryResponse {
   private?: boolean;
   archived?: boolean;
   description?: string | null;
+}
+
+const GITHUB_USERNAME_RE = /^(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]{0,37}[A-Za-z0-9])$/;
+const GITHUB_KEYS_RESPONSE_MAX_BYTES = 256 * 1024;
+
+export interface GithubSshKey {
+  pubkey: string;
+  label: string;
+}
+
+export function validGithubUsername(username: string): boolean {
+  return GITHUB_USERNAME_RE.test(username.trim());
+}
+
+/** Fetch public keys from GitHub's conventional `{username}.keys` endpoint. */
+export async function fetchGithubPublicSshKeys(username: string): Promise<GithubSshKey[]> {
+  const normalized = username.trim();
+  if (!validGithubUsername(normalized)) throw new Error("invalid GitHub username");
+  const res = await fetch(
+    `https://github.com/${encodeURIComponent(normalized)}.keys`,
+    {
+      headers: { accept: "text/plain", "user-agent": "usebench.dev" },
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`github ssh keys endpoint ${res.status}`);
+  const text = await res.text();
+  if (new TextEncoder().encode(text).byteLength > GITHUB_KEYS_RESPONSE_MAX_BYTES) {
+    throw new Error("github ssh keys response is too large");
+  }
+  const keys = [...new Set(
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && validPubkey(line)),
+  )];
+  return keys.map((pubkey) => ({
+    pubkey,
+    label: normalizeSshKeyLabel(
+      pubkey.split(/\s+/).slice(2).join(" ").trim() || `GitHub @${normalized}`,
+    ),
+  }));
 }
 
 export function githubConfigured(env: Bindings): boolean {

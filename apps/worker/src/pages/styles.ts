@@ -196,10 +196,65 @@ pre.ssh { margin: 0.65rem 0; padding: 0.8rem 0.9rem; background: var(--surface);
 pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .command-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.9rem; align-items: center; }
 .command-row pre { margin: 0; }
+.ssh-command-heading { display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.ssh-command-heading .muted { font-size: 0.78rem; }
+.ssh-connection-gate { display: grid; gap: 0.15rem; padding: 0.8rem 0; border-block: 1px solid var(--line); }
+.ssh-connection-gate span { color: var(--muted); font-size: 0.86rem; }
 .muted { color: var(--muted); font-size: 0.86rem; }
 .hint { margin: 0.6rem 0 0; }
-.key-fingerprint { font-family: var(--mono); font-size: 0.8rem; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; max-width: 75%; }
+.ssh-keys-heading { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem; padding-top: 1.25rem;
+  border-top: 1px solid var(--line); }
+.ssh-keys-heading h3 { display: flex; gap: 0.5rem; align-items: center; margin: 0; font-size: 0.92rem; }
+.ssh-keys-heading p { margin: 0.2rem 0 0; }
+.ssh-section-intro { margin: 0.7rem 0 1.25rem; }
+.ssh-saved-label { margin-top: 1rem; color: var(--muted); font-family: var(--mono); font-size: 0.68rem;
+  letter-spacing: 0.06em; text-transform: uppercase; }
+.ssh-saved-status { margin: 0.7rem 0 0; }
+.ssh-key-count { display: inline-flex; min-width: 1.35rem; height: 1.35rem; align-items: center; justify-content: center;
+  padding: 0 0.3rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-family: var(--mono);
+  font-size: 0.68rem; font-weight: 500; line-height: 1; }
+.ssh-empty { display: grid; gap: 0.15rem; margin: 1rem 0 0; padding: 1rem 0; border-block: 1px solid var(--line); }
+.ssh-key-list { display: grid; margin: 0.9rem 0 0; padding: 0; list-style: none; }
+.ssh-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem;
+  align-items: start; padding: 1rem 0; border-top: 1px solid var(--line); }
+.ssh-key:last-child { border-bottom: 1px solid var(--line); }
+.ssh-key-copy { min-width: 0; }
+.ssh-key-title { display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
+.ssh-key-indicator { display: inline-block; width: 0.45rem; height: 0.45rem; flex: 0 0 auto; border-radius: 50%; background: var(--accent); }
+.ssh-key-public { margin-top: 0.42rem; }
+.ssh-key-meta { color: var(--muted); font-family: var(--mono); font-size: 0.72rem;
+  display: block; line-height: 1.4; overflow-wrap: anywhere; }
+.ssh-key-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+.icon-btn { width: 2.2rem; min-width: 2.2rem; height: 2.2rem; padding: 0; border: 1px solid var(--line);
+  border-radius: var(--radius); background: transparent; color: var(--muted); text-decoration: none; }
+.icon-btn:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+.icon-btn svg { width: 1rem; height: 1rem; }
+.danger-icon:hover { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.ssh-key-rename { max-width: 28rem; margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.ssh-key-choice { display: flex; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.75rem 0;
+  color: var(--ink); cursor: pointer; }
+.ssh-key-choice + .ssh-key-choice { border-top: 1px solid var(--line); }
+.ssh-key-choice:hover, .ssh-key-choice:has(input:checked) { color: var(--accent); }
+.ssh-key-choice input { flex: 0 0 auto; margin-top: 0.25rem; accent-color: var(--accent); }
+.ssh-key-choice span { min-width: 0; }
+.ssh-key-choice small { display: block; color: var(--muted); font-family: var(--mono); font-size: 0.72rem; }
+.ssh-key-toolbar { display: flex; gap: 1rem; align-items: center; justify-content: space-between; margin-top: 1.25rem;
+  padding-top: 1rem; border-top: 1px solid var(--line); }
+.ssh-key-toolbar-copy { display: grid; gap: 0.12rem; }
+.ssh-key-toolbar-copy .muted { font-size: 0.78rem; }
+.ssh-key-toolbar-actions { display: flex; gap: 0.7rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.ssh-key-toolbar-actions .btn { white-space: nowrap; }
+.ssh-key-toolbar-actions .btn.primary[aria-pressed="true"] { border-color: var(--accent-strong); background: var(--accent-strong); color: #fff; }
+.ssh-agent-link { font-size: 0.82rem; }
+.ssh-agent-link.is-active { color: var(--ink); }
+.ssh-import-panel { margin-top: 1rem; padding: 1rem 0; border-block: 1px solid var(--line); }
+.ssh-manual-details { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.ssh-see-more { display: block; margin: 0.65rem 0 0; padding: 0.2rem 0; border: 0; background: transparent; color: var(--muted);
+  font-size: 0.78rem; cursor: pointer; }
+.ssh-see-more:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 0.16em; }
+.ssh-enrollment-panel { display: grid; margin-top: 1rem; min-width: 0; }
+.ssh-enrollment-view { grid-area: 1 / 1; min-width: 0; }
+.ssh-prompt-link { min-height: 0; padding: 0; font-size: inherit; font-weight: inherit; vertical-align: baseline; }
 .check { list-style: none; padding: 0; margin: 0.25rem 0 0; }
 .github-points { list-style: none; padding: 0; margin: 0.25rem 0 0; color: var(--muted);
   font-size: 0.86rem; }
@@ -388,6 +443,10 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .command-row, .device-flow-code { grid-template-columns: 1fr; }
   .command-row .btn, .device-flow-code .btn { justify-self: start; }
   .github-connected { flex-basis: 100%; align-self: flex-start; }
+  .ssh-key { grid-template-columns: 1fr; }
+  .ssh-key-actions { justify-content: flex-start; }
+  .ssh-key-toolbar { align-items: flex-start; flex-direction: column; }
+  .ssh-key-toolbar-actions { width: 100%; justify-content: flex-start; }
   .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
   .auth-code-row .btn { justify-self: start; }
   .terminal-titlebar { grid-template-columns: 4rem minmax(0, 1fr) 4rem; padding: 0 0.65rem; }

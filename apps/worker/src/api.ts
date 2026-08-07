@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import {
   AGENTS,
   GithubReposSchema,
+  INPUT_LIMITS,
   toHex,
   type JobOp,
 } from "@workbench/contract";
@@ -21,8 +22,10 @@ import {
 import { normalizeCredentialInput, type CredentialInput } from "./credential-input.js";
 import { containerView, credentialsView, currentContainerView } from "./container-view.js";
 import {
+  fetchGithubPublicSshKeys,
   githubAccessToken,
   pushCredentialsToContainer,
+  validGithubUsername,
   verifyGithubRepositories,
 } from "./github.js";
 import {
@@ -55,6 +58,8 @@ import {
 } from "./setup-draft.js";
 import {
   insertSshKey,
+  normalizeSshKeyLabel,
+  SSH_KEY_LABEL_MAX_LENGTH,
   sshCommandFor,
   sshKeysView,
   sshSetupReady,
@@ -160,6 +165,8 @@ export const apiRoutes = new Hono<AppContext>()
     const body = await readJsonBody<{
       agents?: string[];
       sshPubkey?: string;
+      sshKeyLabel?: string;
+      sshKeys?: unknown;
       llmKeys?: Record<string, unknown>;
       cloudflareToken?: unknown;
       supabaseToken?: unknown;
@@ -177,6 +184,15 @@ export const apiRoutes = new Hono<AppContext>()
 
     if (body.sshPubkey !== undefined && typeof body.sshPubkey !== "string") {
       return c.json({ error: "SSH public key must be text" }, 400);
+    }
+    if (body.sshKeyLabel !== undefined && typeof body.sshKeyLabel !== "string") {
+      return c.json({ error: "SSH key name must be text" }, 400);
+    }
+    if (
+      typeof body.sshKeyLabel === "string" &&
+      body.sshKeyLabel.trim().length > SSH_KEY_LABEL_MAX_LENGTH
+    ) {
+      return c.json({ error: `SSH key name must be ${SSH_KEY_LABEL_MAX_LENGTH} characters or fewer` }, 400);
     }
     const pubkey = body.sshPubkey?.trim();
     if (pubkey && !validPubkey(pubkey)) {
@@ -210,9 +226,50 @@ export const apiRoutes = new Hono<AppContext>()
       }
     }
 
-    if (pubkey) {
-      const inserted = await insertSshKey(c.env, user.id, "onboarding", pubkey);
-      if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
+    const requestedKeys = pubkey ? [{ pubkey, label: body.sshKeyLabel ?? "" }] : [];
+    if (body.sshKeys !== undefined && !Array.isArray(body.sshKeys)) {
+      return c.json({ error: "SSH keys must be a list" }, 400);
+    }
+    if (Array.isArray(body.sshKeys)) {
+      for (const key of body.sshKeys) {
+        if (
+          !key || typeof key !== "object" ||
+          typeof (key as { pubkey?: unknown }).pubkey !== "string" ||
+          ((key as { label?: unknown }).label !== undefined && typeof (key as { label?: unknown }).label !== "string")
+        ) {
+          return c.json({ error: "SSH keys must contain public keys and optional names" }, 400);
+        }
+        requestedKeys.push({
+          pubkey: (key as { pubkey: string }).pubkey.trim(),
+          label: (key as { label?: string }).label ?? "",
+        });
+      }
+    }
+    const uniqueKeys = [...new Map(requestedKeys.map((key) => [key.pubkey, key])).values()];
+    for (const key of uniqueKeys) {
+      if (!key.pubkey || !validPubkey(key.pubkey)) {
+        return c.json({ error: "invalid SSH public key" }, 400);
+      }
+      if (key.label.trim().length > SSH_KEY_LABEL_MAX_LENGTH) {
+        return c.json({ error: `SSH key name must be ${SSH_KEY_LABEL_MAX_LENGTH} characters or fewer` }, 400);
+      }
+    }
+    if (uniqueKeys.length > 0) {
+      const existingKeys = await c.env.DB.prepare(
+        "SELECT pubkey FROM ssh_keys WHERE user_id = ?",
+      ).bind(user.id).all<{ pubkey: string }>();
+      const existing = new Set(existingKeys.results.map((key) => key.pubkey));
+      const newKeys = uniqueKeys.filter((key) => !existing.has(key.pubkey));
+      const count = await c.env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM ssh_keys WHERE user_id = ?",
+      ).bind(user.id).first<{ count: number }>();
+      if ((count?.count ?? 0) + newKeys.length > INPUT_LIMITS.sshKeysPerAccount) {
+        return c.json({ error: "SSH key limit reached" }, 409);
+      }
+      for (const key of uniqueKeys) {
+        const inserted = await insertSshKey(c.env, user.id, normalizeSshKeyLabel(key.label), key.pubkey);
+        if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
+      }
     }
     const llmKeys = Object.fromEntries(
       Object.entries(normalized.value.llmKeys).filter(([, value]) => value),
@@ -346,7 +403,19 @@ export const apiRoutes = new Hono<AppContext>()
 
   // ------------------------------------------------------------------ ssh keys
   .get("/api/keys", requireUser, async (c) => {
+    c.header("cache-control", "no-store");
     return c.json({ keys: await sshKeysView(c.env, c.get("user").id) });
+  })
+  .get("/api/keys/github", requireUser, async (c) => {
+    c.header("cache-control", "no-store");
+    const username = c.req.query("username")?.trim() ?? "";
+    if (!validGithubUsername(username)) return c.json({ error: "enter a valid GitHub username" }, 400);
+    try {
+      const keys = await fetchGithubPublicSshKeys(username);
+      return c.json({ username, keys });
+    } catch {
+      return c.json({ error: "Could not load that GitHub user's public SSH keys" }, 502);
+    }
   })
   .post("/api/keys", requireUser, async (c) => {
     if (!(await sshSetupReady(c.env, c.get("user").id))) {
@@ -356,6 +425,9 @@ export const apiRoutes = new Hono<AppContext>()
     if (body?.label !== undefined && typeof body.label !== "string") {
       return c.json({ error: "key label must be text" }, 400);
     }
+    if (typeof body?.label === "string" && body.label.trim().length > SSH_KEY_LABEL_MAX_LENGTH) {
+      return c.json({ error: `key name must be ${SSH_KEY_LABEL_MAX_LENGTH} characters or fewer` }, 400);
+    }
     const pubkey = typeof body?.pubkey === "string" ? body.pubkey.trim() : undefined;
     if (!pubkey || !validPubkey(pubkey)) {
       return c.json({ error: "invalid SSH public key" }, 400);
@@ -364,6 +436,73 @@ export const apiRoutes = new Hono<AppContext>()
     if (inserted === "limit") return c.json({ error: "SSH key limit reached" }, 409);
     await enqueueJobForUser(c.env, c.get("user").id, "sync-keys");
     return c.json({ ok: true, duplicate: inserted === "duplicate" });
+  })
+  .post("/api/keys/import/github", requireUser, async (c) => {
+    const userId = c.get("user").id;
+    if (!(await sshSetupReady(c.env, userId))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
+    }
+    const body = await readJsonBody<{ username?: unknown; label?: unknown }>(c);
+    if (typeof body?.username !== "string" || !validGithubUsername(body.username)) {
+      return c.json({ error: "enter a valid GitHub username" }, 400);
+    }
+    if (body.label !== undefined && typeof body.label !== "string") {
+      return c.json({ error: "key name must be text" }, 400);
+    }
+    if (typeof body.label === "string" && body.label.trim().length > SSH_KEY_LABEL_MAX_LENGTH) {
+      return c.json({ error: `key name must be ${SSH_KEY_LABEL_MAX_LENGTH} characters or fewer` }, 400);
+    }
+    let githubKeys;
+    try {
+      githubKeys = await fetchGithubPublicSshKeys(body.username);
+    } catch {
+      return c.json({ error: "Could not load that GitHub user's public SSH keys" }, 502);
+    }
+    const existingRows = await c.env.DB.prepare(
+      "SELECT pubkey FROM ssh_keys WHERE user_id = ?",
+    ).bind(userId).all<{ pubkey: string }>();
+    const existing = new Set(existingRows.results.map((key) => key.pubkey));
+    const incoming = githubKeys.filter((key, index, all) =>
+      !existing.has(key.pubkey) && all.findIndex((candidate) => candidate.pubkey === key.pubkey) === index,
+    );
+    const count = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM ssh_keys WHERE user_id = ?",
+    ).bind(userId).first<{ count: number }>();
+    if ((count?.count ?? 0) + incoming.length > INPUT_LIMITS.sshKeysPerAccount) {
+      return c.json({ error: "Importing these keys would exceed your SSH key limit" }, 409);
+    }
+    const requestedLabel = typeof body.label === "string" ? normalizeSshKeyLabel(body.label) : "";
+    let imported = 0;
+    for (const [index, key] of githubKeys.entries()) {
+      const label = requestedLabel
+        ? githubKeys.length > 1 ? `${requestedLabel} ${index + 1}` : requestedLabel
+        : key.label;
+      if ((await insertSshKey(c.env, userId, label, key.pubkey)) === "inserted") imported++;
+    }
+    if (imported > 0) await enqueueJobForUser(c.env, userId, "sync-keys");
+    return c.json({
+      ok: true,
+      found: githubKeys.length,
+      imported,
+      duplicates: githubKeys.length - imported,
+      keys: await sshKeysView(c.env, userId),
+    });
+  })
+  .patch("/api/keys/:id", requireUser, async (c) => {
+    const userId = c.get("user").id;
+    if (!(await sshSetupReady(c.env, userId))) {
+      return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
+    }
+    const body = await readJsonBody<{ label?: unknown }>(c);
+    if (typeof body?.label !== "string") return c.json({ error: "key name must be text" }, 400);
+    if (body.label.trim().length > SSH_KEY_LABEL_MAX_LENGTH) {
+      return c.json({ error: `key name must be ${SSH_KEY_LABEL_MAX_LENGTH} characters or fewer` }, 400);
+    }
+    const updated = await c.env.DB.prepare(
+      "UPDATE ssh_keys SET label = ? WHERE id = ? AND user_id = ?",
+    ).bind(normalizeSshKeyLabel(body.label), Number(c.req.param("id")), userId).run();
+    if (!updated.meta.changes) return c.json({ error: "SSH key not found" }, 404);
+    return c.json({ ok: true, keys: await sshKeysView(c.env, userId) });
   })
   .delete("/api/keys/:id", requireUser, async (c) => {
     if (!(await sshSetupReady(c.env, c.get("user").id))) {

@@ -729,21 +729,51 @@ export const OnboardingPage: FC<{
 
       <div class="card">
         <h2>{githubAvailable ? "3" : "2"}. Advanced <span class="muted">optional</span></h2>
-        <details>
-          <summary>Add an SSH public key manually</summary>
-          <label for="ssh-pubkey">Public key</label>
-          <textarea
-            id="ssh-pubkey"
-            name="sshPubkey"
-            placeholder="ssh-ed25519 AAAA… you@laptop"
-            spellcheck={false}
-            aria-describedby="ssh-key-help"
-          ></textarea>
-          <p id="ssh-key-help" class="muted">
-            Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
-            of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
-            without <code>.pub</code>).
-          </p>
+        <details open>
+          <summary>SSH keys</summary>
+          <p class="ssh-section-intro muted">Choose which devices can connect to this workbench. Only public keys are stored.</p>
+          <div class="ssh-saved-label">Previously saved</div>
+          <div id="stored-ssh-keys" class="ssh-key-list" aria-live="polite"></div>
+          <p id="stored-ssh-status" class="muted ssh-saved-status">Checking for previously saved SSH keys…</p>
+          <div class="ssh-key-toolbar">
+            <div class="ssh-key-toolbar-copy">
+              <strong>Add a device</strong>
+              <span class="muted">Import a key or paste one manually.</span>
+            </div>
+            <div class="ssh-key-toolbar-actions">
+            <button id="show-github-ssh-import" class="btn secondary" type="button" aria-expanded="false">
+              Import from GitHub
+            </button>
+            </div>
+          </div>
+          <div id="github-ssh-import" class="ssh-import-panel" hidden>
+            <label for="github-ssh-username">GitHub username</label>
+            <input id="github-ssh-username" type="text" placeholder="octocat" autocomplete="off" />
+            <p class="muted">We’ll read public keys from <code>github.com/username.keys</code>.</p>
+            <button id="load-github-ssh" class="btn" type="button">Load public keys</button>
+            <p id="github-ssh-status" class="muted" role="status" aria-live="polite"></p>
+            <fieldset id="github-ssh-keys" class="ssh-key-list" aria-label="GitHub public SSH keys"></fieldset>
+          </div>
+          <div class="ssh-manual-details">
+            <details open>
+              <summary>Add an SSH public key manually</summary>
+              <label for="ssh-key-label">Key name <span class="muted">optional</span></label>
+              <input id="ssh-key-label" name="sshKeyLabel" type="text" maxLength={64} placeholder="e.g. personal laptop" autocomplete="off" />
+              <label for="ssh-pubkey">Public key</label>
+              <textarea
+                id="ssh-pubkey"
+                name="sshPubkey"
+                placeholder="ssh-ed25519 AAAA… you@laptop"
+                spellcheck={false}
+                aria-describedby="ssh-key-help"
+              ></textarea>
+              <p id="ssh-key-help" class="muted">
+                Run <code>ssh-keygen -t ed25519</code> if you do not have a key, then paste the output
+                of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste the private key (the file
+                without <code>.pub</code>).
+              </p>
+            </details>
+          </div>
         </details>
         <details>
           <summary>Connect Cloudflare</summary>

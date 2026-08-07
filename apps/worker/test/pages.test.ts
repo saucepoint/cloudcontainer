@@ -390,7 +390,12 @@ describe("onboarding wizard order", () => {
     // The SSH key field stays behind the Advanced section.
     expect(html.indexOf('name="sshPubkey"')).toBeGreaterThan(advanced);
     expect(html.slice(advanced)).toContain("Add an SSH public key manually");
-    expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("<details>");
+    expect(html.slice(advanced, html.indexOf('name="sshPubkey"'))).toContain("Add an SSH public key manually");
+    expect(html).toContain('id="stored-ssh-keys"');
+    expect(html).toContain('id="show-github-ssh-import"');
+    expect(html).toContain('id="github-ssh-keys"');
+    expect(onboardingClient).toContain("/api/keys/github?username=");
+    expect(onboardingClient).toContain("sshKeyLabel");
   });
 
   it("places collapsed Supabase and Convex connections under Cloudflare in Advanced", () => {
@@ -557,12 +562,18 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain("SSH setup unlocks after the workbench is ready");
     expect(dashboardClient).not.toContain("Finish building the server before adding keys or creating an agent setup prompt");
     expect(dashboardClient).toContain('container.status === "running" && !hasKeys');
-    expect(dashboardClient).toContain("Add an SSH key to reveal your connection command");
-    expect(dashboardClient).toContain("You cannot see the SSH host or port until a key has been added");
+    expect(dashboardClient).toContain("SSH details are hidden until you add a key");
+    expect(dashboardClient).toContain("Your host, port, and connection command will appear here once a device has access");
     expect(dashboardClient.indexOf('container.status === "running" && !hasKeys')).toBeLessThan(
       dashboardClient.indexOf("if (container.sshCommand)"),
     );
     expect(dashboardClient).toContain("refreshKeysAndConnection");
+    expect(dashboardClient).toContain("Rename");
+    expect(dashboardClient).toContain("Import from GitHub");
+    expect(dashboardClient).toContain("/api/keys/import/github");
+    expect(dashboardClient).toContain("Copy public SSH key");
+    expect(dashboardClient).toContain("See more");
+    expect(dashboardClient).toContain("keys.slice(0, 4)");
   });
 
   it("keeps agent enrollment and manual key entry as exclusive, animated paths", () => {
@@ -571,9 +582,10 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain('const [enrollmentMode, setEnrollmentMode] = React.useState<EnrollmentMode | null>(null);');
     expect(dashboardClient).toContain('enrollmentMode === "agent" && enrollment');
     expect(dashboardClient).toContain('enrollmentMode === "manual"');
-    expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="wait">');
-    expect(dashboardClient).toContain('height: 0');
-    expect(dashboardClient).toContain('height: "auto"');
+    expect(dashboardClient).toContain('<AnimatePresence initial={false} mode="sync"');
+    expect(dashboardClient).not.toContain('height: 0');
+    expect(dashboardClient).toContain('className="ssh-enrollment-view"');
+    expect(dashboardClient).toContain('mode="sync"');
     expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "agent"}');
     expect(dashboardClient).toContain('aria-pressed={enrollmentMode === "manual"}');
     expect(dashboardClient).not.toContain('{enrollment ? <div>');
@@ -585,8 +597,9 @@ describe("beginner-friendly provisioning UI", () => {
       dashboardClient.indexOf('enrollmentMode === "agent" && enrollment'),
       dashboardClient.indexOf(') : enrollmentMode === "manual" ? ('),
     );
-    expect(enrollmentView.indexOf('Copy prompt')).toBeLessThan(enrollmentView.indexOf('<details>'));
-    expect(enrollmentView).toContain('<summary>Review the setup prompt</summary>');
+    expect(enrollmentView).toContain("Copy Prompt");
+    expect(enrollmentView).toContain('>prompt</button>');
+    expect(enrollmentView).not.toContain("Review the setup prompt");
     expect(enrollmentView).toContain('<pre className="ssh prompt" id="enrollprompt">{prompt}</pre>');
   });
 

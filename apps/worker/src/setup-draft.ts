@@ -21,7 +21,7 @@ export type SetupDraftStep = (typeof SETUP_DRAFT_STEPS)[number];
 export const SETUP_DRAFT_CATEGORIES = ["agents", "github", "ssh"] as const;
 export type SetupDraftCategory = (typeof SETUP_DRAFT_CATEGORIES)[number];
 
-export const SETUP_SSH_CHOICES = ["none", "default", "dedicated", "manual"] as const;
+export const SETUP_SSH_CHOICES = ["none", "default", "dedicated", "manual", "github"] as const;
 export type SetupSshChoice = (typeof SETUP_SSH_CHOICES)[number];
 
 export interface SetupDraft {
