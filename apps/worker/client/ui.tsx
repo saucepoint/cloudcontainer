@@ -5,9 +5,14 @@ import { createRoot } from "react-dom/client";
 import type { Confirmation } from "./confirmation.js";
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+// motion/mini's animate() is Web Animations API-only. Without WAAPI (older
+// webviews, enterprise animation policies, some headless browsers) every call
+// throws, so feature-detect once and degrade to static presentation instead
+// of crashing the shared bundle at module scope.
+const animationsAvailable = typeof Element.prototype.animate === "function";
 
 function reveal(elements: Element | Element[] | NodeListOf<Element>): void {
-  if (reducedMotion.matches) return;
+  if (reducedMotion.matches || !animationsAvailable) return;
   const targets = elements instanceof Element ? [elements] : Array.from(elements);
   if (targets.length === 0) return;
   animate(
@@ -35,7 +40,7 @@ function animateDetailsToggle(
   details: HTMLDetailsElement,
   summary: HTMLElement,
 ): void {
-  if (event.defaultPrevented || reducedMotion.matches) return;
+  if (event.defaultPrevented || reducedMotion.matches || !animationsAvailable) return;
   event.preventDefault();
   if (detailAnimations.has(details)) return;
 
