@@ -108,11 +108,20 @@ describe("landing page call to action", () => {
 
   it("presents the free capacity first and labels the larger tier as upcoming", () => {
     const html = String(LandingPage({ devAuth: false }));
-    const freeTier = "1 vCPU · 1.5 GB RAM · 5 GB Storage";
+    const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
-    const premiumTier = "2 vCPU · 4 GB RAM · 8 GB Storage";
+    const premiumTier = "2 vCPU · 4.0 GB RAM · ";
     expect(html).toContain(freeTier);
     expect(html).toContain(premiumTier);
+    // The copy wrapper keeps the responsive spans inside a single grid item so the
+    // tier badge stays in its own auto column, right-aligned (inline children of a
+    // grid container are blockified into separate items).
+    expect(html).toContain(
+      '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
+    );
+    expect(html).toContain(
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="muted tier-label">coming soon</span>'
+    );
     expect(html).toContain('<span class="muted tier-label">coming soon</span>');
     expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
     expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");

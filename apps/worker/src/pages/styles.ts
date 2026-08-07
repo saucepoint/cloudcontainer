@@ -409,6 +409,8 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .spec-list li { justify-content: flex-start; }
 .spec-list .ok, .spec-list .tier-label { align-self: center; display: inline-flex; align-items: center; margin-left: auto;
   font-family: var(--mono); font-size: 0.75rem; line-height: 1.2; white-space: nowrap; }
+.landing-only-desktop { display: inline; }
+.landing-only-mobile { display: none; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; background: rgb(32 32 29 / 0.32);
   transition: opacity 140ms ease; }
 .dialog-viewport { position: fixed; inset: 0; z-index: 51; display: grid; place-items: center;
@@ -434,6 +436,8 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   h1 { font-size: clamp(2.4rem, 13vw, 3.5rem); }
   p.lead { margin-bottom: 2.5rem; }
   .landing-hero .lead { font-size: 0.95rem; }
+  .landing-only-desktop { display: none; }
+  .landing-only-mobile { display: inline; }
   .card { padding: 1rem 0 1.8rem; }
   .btn, .link-btn { min-height: 2.75rem; }
   .agents { grid-template-columns: 1fr; }

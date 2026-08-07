@@ -80,11 +80,11 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
     <div class="card">
       <ul class="check spec-list">
         <li>
-          1 vCPU · 1.5 GB RAM · 5 GB Storage
+          <span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span>
           <span class="ok">free tier</span>
         </li>
         <li>
-          2 vCPU · 4 GB RAM · 8 GB Storage
+          <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
           <span class="muted tier-label">coming soon</span>
         </li>
         <li>
