@@ -62,7 +62,15 @@ describe("compiled page clients", () => {
 describe("landing page call to action", () => {
   it("uses the terminal value proposition before the client-rendered sign-in choices", () => {
     const html = String(LandingPage({ devAuth: false }));
-    expect(html).toContain("<title>usebench.dev</title>");
+    expect(html).toContain("<title>workbench — your free cloud terminal</title>");
+    expect(html).toContain('name="description"');
+    expect(html).toContain('property="og:title" content="workbench — your free cloud terminal"');
+    expect(html).toContain('property="og:site_name" content="workbench"');
+    expect(html).toContain('property="og:url" content="https://usebench.dev/"');
+    expect(html).toContain('property="og:image" content="https://usebench.dev/og.png"');
+    expect(html).toContain('property="og:image:width" content="1200"');
+    expect(html).toContain('name="twitter:card" content="summary_large_image"');
+    expect(html).toContain('rel="canonical" href="https://usebench.dev/"');
     expect(html).toContain('work<span class="logo-bench">bench</span>');
     expect(html).toContain('Your <i>free</i> cloud terminal');
     expect(html).toContain("an always-on container");
@@ -70,6 +78,8 @@ describe("landing page call to action", () => {
     expect(html).not.toContain("accessed from any terminal client on any device");
     expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
     expect(html).toContain('id="landing-terminal-root"');
+    expect(landingClient).toContain("resumeFromRef");
+    expect(landingClient).toContain("performance.now() - resumeFromRef.current");
     expect(html).toContain("ssh workbench");
     expect(html).toContain("Welcome to Debian GNU/Linux 13 (trixie)");
     expect(html).toContain("cd ~/repos/lantern");
@@ -674,6 +684,8 @@ describe("terms page", () => {
   it("states the current service scope and abuse enforcement terms", () => {
     const html = String(TermsPage({}));
     expect(html).toContain("Terms of Service.");
+    expect(html).toContain('property="og:url" content="https://usebench.dev/terms"');
+    expect(html).toContain('rel="canonical" href="https://usebench.dev/terms"');
     expect(html).toContain("no self-service paid subscription");
     expect(html).toContain("force closure");
     expect(html).toContain("cancel a subscription");
@@ -719,9 +731,38 @@ describe("page accessibility and recovery affordances", () => {
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
     expect(uiClient).toContain("HTMLDetailsElement");
+    expect(uiClient).toContain("animationsAvailable");
+    expect(uiClient).toContain('typeof Element.prototype.animate === "function"');
     expect(uiClient).toContain("details.open = true");
     expect(uiClient).toContain("details.open = false");
     expect(uiClient).toContain("animate(\n    details,");
+  });
+});
+
+describe("crawler and social metadata files", () => {
+  const robots = readFileSync(new URL("../public/robots.txt", import.meta.url), "utf8");
+  const sitemap = readFileSync(new URL("../public/sitemap.xml", import.meta.url), "utf8");
+  const ogImage = readFileSync(new URL("../public/og.png", import.meta.url));
+
+  it("lets crawlers in and points them at the sitemap", () => {
+    expect(robots).toContain("User-agent: *");
+    expect(robots).toContain("Allow: /");
+    expect(robots).toContain("Sitemap: https://usebench.dev/sitemap.xml");
+    expect(robots).not.toContain("Disallow");
+  });
+
+  it("lists every public page", () => {
+    expect(sitemap).toContain("https://usebench.dev/");
+    expect(sitemap).toContain("https://usebench.dev/terms");
+    expect(sitemap).toContain("<urlset");
+  });
+
+  it("serves a 1200x630 social card", () => {
+    const width = ogImage.readUInt32BE(16);
+    const height = ogImage.readUInt32BE(20);
+    expect([...ogImage.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(width).toBe(1200);
+    expect(height).toBe(630);
   });
 });
 

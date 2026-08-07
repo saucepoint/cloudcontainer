@@ -447,7 +447,7 @@ const AgentSignins: FC<{ agent: Agent }> = ({ agent }) => {
 };
 
 export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
-  <Layout title="Terms of Service" loggedIn={loggedIn}>
+  <Layout title="Terms of Service" description="Terms of Service for usebench.dev: accounts, acceptable use, data, suspension, subscriptions, and liability." path="/terms" loggedIn={loggedIn}>
     <article class="terms">
       <h1>Terms of Service.</h1>
       <p class="terms-meta">Effective August 4, 2026</p>

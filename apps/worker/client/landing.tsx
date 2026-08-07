@@ -95,6 +95,10 @@ function TerminalDemo(): React.JSX.Element {
   const terminalRef = React.useRef<HTMLDivElement>(null);
   const [elapsed, setElapsed] = React.useState(0);
   const [visible, setVisible] = React.useState(true);
+  // Keep the timeline position across visibility toggles so the demo
+  // pauses and resumes instead of restarting from zero (which made it look
+  // frozen mid-typing after scrolling back to it).
+  const resumeFromRef = React.useRef(0);
 
   React.useEffect(() => {
     const node = terminalRef.current;
@@ -108,10 +112,12 @@ function TerminalDemo(): React.JSX.Element {
 
   React.useEffect(() => {
     if (reducedMotion || !visible) return;
-    const startedAt = performance.now();
+    const startedAt = performance.now() - resumeFromRef.current;
     let animationFrame = 0;
     const tick = (now: number) => {
-      setElapsed(now - startedAt);
+      const nextElapsed = now - startedAt;
+      resumeFromRef.current = nextElapsed;
+      setElapsed(nextElapsed);
       animationFrame = requestAnimationFrame(tick);
     };
     animationFrame = requestAnimationFrame(tick);
