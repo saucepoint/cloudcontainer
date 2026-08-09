@@ -1,7 +1,7 @@
 import type { Bindings } from "./types.js";
 
 /** Pinned with the webhook destination; upgrade only with refreshed fixtures. */
-export const STRIPE_API_VERSION = "2025-03-31.basil";
+export const STRIPE_API_VERSION = "2026-07-29.dahlia";
 export const STRIPE_WEBHOOK_TOLERANCE_SEC = 300;
 export const PAID_TRIAL_DAYS = 7;
 
@@ -161,11 +161,14 @@ export async function createStripeCheckoutSession(
   const form = new URLSearchParams({
     mode: "subscription",
     customer: input.customerId,
+    payment_method_collection: "always",
     client_reference_id: input.userId,
     "line_items[0][price]": paidPriceId(env),
     "line_items[0][quantity]": "1",
     "subscription_data[metadata][userId]": input.userId,
     "subscription_data[metadata][plan]": "paid",
+    "subscription_data[billing_mode][type]": "flexible",
+    "subscription_data[billing_mode][flexible][proration_discounts]": "itemized",
     "subscription_data[trial_period_days]": String(PAID_TRIAL_DAYS),
     "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
     "automatic_tax[enabled]": env.STRIPE_TAX_ENABLED === "1" ? "true" : "false",

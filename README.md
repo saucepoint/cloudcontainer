@@ -216,12 +216,22 @@ In Stripe, create one monthly Paid Price, enable the Customer Portal for
 payment-method and invoice management, permit cancellation at period end, and
 leave arbitrary product/quantity switching disabled. Register
 `https://YOUR_BASE_URL/api/stripe/webhook` as an account event destination with
-API version `2025-03-31.basil` and the event set listed in
+API version `2026-07-29.dahlia` and the event set listed in
 [MONETIZATION.md](./MONETIZATION.md#97-events-to-subscribe-to). Store the
 resulting signing secret with `wrangler secret put STRIPE_WEBHOOK_SECRET`.
+Restrict the webhook route at the Cloudflare edge to Stripe's published webhook
+IP ranges while retaining signature verification in the Worker.
+Under **Billing > Subscriptions and emails**, enable Stripe's trial-ending
+reminder, failed-payment emails, and a Stripe-hosted customer-management link;
+configure the cancellation-policy URL for the staging or production account as
+appropriate. These settings are part of card-network trial compliance and are
+separate for Stripe sandboxes and live mode. Configure Smart Retries according
+to the approved recovery policy; the application never infers a fixed retry
+schedule from Stripe events.
+
 Checkout always selects the configured Price server-side; its success redirect
 does not grant access. Every self-service Paid Checkout starts a fixed seven-day
-trial, collects a payment method using Stripe's default Checkout behavior, and
+trial, explicitly requires Checkout to collect a payment method, and
 asks Stripe to cancel if no payment method is present at trial end. A canceled
 trial or failed first charge removes Paid access; verified owners return to
 Free resources, while paid-bypass owners are billing-suspended.

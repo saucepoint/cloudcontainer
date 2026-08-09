@@ -55,6 +55,7 @@ const SUPPORTED_EVENT_TYPES = new Set([
   "customer.subscription.deleted",
   "customer.subscription.paused",
   "customer.subscription.resumed",
+  "customer.subscription.trial_will_end",
   "invoice.paid",
   "invoice.payment_failed",
   "invoice.payment_action_required",
@@ -620,10 +621,11 @@ async function applyCanonicalSubscription(
   const authoritativeSubscription = otherLiveSubscription === null;
   const item = input.subscription.items.data[0]!;
   // Stripe emits invoice.paid for the zero-value invoice that opens a free
-  // trial. Only a positive collected amount establishes paid-through service;
-  // the trial itself is bounded independently by trial_end.
+  // trial. Stripe recommends provisioning only when invoice.paid accompanies
+  // canonical active subscription state. That also permits legitimate
+  // zero-amount settled renewals covered by credits or discounts.
   const paidInvoice = input.eventType === "invoice.paid" &&
-    typeof invoice?.amount_paid === "number" && invoice.amount_paid > 0;
+    input.subscription.status === "active";
   const paidThrough = paidInvoice ? item.current_period_end * 1000 : null;
   const serviceUntil = Math.max(existing?.service_until ?? 0, paidThrough ?? 0) || null;
   const graceUntil = input.eventType === "invoice.payment_failed" && serviceUntil !== null &&
@@ -771,7 +773,19 @@ async function applyCanonicalSubscription(
     );
   }
   const noticeId = `billing:${input.eventId ?? `${input.eventType}:${input.subscription.id}:${input.eventCreated}`}`;
-  if (authoritativeSubscription && projection.state === "trialing" && trialEnd !== null) {
+  if (
+    authoritativeSubscription && input.eventType === "customer.subscription.trial_will_end" &&
+    projection.state === "trialing" && trialEnd !== null
+  ) {
+    statements.push(billingNoticeStatement(env, {
+      id: noticeId,
+      userId: customer.user_id,
+      title: "Paid trial ends soon",
+      message: `Your Paid trial ends ${deadlineLabel(trialEnd)}. Stripe will then charge your saved payment method. Use Manage billing to update payment details or cancel.`,
+      severity: "warning",
+      createdAt: now,
+    }));
+  } else if (authoritativeSubscription && projection.state === "trialing" && trialEnd !== null) {
     statements.push(billingNoticeStatement(env, {
       id: `billing:trial-start:${input.subscription.id}:${trialEnd}`,
       userId: customer.user_id,

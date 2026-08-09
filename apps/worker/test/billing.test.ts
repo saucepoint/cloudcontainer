@@ -312,10 +312,21 @@ describe("billing routes", () => {
   it("lets an authenticated unverified account start server-priced Checkout", async () => {
     const { env } = makeEnv(BILLING_CONFIG);
     const { cookie } = await unverifiedUser(env);
-    const requests: Array<{ path: string; body: URLSearchParams; idempotency: string | null }> = [];
+    const requests: Array<{
+      path: string;
+      body: URLSearchParams;
+      idempotency: string | null;
+      version: string | null;
+    }> = [];
     stubFetch((url, init) => {
       const body = new URLSearchParams(String(init.body));
-      requests.push({ path: url.pathname, body, idempotency: new Headers(init.headers).get("idempotency-key") });
+      const headers = new Headers(init.headers);
+      requests.push({
+        path: url.pathname,
+        body,
+        idempotency: headers.get("idempotency-key"),
+        version: headers.get("stripe-version"),
+      });
       if (url.pathname === "/v1/customers") {
         return Response.json({ id: "cus_user", metadata: { userId: "user-1" } });
       }
@@ -335,9 +346,18 @@ describe("billing routes", () => {
     }, env);
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/test" });
-    expect(requests[0]).toMatchObject({ path: "/v1/customers", idempotency: "customer:user-1" });
+    expect(requests[0]).toMatchObject({
+      path: "/v1/customers",
+      idempotency: "customer:user-1",
+      version: "2026-07-29.dahlia",
+    });
     expect(requests[1]?.body.get("line_items[0][price]")).toBe("price_paid_monthly");
+    expect(requests[1]?.body.get("payment_method_collection")).toBe("always");
     expect(requests[1]?.body.get("subscription_data[metadata][userId]")).toBe("user-1");
+    expect(requests[1]?.body.get("subscription_data[billing_mode][type]")).toBe("flexible");
+    expect(requests[1]?.body.get(
+      "subscription_data[billing_mode][flexible][proration_discounts]",
+    )).toBe("itemized");
     expect(requests[1]?.body.get("subscription_data[trial_period_days]")).toBe("7");
     expect(requests[1]?.body.get(
       "subscription_data[trial_settings][end_behavior][missing_payment_method]",
@@ -459,6 +479,28 @@ describe("billing routes", () => {
 });
 
 describe("billing event consumer", () => {
+  it("rejects events from a webhook endpoint using a different API version", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const created = Math.floor(Date.now() / 1000);
+    const event = {
+      ...invoiceEvent("evt_wrong_version", created),
+      api_version: "2025-03-31.basil",
+    };
+    stubFetch(stripeEventRoutes({ evt_wrong_version: event }, {}));
+
+    await expect(processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    })).rejects.toMatchObject({ code: "event_api_version_mismatch" });
+    expect(await env.DB.prepare(
+      "SELECT status, last_error_code FROM stripe_billing_events WHERE event_id = 'evt_wrong_version'",
+    ).first()).toEqual({
+      status: "failed",
+      last_error_code: "event_api_version_mismatch",
+    });
+  });
+
   it("grants Paid access for exactly the canonical seven-day trial window", async () => {
     const { env } = makeEnv(BILLING_CONFIG);
     await unverifiedUser(env);
@@ -516,6 +558,38 @@ describe("billing event consumer", () => {
     expect(await env.DB.prepare(
       "SELECT title FROM notifications WHERE user_id = 'user-1'",
     ).first()).toEqual({ title: "Paid trial started" });
+  });
+
+  it("warns the owner when Stripe says the trial will end", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const created = Math.floor(Date.now() / 1000);
+    const trialStart = created - 4 * 86_400;
+    const trialEnd = trialStart + 7 * 86_400;
+    const event = {
+      id: "evt_trial_will_end",
+      type: "customer.subscription.trial_will_end",
+      created,
+      data: { object: { id: "sub_paid", customer: "cus_user" } },
+    };
+    stubFetch(stripeEventRoutes(
+      { evt_trial_will_end: event },
+      { sub_paid: subscription(trialEnd, "trialing", { start: trialStart, end: trialEnd }) },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT title, severity FROM notifications WHERE id = 'billing:evt_trial_will_end'",
+    ).first()).toEqual({ title: "Paid trial ends soon", severity: "warning" });
+    expect(await env.DB.prepare(
+      "SELECT state, trial_until FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({ state: "trialing", trial_until: trialEnd * 1000 });
   });
 
   it("immediately returns a verified waitlisted owner to Free when the trial is canceled", async () => {
@@ -663,6 +737,30 @@ describe("billing event consumer", () => {
       title: "Payment confirmed",
       message: `Your Paid plan is active through ${new Date(periodEnd * 1000).toISOString().slice(0, 10)}.`,
     });
+  });
+
+  it("accepts a settled zero-amount renewal but not the trial-opening invoice", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const created = 1_800_000_000;
+    const event = invoiceEvent("evt_credit_paid", created);
+    event.data.object.amount_paid = 0;
+    const periodEnd = created + 2_592_000;
+    stubFetch(stripeEventRoutes(
+      { evt_credit_paid: event },
+      { sub_paid: subscription(periodEnd, "active") },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT state, service_until FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({ state: "active", service_until: periodEnd * 1000 });
   });
 
   it("never shortens paid-through service when an older event arrives later", async () => {

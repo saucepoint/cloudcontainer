@@ -65,9 +65,9 @@ assumptions were incorrect or incomplete.
 | Free and paid hosts were treated as permanently separate pools. | Shared hosts accept both tiers; only dedicated placement remains exclusive. |
 | Paid checkout required prior World ID or invite verification. | A valid paid entitlement is an alternative eligibility path. Authentication is still required. |
 | Cancellation and non-payment were conflated. | Scheduled cancellation preserves paid service through the paid-through time; failed renewal follows a separate dunning policy. |
-| `checkout.session.completed` was treated as proof of payment. | Grant trial access only from canonical `trialing` state and paid-through service only from a positive paid invoice. Delayed methods can complete Checkout before settlement. |
+| `checkout.session.completed` was treated as proof of payment. | Grant trial access only from canonical `trialing` state and paid-through service only when `invoice.paid` accompanies canonical `active` subscription state. Delayed methods can complete Checkout before settlement. |
 | Webhooks were acknowledged before durable processing without a queue. | Verify, durably enqueue, then acknowledge. The consumer is idempotent and order-independent. |
-| The draft stored a subscription-level `current_period_end`. | Pin a Stripe API version and read period bounds from the subscription item for current Basil versions. |
+| The draft stored a subscription-level `current_period_end`. | Pin a Stripe API version and read period bounds from the subscription item for current Stripe API versions. |
 | Stripe retry counts and timing were hard-coded. | Stripe recovery settings are operator configuration; local policy uses timestamps received from Stripe. |
 | Existing free-container upgrades were described only as resize or destructive rehome. | Reserve the resource delta and resize in place. Never destroy data merely to apply a paid plan. |
 | `verified_at` was going to represent paid eligibility. | Keep permanent free eligibility separate from revocable paid entitlement. |
@@ -560,8 +560,11 @@ as non-secret Worker configuration.
 Pin the Stripe API version in code and on the webhook destination. Upgrade it
 only with fixture regeneration and contract tests.
 
-Current Basil API versions place billing period fields on subscription items,
-not at the top level of a Subscription.
+The integration currently pins `2026-07-29.dahlia`. Stripe Billing and Dahlia
+are not competing products: Billing manages subscriptions, while Dahlia names
+the versioned API schema. Current API versions place billing period fields on
+subscription items, not at the top level of a Subscription. New subscriptions
+explicitly use Stripe's recommended flexible billing mode.
 
 ### 9.2 Configuration
 
@@ -600,10 +603,15 @@ const session = await stripe.checkout.sessions.create(
   {
     mode: "subscription",
     customer: customer.stripeCustomerId,
+    payment_method_collection: "always",
     client_reference_id: user.id,
     line_items: [{ price: env.STRIPE_PRICE_PAID_MONTHLY, quantity: 1 }],
     subscription_data: {
       metadata: { userId: user.id, plan: "paid" },
+      billing_mode: {
+        type: "flexible",
+        flexible: { proration_discounts: "itemized" },
+      },
       trial_period_days: 7,
       trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
     },
@@ -639,6 +647,11 @@ Configure the Portal to:
 Do not enable arbitrary product switching until every Price maps to a supported
 plan and transition policy.
 
+In Stripe's subscription email settings, enable trial-ending reminders,
+failed-payment emails, and the Stripe-hosted customer-management link. Set the
+cancellation-policy URL for each environment. Those operator settings supply
+the card-network trial messaging that application notifications alone do not.
+
 ### 9.5 Webhook ingress
 
 `POST /api/stripe/webhook` is public HTTPS and exempt from session and CSRF
@@ -665,6 +678,10 @@ return c.body(null, 204);
 Use the Stripe SDK's async verification path when supported by the pinned
 version, or a tested Web Crypto verifier. Verification must use the exact raw
 body and a timestamp tolerance.
+
+At the Cloudflare edge, restrict the webhook route to Stripe's published
+webhook-delivery IP ranges and keep that rule current. IP filtering supplements
+signature verification; it never replaces it.
 
 Return `2xx` only after durable Queue publication. If verification or Queue
 publication fails, return an error so Stripe retries.
@@ -700,7 +717,8 @@ shorten a later paid-through deadline or reverse a newer subscription state.
 | `customer.subscription.deleted` | Revoke an unpaid trial immediately; otherwise enforce the stored paid-through deadline. |
 | `customer.subscription.paused` | Record a true paused subscription. |
 | `customer.subscription.resumed` | Resync after a true paused subscription resumes. |
-| `invoice.paid` | Advance `service_until` only after validating a positive collected amount; the zero-value trial invoice does not. |
+| `customer.subscription.trial_will_end` | Warn the owner three days before Stripe attempts the first charge. |
+| `invoice.paid` | Advance `service_until` only with canonical `active` subscription state; the zero-value trial-opening invoice does not, while a settled renewal covered by credits can. |
 | `invoice.payment_failed` | End unpaid trial access or mark a renewal past due; never extend service. |
 | `invoice.payment_action_required` | Direct the customer to resolve authentication. |
 | `invoice.finalization_failed` | Alert and request missing tax/location data when applicable. |
