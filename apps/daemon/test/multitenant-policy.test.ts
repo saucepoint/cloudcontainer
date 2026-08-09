@@ -114,6 +114,7 @@ printf '%s %s %s %s %s\n' \
     expect(configurePolicy).toContain("SHARED_CAPACITY_PROJECT");
     expect(configurePolicy).toContain("shared project tenant caps exceed physical capacity");
     expect(configurePolicy).toContain("incus project show workbench-staging");
+    expect(configurePolicy).toContain("features.storage.volumes=true </dev/null");
     expect(bootstrap).toContain("SHARED_PHYSICAL_HOST");
     expect(bootstrap).toContain("workbench-staging");
     expect(bootstrap).toContain("workbench-daemon@staging");

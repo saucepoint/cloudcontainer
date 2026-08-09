@@ -129,11 +129,13 @@ if [[ -s /etc/subuid || -s /etc/subgid ]]; then
 fi
 
 if ! incus project show "$PROJECT_NAME" >/dev/null 2>&1; then
+  # The controller invokes bootstrap through `ssh ... bash -s`; prevent Incus
+  # from treating the remaining remote script on stdin as a YAML project body.
   incus project create "$PROJECT_NAME" \
     --config features.images=false \
     --config features.networks=false \
     --config features.profiles=true \
-    --config features.storage.volumes=true
+    --config features.storage.volumes=true </dev/null
 fi
 
 # Refuse unknown, mixed-class, or over-capacity contents before changing
