@@ -120,6 +120,10 @@ printf '%s %s %s %s %s\n' \
     expect(hostController).toContain("WORKBENCH_ENVIRONMENT");
     expect(hostController).toContain("--tenant-limit");
     expect(hostController).toContain("--daemon-port");
+    // SSH flattens remote command arguments, so an empty production peer must
+    // use a sentinel instead of shifting every following positional argument.
+    expect(hostController).toContain('"${SHARED_CAPACITY_PROJECT:--}"');
+    expect(hostController).toContain('if [[ "$shared_capacity_project" == - ]]');
   });
 
   it("checks local capacity and image availability before a host can return to service", () => {

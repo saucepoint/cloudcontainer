@@ -650,7 +650,7 @@ reclass_host() {
   ssh_root_run "$hostname" "$port" "$user" bash -s -- \
     "$host_id" "$current_type" "$target_type" "$REMOTE_DAEMON_CONFIG" \
     "$REMOTE_ROOT" "$REMOTE_POLICY_ENV" "$DAEMON_SERVICE" \
-    "$WORKBENCH_ENVIRONMENT" "$SHARED_CAPACITY_PROJECT" <<'REMOTE'
+    "$WORKBENCH_ENVIRONMENT" "${SHARED_CAPACITY_PROJECT:--}" <<'REMOTE'
 set -Eeuo pipefail
 host_id=$1
 current_type=$2
@@ -661,6 +661,7 @@ policy_env=$6
 daemon_service=$7
 workbench_environment=$8
 shared_capacity_project=$9
+if [[ "$shared_capacity_project" == - ]]; then shared_capacity_project=""; fi
 jq -e --arg host_id "$host_id" --arg current "$current_type" --arg target "$target_type" '
   .hostId == $host_id and (.hostType == null or .hostType == $current or .hostType == $target)
 ' "$config" >/dev/null
@@ -772,7 +773,7 @@ remote_install() {
     "$release" "$host_type" "$host_id" "$max_tenants" "$vcpu_capacity" \
     "$ram_total_mb" "$ram_reserve_mb" "$disk_total_gb" \
     "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" "$DAEMON_SERVICE" \
-    "$WORKBENCH_ENVIRONMENT" "$SHARED_CAPACITY_PROJECT" "$TENANT_PROJECT" <<'REMOTE'
+    "$WORKBENCH_ENVIRONMENT" "${SHARED_CAPACITY_PROJECT:--}" "$TENANT_PROJECT" <<'REMOTE'
 set -Eeuo pipefail
 release_id=$1
 host_type=$2
@@ -788,6 +789,7 @@ daemon_service=${11}
 workbench_environment=${12}
 shared_capacity_project=${13}
 tenant_project=${14}
+if [[ "$shared_capacity_project" == - ]]; then shared_capacity_project=""; fi
 [[ "$release_id" =~ ^[A-Za-z0-9._-]{1,128}$ ]]
 [[ "$host_type" =~ ^(budget|regular|dedicated)$ ]]
 [[ "$host_id" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]
@@ -1142,7 +1144,7 @@ REMOTE
     "$tls_cert_path" "$tls_key_path" "$release" "$skip_image" "$ram_reserve_mb" \
     "$vcpu_overcommit" "$disk_capacity_percent" "$tenant_limit" "$daemon_port" \
     "$WORKBENCH_ENVIRONMENT" "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" \
-    "$DAEMON_SERVICE" "$TENANT_PROJECT" "$SHARED_CAPACITY_PROJECT" <<'REMOTE'
+    "$DAEMON_SERVICE" "$TENANT_PROJECT" "${SHARED_CAPACITY_PROJECT:--}" <<'REMOTE'
 set -Eeuo pipefail
 host_id=$1
 host_type=$2
@@ -1164,6 +1166,7 @@ config_dir=${17}
 daemon_service=${18}
 project_name=${19}
 shared_capacity_project=${20}
+if [[ "$shared_capacity_project" == - ]]; then shared_capacity_project=""; fi
 export HOST_ID="$host_id" HOST_TYPE="$host_type" WORKER_RPC_PUBLIC_KEY="$worker_public_key"
 export ZFS_LOOP_GB="$zfs_loop_gb" POOL_NAME="$pool_name" DAEMON_VERSION="$release_id"
 export HOST_RAM_RESERVE_MB="$ram_reserve_mb" VCPU_OVERCOMMIT="$vcpu_overcommit"
