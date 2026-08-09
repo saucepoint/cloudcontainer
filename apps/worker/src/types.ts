@@ -34,6 +34,16 @@ export type Bindings = Omit<
   | "WORLD_ID_RP_ID"
   | "WORLD_ID_ACTION"
   | "WORLD_ID_ENVIRONMENT"
+  | "STRIPE_PRICE_PAID_MONTHLY"
+  | "PAID_PLAN_MONTHLY_PRICE"
+  | "PAID_PLAN_CURRENCY"
+  | "STRIPE_TAX_ENABLED"
+  | "BILLING_ENABLED"
+  | "BILLING_CHECKOUT_SESSION_MINUTES"
+  | "BILLING_GRACE_DAYS"
+  | "BILLING_EXPORT_WINDOW_DAYS"
+  | "SSH_PORT_RANGE_START"
+  | "SSH_PORT_RANGE_END"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
@@ -54,6 +64,8 @@ export type Bindings = Omit<
   BILLING_CHECKOUT_SESSION_MINUTES?: string;
   BILLING_GRACE_DAYS?: string;
   BILLING_EXPORT_WINDOW_DAYS?: string;
+  SSH_PORT_RANGE_START: string;
+  SSH_PORT_RANGE_END: string;
   // secrets
   BETTER_AUTH_SECRET: string;
   CREDENTIAL_MASTER_KEY: string;

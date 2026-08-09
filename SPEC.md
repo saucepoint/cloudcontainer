@@ -111,10 +111,12 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Dashboard status, a key-gated SSH command and host-key fingerprints,
   post-ready key management, read-only credential presence, lifecycle controls,
   and account deletion.
-- One deployed control-plane Worker and a D1-registered fleet of heterogeneous
-  Incus hosts. Shared hosts accept both Free and Paid resource shapes after
-  reporting the mixed-tier capability. A dedicated host accepts only its
-  assigned paid account and has exactly one tenant slot.
+- One production control-plane Worker and a D1-registered fleet of heterogeneous
+  Incus hosts, plus an isolated staging Worker, D1 database, secret set, and
+  daemon trust domain at `staging.usebench.dev` for release validation. Shared
+  hosts accept both Free and Paid resource shapes after reporting the mixed-tier
+  capability. A dedicated host accepts only its assigned paid account and has
+  exactly one tenant slot.
 - An authenticated fleet controller for host onboarding, registration,
   drain/probe/state operations, destructive host evacuation and container
   re-homing, class changes, generation replacement, deregistration, policy
@@ -570,8 +572,8 @@ tokens reduce but do not remove this inherent risk.
 
 | Component | Current implementation |
 |---|---|
-| Web/control plane | One Hono application on Cloudflare Workers, serving SSR HTML and JSON APIs |
-| Durable state | Cloudflare D1 |
+| Web/control plane | One Hono application deployed as independent production and staging Cloudflare Workers, serving SSR HTML and JSON APIs |
+| Durable state | Independent production and staging Cloudflare D1 databases |
 | Identity and sessions | Better Auth with Cloudflare D1 and the passkey plugin |
 | Reconciler | Worker Cron Trigger every five minutes |
 | Shared contract | TypeScript package with Zod wire schemas, crypto, and signed-request helpers |
@@ -581,6 +583,9 @@ tokens reduce but do not remove this inherent risk.
 | Fleet operations | `infra/hostctl.sh` using the secret-authenticated Worker fleet API and management SSH |
 
 There is no separate Cloudflare Pages application in the current release.
+Staging is an operational environment, not a second production tenant pool.
+Its Worker secrets, D1 state, daemon signing key, fleet administrator secret,
+and host sealing keys are independent from production.
 
 ### Worker-to-daemon RPC
 
@@ -705,11 +710,18 @@ Every host row carries independent CPU, RAM, reserve, disk, and tenant budgets.
 The scheduler scores the post-placement normalized headroom deterministically,
 avoids a single-resource hotspot, and then minimizes aggregate slack. The same
 resource, health, tenancy, tenant, and port predicates gate the authoritative
-D1 reservation against races. The vCPU budget defaults to the supported
-maximum of four times online CPUs and may be lowered per host. RAM retains the
-1.25x policy. The host reserves the larger of 3 GiB (3072 MiB) or a rounded-up
-eight percent of detected total RAM; an operator may configure a larger
-reserve. One failed daemon health check
+D1 reservation against races. When a physical machine is shared by production
+and staging, each control plane uses a
+separate daemon process, signing/sealing keys, listener, Incus project, SSH port
+range, and statically capped host row. Because separate D1 databases cannot
+coordinate reservations, the sum of those project tenant caps must not exceed
+the physical resource-derived ceiling. Bootstrap derives each machine's tenant
+ceiling from online-vCPU overcommit, allocatable RAM, safe storage, worst-case
+shared swap, isolated-ID ranges, and the conservative legacy class shape. The
+vCPU multiplier defaults to the supported maximum of 4 and may be lowered per
+host. RAM retains the 1.25x policy. The host reserves the larger of 3 GiB
+(3072 MiB) or a rounded-up eight percent of detected total RAM; an operator may
+configure a larger reserve. One failed daemon health check
 immediately pauses new placement; three consecutive failures mark an active host unhealthy, and
 a later valid signed stats response recovers it. Draining hosts continue to be
 probed and reconciled but receive neither a new tenant nor a new daemon job;
@@ -869,7 +881,9 @@ World ID nullifiers remain with a cleared user link so neither can be reused.
   production storage design; production hosts require encrypted real ZFS.
 - There are no backups. Host or pool loss means permanent user-data loss.
 - The daemon endpoint is public and currently relies on TLS plus signed
-  requests; unsolicited probes are expected and are rejected.
+  requests; unsolicited probes are expected and are rejected. Production and
+  staging daemons never share Worker signing keys, X25519 private keys, config
+  trees, listener ports, or Incus tenant projects.
 - There is no mTLS binding or private network path.
 - The daemon job registry and replay nonce store are in memory.
 - The current Certbot deploy hook restarts the daemon, so an uncoordinated

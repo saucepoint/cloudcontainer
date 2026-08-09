@@ -1,59 +1,49 @@
-# Authentication and World ID cleanup impact
+# Staging environment impact
 
-## Targets
+## Target
 
-1. Remove Sign in with Apple from the Better Auth configuration, Worker bindings, landing client, icon module, tests, and release documentation.
-2. Simplify the recent World ID 4.x browser/server flow, remove unnecessary v3 migration compatibility, and preserve account-bound proofs, upstream verification, and permanent nullifier uniqueness.
-3. Remove dead auth exports and the nonessential World ID client-failure telemetry route.
-4. Close the current transitive dependency advisory if it can be resolved within the existing lockfile ranges.
+Create `staging.usebench.dev` with an independent Cloudflare Worker, D1 database, secrets, Worker-to-daemon signing key, fleet inventory, and daemon instance while allowing staging and production to share physical Incus hosts safely.
 
-## Dependents
+## Dependents (18)
 
-### Better Auth provider seam
+- `apps/worker/wrangler.jsonc`: Worker names, custom domains, D1 bindings, Cron, public variables, and generated binding types.
+- `apps/worker/package.json`: environment-specific deploy and D1 migration commands.
+- `deploy.sh`: control-plane release target, migration target, and smoke-test URL.
+- `apps/worker/src/types.ts`: generated Worker variables widened for runtime use.
+- `apps/worker/src/ports.ts`: SSH proxy allocation; separate D1 databases cannot detect cross-environment port collisions.
+- `apps/worker/src/placement.ts` and `apps/worker/src/reconciler.ts`: all host reservations call the port allocator.
+- `apps/worker/test/ports.test.ts` and `apps/worker/test/helpers/env.ts`: port-range and binding coverage.
+- `infra/hostctl.sh`: control-plane URL, remote release/config roots, daemon service, project policy, registration, audit, and rollout.
+- `infra/bootstrap.sh`: daemon config, key, service, project, and registration installation paths.
+- `infra/host-policy.sh`: physical CPU/RAM/disk/idmap capacity currently assumes one control plane owns the full host.
+- `infra/configure-multitenant.sh`: Incus project ceilings.
+- `infra/report-host-capacity.sh`: D1 registration capacity.
+- `infra/audit-multitenant.sh`: daemon service and project policy checks.
+- `apps/daemon/systemd/workbench-daemon.service`: production-only config/release/source paths.
+- `apps/daemon/src/config.ts` and `apps/daemon/src/index.ts`: one signing key and one Incus project per daemon process; a second process is required for staging.
+- `README.md`, `SPEC.md`, and `infra/RUNBOOK.md`: setup, architecture, release, rollback, and shared-host safety contract.
 
-- `apps/worker/src/better-auth.ts` creates every Better Auth instance and owns configured social providers and trusted account-linking providers.
-- `apps/worker/src/types.ts`, `apps/worker/wrangler.jsonc`, and `apps/worker/test/helpers/env.ts` define the provider bindings used by runtime and tests.
-- `apps/worker/client/landing.tsx` and `apps/worker/client/icons.tsx` expose the sign-in choices.
-- `apps/worker/test/auth.test.ts` and `apps/worker/test/pages.test.ts` cover provider configuration and landing behavior.
-- `README.md` and `SPEC.md` define setup and release expectations.
+## Affected stories / release contract
 
-### World ID seam
-
-- `apps/worker/src/account.ts` owns authenticated eligibility routes and atomic persistence of verification evidence.
-- `apps/worker/src/world-id.ts` validates configuration and user-bound proofs, calls the Developer Portal, and canonicalizes the returned nullifier.
-- `apps/worker/client/account.tsx` loads pinned IDKit 4.x assets and drives invite-code-mode verification.
-- `apps/worker/src/pages/views.tsx` decides whether World ID is available on the deployment.
-- `apps/worker/test/account.test.ts` and `apps/worker/test/pages.test.ts` cover request signing, signal binding, upstream verification, nullifier reuse, and page wiring.
-- `apps/worker/migrations/0010_better_auth_accounts.sql` stores verification evidence; no schema change is needed.
-
-### Dependency seam
-
-- `postcss` is a transitive Vitest/Vite dependency. The audit fix is lockfile-only and remains within Vite's declared `^8.5.6` range.
-
-## Affected release contract
-
-- Authentication narrows from Google, Apple, GitHub, and passkeys to Google, GitHub, and passkeys.
-- World ID remains optional per deployment and interchangeable with administrator invites at the eligibility gate. This new integration accepts v4 proofs only, avoiding a mixed-protocol nullifier migration surface.
-- Existing generic `auth_accounts` rows are not migrated or deleted. The deployed Apple client ID is already empty, so this removes an advertised but unavailable path rather than a configured production provider.
-- No shared Worker/daemon wire protocol or D1 schema changes.
+- Control plane changes from one deployment to independent production and staging deployments.
+- Fleet operations gain environment selection; production remains the default and must not be changed by an omitted flag.
+- Shared physical hosts require distinct daemon processes, configs, X25519 keys, Worker signing keys, Incus projects, release trees, service names, daemon ports, and SSH proxy port ranges.
+- Physical capacity must be statically partitioned across control planes. Independent D1 databases cannot coordinate reservations, so registering full host capacity in both is unsafe.
+- No D1 schema or Worker/daemon wire-schema change is required.
 
 ## Test coverage
 
-- Add a provider-configuration assertion for exactly Google and GitHub.
-- Change the landing regression to require Google, GitHub, Create passkey, and Use passkey, and explicitly reject Apple.
-- Require a World ID 4 Proof of Human credential and reject legacy v3 proofs before contacting the verifier.
-- Verify unavailable deployments do not render an actionable World ID control.
-- Preserve HTTP tests for signed request shape, account signal binding, unchanged proof forwarding, upstream error codes, and nullifier reuse.
-- Run the Worker focused suites, browser build, all workspace tests, typecheck, lint, `npm audit`, dead-export scans, and deploy dry-run.
+- Add Worker tests for configured SSH port ranges and invalid range fail-closed behavior.
+- Add daemon/infra tests for environment-specific remote roots, config paths, services, projects, and tenant caps.
+- Validate Wrangler configuration/types and environment-specific dry runs.
+- Run browser build, repository typecheck, lint, and all tests.
+- Remote verification: migrate the staging D1, deploy `workbench-staging`, smoke-test `staging.usebench.dev`, install/probe the staging daemon, and verify production inventory remains unchanged.
+- Manual shared-host check: confirm production and staging Incus projects, services, daemon ports, and SSH ranges are disjoint, and confirm the sum of project tenant caps does not exceed the physical safe ceiling.
 
-## Risk: Medium
+## Risk: High
 
-The auth removal is localized and Apple is not configured in the checked-in deployment. World ID is security-sensitive and recently changed, but its external seam already has focused HTTP tests and no persistence migration is required.
+Two independent schedulers sharing one physical host can overcommit resources or allocate the same host SSH port unless the host is explicitly partitioned. A staging rollout can also restart or overwrite production if paths and systemd service names are not environment-scoped.
 
 ## Recommended action
 
-Proceed in vertical slices:
-
-1. RED/GREEN: narrow Better Auth and landing behavior to Google, GitHub, and passkeys; remove all Apple-only code and documentation.
-2. RED/GREEN: make the new World ID action v4-only, pass deployment availability into the client, then simplify duplicated SDK types, telemetry, configuration parsing, and nullifier handling without weakening proof binding.
-3. Remove confirmed dead exports, apply the lockfile-only advisory fix, and run repository-wide verification and audit.
+Proceed expand-first: add environment-aware control-plane commands and fail-closed SSH ranges; add instance-scoped daemon deployment and static tenant caps; verify locally; create and migrate staging D1; configure independent secrets; deploy the staging Worker; then partition one drained production host before registering and activating its staging daemon. Keep production as every command's explicit or default target and never reuse production cryptographic secrets in staging.

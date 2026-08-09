@@ -256,6 +256,65 @@ Copy the returned D1 ID into wrangler.jsonc, then:
     npx wrangler secret put FLEET_ADMIN_SECRET
     npx wrangler deploy
 
+### Staging environment
+
+Staging is an independent control plane at `https://staging.usebench.dev`. It
+uses the `workbench-staging` Worker, the `workbench-staging` D1 database,
+environment-specific Worker secrets, and its own daemon signing and sealing
+keys. Deploy and migrate it without touching production:
+
+    npm run deploy:staging -- --yes
+
+Wrangler secrets are not inherited. Configure them with `--env staging`; never
+reuse `BETTER_AUTH_SECRET`, `CREDENTIAL_MASTER_KEY`, `WORKER_RPC_PRIVATE_KEY`,
+`INVITE_ADMIN_SECRET`, or `FLEET_ADMIN_SECRET` from production. Provider IDs
+are intentionally empty in the checked-in staging configuration. Before
+enabling a provider, register the staging callback URLs and then set both its
+public ID and its staging secret.
+
+Fleet commands are also environment-scoped:
+
+    set -a
+    source ~/.config/usebench/staging.env
+    set +a
+    npm run hostctl:staging -- list
+
+Production and staging may share a physical Incus host, but they never share a
+daemon process or tenant project. Staging uses `/opt/workbench-staging`,
+`/etc/workbench-staging`, `workbench-daemon@staging`, the
+`workbench-staging` Incus project, daemon port 9443, and tenant SSH ports
+40000–49999. Production keeps ports 30000–39999.
+
+The two D1 schedulers cannot see each other's reservations. Before onboarding a
+staging daemon on production hardware, drain the production host and reduce its
+static tenant cap so the production and staging project caps add up to no more
+than the host's existing safe ceiling. For example, reserving one of 38 slots
+for staging requires setting production to 37 first:
+
+    npm run hostctl -- capacity HOST_ID --tenant-limit 37 --yes
+
+Then onboard staging with its own host identity, Worker public key, daemon
+endpoint, and one-slot cap. Reuse of the production base image and trusted TLS
+certificate is allowed; cryptographic daemon keys and Incus tenant state are
+not reused:
+
+    npm run hostctl:staging -- onboard \
+      --id HOST_ID-staging \
+      --type budget \
+      --management-host MANAGEMENT_HOST \
+      --ssh-hostname SSH_HOSTNAME \
+      --daemon-endpoint https://DAEMON_HOSTNAME:9443 \
+      --daemon-port 9443 \
+      --tenant-limit 1 \
+      --tls-cert-path /etc/letsencrypt/live/DAEMON_HOSTNAME/fullchain.pem \
+      --tls-key-path /etc/letsencrypt/live/DAEMON_HOSTNAME/privkey.pem \
+      --skip-image \
+      --activate
+
+The bootstrap refuses the shared-host setup if the two project caps exceed the
+physical host's resource-derived ceiling. See `infra/RUNBOOK.md` for release,
+audit, and rollback sequencing.
+
 ### Account providers and World ID
 
 Create OAuth applications for the two Better Auth providers and configure

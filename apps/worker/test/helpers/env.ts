@@ -109,6 +109,8 @@ export function makeEnv(overrides: Partial<Bindings> = {}): TestEnv {
     WORLD_ID_RP_ID: "",
     WORLD_ID_ACTION: "verify-account-1",
     WORLD_ID_ENVIRONMENT: "production",
+    SSH_PORT_RANGE_START: "30000",
+    SSH_PORT_RANGE_END: "39999",
     BETTER_AUTH_SECRET: "test-better-auth-secret-must-be-at-least-32-characters",
     CREDENTIAL_MASTER_KEY: generateSymmetricKey(),
     WORKER_RPC_PRIVATE_KEY: rpcKeys.privateKey,

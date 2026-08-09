@@ -1,0 +1,22 @@
+[Unit]
+Description=Workbench host control daemon (%i)
+After=network-online.target incus.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=WB_DAEMON_CONFIG=/etc/workbench-%i/daemon.json
+EnvironmentFile=-/etc/workbench-%i/release.env
+WorkingDirectory=/opt/workbench-%i/apps/daemon
+ExecStart=/usr/bin/node /opt/workbench-%i/node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=3
+# tsx forwards SIGTERM to Node, which exits 143 during an intentional restart.
+SuccessExitStatus=143
+# The daemon holds decrypted credentials in memory only; keep core dumps off.
+LimitCORE=0
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

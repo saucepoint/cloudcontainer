@@ -7,6 +7,7 @@ POLICY_ENV_PATH="${WORKBENCH_HOST_POLICY_ENV:-/etc/workbench/host-policy.env}"
 REQUESTED_VCPU_OVERCOMMIT_SET=false
 REQUESTED_DISK_CAPACITY_PERCENT_SET=false
 REQUESTED_HOST_RAM_RESERVE_MB_SET=false
+REQUESTED_HOST_TENANT_LIMIT_SET=false
 if [[ -v VCPU_OVERCOMMIT ]]; then
   REQUESTED_VCPU_OVERCOMMIT_SET=true
   REQUESTED_VCPU_OVERCOMMIT=$VCPU_OVERCOMMIT
@@ -19,6 +20,10 @@ if [[ -v HOST_RAM_RESERVE_MB ]]; then
   REQUESTED_HOST_RAM_RESERVE_MB_SET=true
   REQUESTED_HOST_RAM_RESERVE_MB=$HOST_RAM_RESERVE_MB
 fi
+if [[ -v HOST_TENANT_LIMIT ]]; then
+  REQUESTED_HOST_TENANT_LIMIT_SET=true
+  REQUESTED_HOST_TENANT_LIMIT=$HOST_TENANT_LIMIT
+fi
 if [[ -f "$POLICY_ENV_PATH" ]]; then
   POLICY_ENV_OWNER=$(stat -c %u "$POLICY_ENV_PATH")
   POLICY_ENV_MODE=$(stat -c %a "$POLICY_ENV_PATH")
@@ -30,7 +35,7 @@ if [[ -f "$POLICY_ENV_PATH" ]]; then
     case "$policy_line" in
       ""|\#*) continue ;;
     esac
-    if [[ "$policy_line" =~ ^(VCPU_OVERCOMMIT|DISK_CAPACITY_PERCENT|HOST_RAM_RESERVE_MB)=([0-9]+)$ ]]; then
+    if [[ "$policy_line" =~ ^(VCPU_OVERCOMMIT|DISK_CAPACITY_PERCENT|HOST_RAM_RESERVE_MB|HOST_TENANT_LIMIT)=([0-9]+)$ ]]; then
       printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
     else
       echo "!! $POLICY_ENV_PATH contains an unsupported policy entry" >&2
@@ -46,6 +51,9 @@ if [[ "$REQUESTED_DISK_CAPACITY_PERCENT_SET" == true ]]; then
 fi
 if [[ "$REQUESTED_HOST_RAM_RESERVE_MB_SET" == true ]]; then
   HOST_RAM_RESERVE_MB=$REQUESTED_HOST_RAM_RESERVE_MB
+fi
+if [[ "$REQUESTED_HOST_TENANT_LIMIT_SET" == true ]]; then
+  HOST_TENANT_LIMIT=$REQUESTED_HOST_TENANT_LIMIT
 fi
 
 HOST_TYPE="${HOST_TYPE:-budget}"
@@ -65,6 +73,9 @@ VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-$MAX_VCPU_OVERCOMMIT}"
 DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
 TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
+# Zero means use the full resource-derived ceiling. A positive value creates a
+# static partition so independent control planes can safely share one host.
+HOST_TENANT_LIMIT="${HOST_TENANT_LIMIT:-0}"
 WORKBENCH_POLICY_VERSION=6
 
 case "$HOST_TYPE" in
@@ -130,6 +141,10 @@ if ! [[ "$VCPU_OVERCOMMIT" =~ ^[0-9]+$ ]] || \
 fi
 if ! [[ "$TENANT_PROCESS_LIMIT" =~ ^[0-9]+$ ]] || (( TENANT_PROCESS_LIMIT < 64 )); then
   echo "!! TENANT_PROCESS_LIMIT must be an integer of at least 64" >&2
+  return 1 2>/dev/null || exit 1
+fi
+if ! [[ "$HOST_TENANT_LIMIT" =~ ^[0-9]+$ ]]; then
+  echo "!! HOST_TENANT_LIMIT must be a non-negative integer" >&2
   return 1 2>/dev/null || exit 1
 fi
 
@@ -221,6 +236,14 @@ calculate_host_capacity() {
     SUBGID_SLOTS=$(( SUBGID_TOTAL / 65536 - 1 ))
     if (( SUBGID_SLOTS < IDMAP_SLOTS )); then IDMAP_SLOTS=$SUBGID_SLOTS; fi
     if (( IDMAP_SLOTS < TENANT_SLOTS )); then TENANT_SLOTS=$IDMAP_SLOTS; fi
+  fi
+
+  # Preserve the physical resource ceiling before applying an operator-owned
+  # partition. Shared control planes must keep the sum of their project caps at
+  # or below this value.
+  RESOURCE_TENANT_SLOTS=$TENANT_SLOTS
+  if (( HOST_TENANT_LIMIT > 0 && HOST_TENANT_LIMIT < TENANT_SLOTS )); then
+    TENANT_SLOTS=$HOST_TENANT_LIMIT
   fi
   if (( TENANT_SLOTS < 1 )); then
     echo "!! $HOST_TYPE host has no complete $TENANT_TIER slot after reserves" >&2

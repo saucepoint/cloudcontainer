@@ -15,6 +15,9 @@ else
 fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
+DAEMON_SERVICE="${DAEMON_SERVICE:-workbench-daemon}"
+WORKBENCH_ENVIRONMENT="${WORKBENCH_ENVIRONMENT:-production}"
+SHARED_CAPACITY_PROJECT="${SHARED_CAPACITY_PROJECT:-}"
 PROJECT_QUERY=$(jq -rn --arg project "$PROJECT_NAME" '$project | @uri')
 EXPECTED_HOST_ID="${EXPECTED_HOST_ID:-}"
 EXPECTED_MAX_TENANTS="${EXPECTED_MAX_TENANTS:-}"
@@ -114,10 +117,10 @@ if [[ -d /sys/module/br_netfilter ]]; then
 else
   fail "bridge netfilter is loaded"
 fi
-if systemctl is-active --quiet workbench-daemon; then
-  pass "Workbench daemon is active"
+if systemctl is-active --quiet "$DAEMON_SERVICE"; then
+  pass "Workbench daemon is active ($DAEMON_SERVICE)"
 else
-  fail "Workbench daemon is active"
+  fail "Workbench daemon is active ($DAEMON_SERVICE)"
 fi
 
 STORAGE_DRIVER=$(incus storage show "$POOL_NAME" 2>/dev/null | awk '$1 == "driver:" { print $2; exit }' || true)
@@ -128,6 +131,19 @@ else
 fi
 calculate_host_capacity "$POOL_NAME"
 pass "host capacity is calculable ($TENANT_SLOTS complete $HOST_TYPE slot(s))"
+if [[ -z "$SHARED_CAPACITY_PROJECT" && "$PROJECT_NAME" == workbench ]] && \
+  incus project show workbench-staging >/dev/null 2>&1; then
+  SHARED_CAPACITY_PROJECT=workbench-staging
+fi
+if [[ -n "$SHARED_CAPACITY_PROJECT" ]]; then
+  SHARED_TENANT_SLOTS=$(incus project get "$SHARED_CAPACITY_PROJECT" limits.containers 2>/dev/null || true)
+  if [[ "$SHARED_TENANT_SLOTS" =~ ^[0-9]+$ ]] && \
+    (( SHARED_TENANT_SLOTS + TENANT_SLOTS <= RESOURCE_TENANT_SLOTS )); then
+    pass "shared project tenant caps fit physical capacity"
+  else
+    fail "shared project tenant caps fit physical capacity"
+  fi
+fi
 
 if [[ -n "$EXPECTED_MAX_TENANTS" ]]; then
   for expected in \
@@ -161,6 +177,10 @@ if [[ -n "$EXPECTED_MAX_TENANTS" ]]; then
   fi
 fi
 
+check_eq "tenant project environment identity" "$WORKBENCH_ENVIRONMENT" \
+  incus project get "$PROJECT_NAME" user.workbench.environment
+check_eq "tenant project host class identity" "$HOST_TYPE" \
+  incus project get "$PROJECT_NAME" user.workbench.host_type
 check_eq "tenant project is restricted" "true" incus project get "$PROJECT_NAME" restricted
 check_eq "tenant project allows low-level config for managed swap" "allow" \
   incus project get "$PROJECT_NAME" restricted.containers.lowlevel
