@@ -17,6 +17,9 @@ fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
+SHARED_CAPACITY_PROJECT="${SHARED_CAPACITY_PROJECT:-}"
+SHARED_CAPACITY_CONFIG="${SHARED_CAPACITY_CONFIG:-/etc/workbench/daemon.json}"
+WORKBENCH_ENVIRONMENT="${WORKBENCH_ENVIRONMENT:-production}"
 PROJECT_QUERY=$(jq -rn --arg project "$PROJECT_NAME" '$project | @uri')
 if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
   HOST_TYPE=$(jq -er '.hostType // "budget"' "$DAEMON_CONFIG")
@@ -70,6 +73,47 @@ fi
 
 calculate_host_capacity "$POOL_NAME"
 
+# Once staging exists, production capacity changes must account for it too.
+# This prevents a later production expansion from silently consuming staging's
+# static partition.
+if [[ -z "$SHARED_CAPACITY_PROJECT" && "$PROJECT_NAME" == workbench ]] && \
+  incus project show workbench-staging >/dev/null 2>&1; then
+  SHARED_CAPACITY_PROJECT=workbench-staging
+  SHARED_CAPACITY_CONFIG=/etc/workbench-staging/daemon.json
+fi
+
+# Independent D1 schedulers cannot coordinate reservations. A second daemon on
+# the same physical host is allowed only when both Incus project caps form a
+# static partition of the resource-derived ceiling and use the same class.
+if [[ -n "$SHARED_CAPACITY_PROJECT" ]]; then
+  [[ "$SHARED_CAPACITY_PROJECT" != "$PROJECT_NAME" ]] || {
+    echo "!! SHARED_CAPACITY_PROJECT must differ from PROJECT_NAME" >&2
+    exit 1
+  }
+  incus project show "$SHARED_CAPACITY_PROJECT" >/dev/null 2>&1 || {
+    echo "!! shared capacity project is missing: $SHARED_CAPACITY_PROJECT" >&2
+    exit 1
+  }
+  [[ -f "$SHARED_CAPACITY_CONFIG" ]] || {
+    echo "!! shared capacity daemon config is missing: $SHARED_CAPACITY_CONFIG" >&2
+    exit 1
+  }
+  SHARED_HOST_TYPE=$(jq -er '.hostType // "budget"' "$SHARED_CAPACITY_CONFIG")
+  [[ "$SHARED_HOST_TYPE" == "$HOST_TYPE" ]] || {
+    echo "!! shared control planes must use the same host class" >&2
+    exit 1
+  }
+  SHARED_TENANT_SLOTS=$(incus project get "$SHARED_CAPACITY_PROJECT" limits.containers)
+  [[ "$SHARED_TENANT_SLOTS" =~ ^[0-9]+$ ]] || {
+    echo "!! shared project has no numeric tenant cap" >&2
+    exit 1
+  }
+  if (( SHARED_TENANT_SLOTS + TENANT_SLOTS > RESOURCE_TENANT_SLOTS )); then
+    echo "!! shared project tenant caps exceed physical capacity: $SHARED_TENANT_SLOTS + $TENANT_SLOTS > $RESOURCE_TENANT_SLOTS" >&2
+    exit 1
+  fi
+fi
+
 # Isolated containers need a distinct 65,536-ID range. Reserve one additional
 # range for the ordinary default map used by trusted image-build containers.
 if [[ -s /etc/subuid || -s /etc/subgid ]]; then
@@ -121,6 +165,8 @@ fi
 # alone needs proxy devices for public SSH forwarding and the low-level
 # exception below for its bounded per-tenant swap limit; tenant users have no
 # Incus API access.
+incus project set "$PROJECT_NAME" user.workbench.environment="$WORKBENCH_ENVIRONMENT"
+incus project set "$PROJECT_NAME" user.workbench.host_type="$HOST_TYPE"
 incus project set "$PROJECT_NAME" features.images=false
 incus project set "$PROJECT_NAME" features.networks=false
 incus project set "$PROJECT_NAME" features.profiles=true

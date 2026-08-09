@@ -6,7 +6,36 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://usebench.dev}"
+WORKBENCH_ENVIRONMENT="${WORKBENCH_ENVIRONMENT:-production}"
+case "$WORKBENCH_ENVIRONMENT" in
+  production)
+    DEFAULT_CONTROL_PLANE_URL=https://usebench.dev
+    REMOTE_ROOT=/opt/workbench
+    REMOTE_CONFIG_DIR=/etc/workbench
+    DAEMON_SERVICE=workbench-daemon
+    TENANT_PROJECT=workbench
+    SHARED_CAPACITY_PROJECT=""
+    DEFAULT_DAEMON_PORT=8443
+    DEFAULT_TENANT_LIMIT=0
+    ;;
+  staging)
+    DEFAULT_CONTROL_PLANE_URL=https://staging.usebench.dev
+    REMOTE_ROOT=/opt/workbench-staging
+    REMOTE_CONFIG_DIR=/etc/workbench-staging
+    DAEMON_SERVICE=workbench-daemon@staging
+    TENANT_PROJECT=workbench-staging
+    SHARED_CAPACITY_PROJECT=workbench
+    DEFAULT_DAEMON_PORT=9443
+    DEFAULT_TENANT_LIMIT=1
+    ;;
+  *)
+    printf 'ERROR: WORKBENCH_ENVIRONMENT must be production or staging\n' >&2
+    exit 1
+    ;;
+esac
+CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-$DEFAULT_CONTROL_PLANE_URL}"
+REMOTE_DAEMON_CONFIG="$REMOTE_CONFIG_DIR/daemon.json"
+REMOTE_POLICY_ENV="$REMOTE_CONFIG_DIR/host-policy.env"
 AUTH_CONFIG=""
 DEFAULT_VCPU_OVERCOMMIT=4
 MAX_VCPU_OVERCOMMIT=4
@@ -69,7 +98,9 @@ Commands:
       restoring only previously active hosts. Failures remain draining.
 
 Global environment:
-  CONTROL_PLANE_URL       Fleet API base URL (default: https://usebench.dev)
+  WORKBENCH_ENVIRONMENT   production (default) or staging; scopes URL, daemon,
+                          Incus project, config, release tree, and service
+  CONTROL_PLANE_URL       Fleet API base URL (derived from the environment)
   FLEET_ADMIN_SECRET      Required fleet API bearer secret; prompted on a TTY
   WORKER_RPC_PUBLIC_KEY   Required only for onboard; public Ed25519 key
 
@@ -83,6 +114,9 @@ Onboard options:
   --vcpu-overcommit N     Reservations per online host vCPU (default/max: 4)
   --disk-capacity-percent N
                           Safe storage fraction (default: 70; max: 90)
+  --tenant-limit N        Static project slot cap (staging default: 1). Required
+                          when independent control planes share a physical host.
+  --daemon-port PORT      Daemon listener (production: 8443; staging: 9443)
   --tls-cert-path PATH    Existing trusted certificate path on the host
   --tls-key-path PATH     Existing trusted certificate key path on the host
   --skip-image            Do not rebuild workbench-base
@@ -266,7 +300,7 @@ rsync_release() {
       --exclude .wrangler \
       --exclude '.dev.vars*' \
       --exclude '.env*' \
-      "$ROOT_DIR/" "$user@$remote_hostname:/opt/workbench/"
+      "$ROOT_DIR/" "$user@$remote_hostname:$REMOTE_ROOT/"
 }
 
 list_hosts() {
@@ -480,7 +514,12 @@ audit_host() {
     EXPECTED_RAM_TOTAL_MB="$ram_total_mb" \
     EXPECTED_RAM_RESERVE_MB="$ram_reserve_mb" \
     EXPECTED_DISK_TOTAL_GB="$disk_total_gb" \
-    bash /opt/workbench/infra/audit-multitenant.sh
+    WB_DAEMON_CONFIG="$REMOTE_DAEMON_CONFIG" \
+    WORKBENCH_HOST_POLICY_ENV="$REMOTE_POLICY_ENV" \
+    WORKBENCH_ENVIRONMENT="$WORKBENCH_ENVIRONMENT" \
+    DAEMON_SERVICE="$DAEMON_SERVICE" \
+    SHARED_CAPACITY_PROJECT="$SHARED_CAPACITY_PROJECT" \
+    bash "$REMOTE_ROOT/infra/audit-multitenant.sh"
 }
 
 refresh_host_capacity() {
@@ -489,18 +528,28 @@ refresh_host_capacity() {
   shift
   validate_id "$host_id"
   local assume_yes=false
+  local tenant_limit=""
   while (($#)); do
     case "$1" in
+      --tenant-limit) tenant_limit=${2:-}; shift ;;
       --yes|-y) assume_yes=true ;;
       *) die "Unknown capacity option: $1" ;;
     esac
     shift
   done
 
+  if [[ -n "$tenant_limit" ]]; then
+    [[ "$tenant_limit" =~ ^[0-9]+$ ]] || die "Invalid --tenant-limit"
+  fi
+
   local host original_status fields hostname port user host_type capacity body
   host=$(host_json "$host_id")
   original_status=$(jq -er .status <<<"$host")
   [[ "$original_status" != dead ]] || die "Dead hosts cannot change capacity"
+  if [[ -n "$tenant_limit" && "$tenant_limit" != 0 ]] && \
+    (( tenant_limit < $(jq -er .tenantCount <<<"$host") )); then
+    die "--tenant-limit is below the current tenant count"
+  fi
   fields=$(management_fields "$host")
   IFS=$'\t' read -r hostname port user host_type <<<"$fields"
   require_command ssh
@@ -515,10 +564,30 @@ refresh_host_capacity() {
 
   info "Verifying management identity and reconciling $host_id policy"
   remote_preflight "$hostname" "$port" "$user" "$host_id" "$host_type"
+  if [[ -n "$tenant_limit" ]]; then
+    ssh_root_run "$hostname" "$port" "$user" bash -s -- \
+      "$REMOTE_POLICY_ENV" "$tenant_limit" <<'REMOTE'
+set -Eeuo pipefail
+policy_path=$1
+tenant_limit=$2
+[[ "$tenant_limit" =~ ^[0-9]+$ ]]
+policy_new=$(mktemp "${policy_path}.XXXXXX")
+awk '!/^HOST_TENANT_LIMIT=/' "$policy_path" > "$policy_new"
+printf 'HOST_TENANT_LIMIT=%s\n' "$tenant_limit" >> "$policy_new"
+install -o root -g root -m 0644 "$policy_new" "$policy_path"
+rm -f -- "$policy_new"
+REMOTE
+  fi
   ssh_root_run "$hostname" "$port" "$user" env HOST_TYPE="$host_type" \
-    bash /opt/workbench/infra/configure-multitenant.sh
+    WB_DAEMON_CONFIG="$REMOTE_DAEMON_CONFIG" \
+    WORKBENCH_HOST_POLICY_ENV="$REMOTE_POLICY_ENV" \
+    WORKBENCH_ENVIRONMENT="$WORKBENCH_ENVIRONMENT" \
+    SHARED_CAPACITY_PROJECT="$SHARED_CAPACITY_PROJECT" \
+    bash "$REMOTE_ROOT/infra/configure-multitenant.sh"
   capacity=$(ssh_root_run "$hostname" "$port" "$user" env HOST_TYPE="$host_type" \
-    bash /opt/workbench/infra/report-host-capacity.sh)
+    WB_DAEMON_CONFIG="$REMOTE_DAEMON_CONFIG" \
+    WORKBENCH_HOST_POLICY_ENV="$REMOTE_POLICY_ENV" \
+    bash "$REMOTE_ROOT/infra/report-host-capacity.sh")
   jq -e '
     type == "object" and
     ([.ramTotalMb, .ramReserveMb, .vcpuCapacity, .diskTotalGb, .maxTenants]
@@ -579,26 +648,39 @@ reclass_host() {
   require_command ssh
   info "Reconfiguring $host_id for the $target_type class"
   ssh_root_run "$hostname" "$port" "$user" bash -s -- \
-    "$host_id" "$current_type" "$target_type" <<'REMOTE'
+    "$host_id" "$current_type" "$target_type" "$REMOTE_DAEMON_CONFIG" \
+    "$REMOTE_ROOT" "$REMOTE_POLICY_ENV" "$DAEMON_SERVICE" \
+    "$WORKBENCH_ENVIRONMENT" "$SHARED_CAPACITY_PROJECT" <<'REMOTE'
 set -Eeuo pipefail
 host_id=$1
 current_type=$2
 target_type=$3
-config=/etc/workbench/daemon.json
+config=$4
+release_root=$5
+policy_env=$6
+daemon_service=$7
+workbench_environment=$8
+shared_capacity_project=$9
 jq -e --arg host_id "$host_id" --arg current "$current_type" --arg target "$target_type" '
   .hostId == $host_id and (.hostType == null or .hostType == $current or .hostType == $target)
 ' "$config" >/dev/null
-next_config=$(mktemp /etc/workbench/daemon.json.XXXXXX)
+next_config=$(mktemp "${config}.XXXXXX")
 jq --arg host_type "$target_type" '.hostType = $host_type' "$config" > "$next_config"
 install -o root -g root -m 0600 "$next_config" "$config"
 rm -f -- "$next_config"
-cd /opt/workbench
-HOST_TYPE="$target_type" bash infra/configure-multitenant.sh
-systemctl restart workbench-daemon
-systemctl is-active --quiet workbench-daemon
+cd "$release_root"
+HOST_TYPE="$target_type" WB_DAEMON_CONFIG="$config" \
+WORKBENCH_HOST_POLICY_ENV="$policy_env" \
+WORKBENCH_ENVIRONMENT="$workbench_environment" \
+SHARED_CAPACITY_PROJECT="$shared_capacity_project" \
+bash infra/configure-multitenant.sh
+systemctl restart "$daemon_service"
+systemctl is-active --quiet "$daemon_service"
 REMOTE
   capacity=$(ssh_root_run "$hostname" "$port" "$user" env HOST_TYPE="$target_type" \
-    bash /opt/workbench/infra/report-host-capacity.sh)
+    WB_DAEMON_CONFIG="$REMOTE_DAEMON_CONFIG" \
+    WORKBENCH_HOST_POLICY_ENV="$REMOTE_POLICY_ENV" \
+    bash "$REMOTE_ROOT/infra/report-host-capacity.sh")
   jq -e '
     type == "object" and
     ([.ramTotalMb, .ramReserveMb, .vcpuCapacity, .diskTotalGb, .maxTenants]
@@ -633,11 +715,11 @@ remote_preflight() {
   local expected_host_id=$4
   local expected_host_type=$5
   ssh_root_run "$hostname" "$port" "$user" bash -s -- \
-    "$expected_host_id" "$expected_host_type" <<'REMOTE'
+    "$expected_host_id" "$expected_host_type" "$REMOTE_DAEMON_CONFIG" <<'REMOTE'
 set -Eeuo pipefail
 expected_host_id=$1
 expected_host_type=$2
-config=/etc/workbench/daemon.json
+config=$3
 [[ -f "$config" ]]
 jq -e --arg host_id "$expected_host_id" --arg host_type "$expected_host_type" '
   .hostId == $host_id and (.hostType == null or .hostType == $host_type)
@@ -649,17 +731,26 @@ remote_backup() {
   local hostname=$1
   local port=$2
   local user=$3
-  ssh_root_run "$hostname" "$port" "$user" bash -s <<'REMOTE'
+  ssh_root_run "$hostname" "$port" "$user" bash -s -- \
+    "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" "$DAEMON_SERVICE" <<'REMOTE'
 set -Eeuo pipefail
+release_root=$1
+config_root=$2
+service=$3
 umask 077
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-paths=(opt/workbench etc/workbench)
-if [[ -f /etc/systemd/system/workbench-daemon.service ]]; then
-  paths+=(etc/systemd/system/workbench-daemon.service)
+paths=("${release_root#/}" "${config_root#/}")
+if [[ "$service" == *@* ]]; then
+  service_unit="etc/systemd/system/${service%%@*}@.service"
+else
+  service_unit="etc/systemd/system/${service}.service"
 fi
-tar --exclude=opt/workbench/node_modules \
-  --exclude='opt/workbench/.dev.vars*' \
-  --exclude='opt/workbench/.env*' \
+if [[ -f "/$service_unit" ]]; then
+  paths+=("$service_unit")
+fi
+tar --exclude="${release_root#/}/node_modules" \
+  --exclude="${release_root#/}/.dev.vars*" \
+  --exclude="${release_root#/}/.env*" \
   -C / -czf "/root/workbench-$stamp.tgz" "${paths[@]}"
 printf 'backup_stamp=%s\n' "$stamp"
 REMOTE
@@ -679,7 +770,9 @@ remote_install() {
   local disk_total_gb=${11}
   ssh_root_run "$hostname" "$port" "$user" bash -s -- \
     "$release" "$host_type" "$host_id" "$max_tenants" "$vcpu_capacity" \
-    "$ram_total_mb" "$ram_reserve_mb" "$disk_total_gb" <<'REMOTE'
+    "$ram_total_mb" "$ram_reserve_mb" "$disk_total_gb" \
+    "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" "$DAEMON_SERVICE" \
+    "$WORKBENCH_ENVIRONMENT" "$SHARED_CAPACITY_PROJECT" "$TENANT_PROJECT" <<'REMOTE'
 set -Eeuo pipefail
 release_id=$1
 host_type=$2
@@ -689,21 +782,27 @@ vcpu_capacity=$5
 ram_total_mb=$6
 ram_reserve_mb=$7
 disk_total_gb=$8
+release_root=$9
+config_root=${10}
+daemon_service=${11}
+workbench_environment=${12}
+shared_capacity_project=${13}
+tenant_project=${14}
 [[ "$release_id" =~ ^[A-Za-z0-9._-]{1,128}$ ]]
 [[ "$host_type" =~ ^(budget|regular|dedicated)$ ]]
 [[ "$host_id" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]
 for capacity in "$max_tenants" "$vcpu_capacity" "$ram_total_mb" "$ram_reserve_mb" "$disk_total_gb"; do
   [[ "$capacity" =~ ^[0-9]+$ ]]
 done
-cd /opt/workbench
+cd "$release_root"
 npm ci --omit=dev --workspaces --include-workspace-root
 
 # Add fleet identity fields to a legacy config only after verifying that this
 # management endpoint belongs to the expected host. Never silently strand an
 # existing tenant in a legacy Incus project.
-config=/etc/workbench/daemon.json
+config="$config_root/daemon.json"
 configured_project=$(jq -r '.project // "default"' "$config")
-if [[ "$configured_project" != workbench ]]; then
+if [[ "$configured_project" != "$tenant_project" ]]; then
   legacy_tenants=$(incus --project "$configured_project" list --format json | \
     jq '[.[] | select(.config["user.workbench.id"] != null)] | length')
   if (( legacy_tenants > 0 )); then
@@ -712,17 +811,18 @@ if [[ "$configured_project" != workbench ]]; then
   fi
 fi
 umask 077
-config_new=$(mktemp /etc/workbench/daemon.json.XXXXXX)
+config_new=$(mktemp "${config}.XXXXXX")
 cleanup_config() {
   if [[ -n "${config_new:-}" && -f "$config_new" ]]; then
     rm -f -- "$config_new"
   fi
 }
 trap cleanup_config EXIT
-jq --arg host_id "$host_id" --arg host_type "$host_type" '
+jq --arg host_id "$host_id" --arg host_type "$host_type" \
+  --arg tenant_project "$tenant_project" '
   if .hostId != $host_id then error("host identity mismatch")
   elif .hostType != null and .hostType != $host_type then error("host class mismatch")
-  else .hostType = $host_type | .project = "workbench"
+  else .hostType = $host_type | .project = $tenant_project
   end
 ' "$config" > "$config_new"
 chown root:root "$config_new"
@@ -730,18 +830,30 @@ chmod 0600 "$config_new"
 mv "$config_new" "$config"
 config_new=""
 
-HOST_TYPE="$host_type" bash infra/configure-multitenant.sh
-install -m 0644 apps/daemon/systemd/workbench-daemon.service \
-  /etc/systemd/system/workbench-daemon.service
-install -m 0644 /dev/null /etc/workbench/release.env
-printf 'WB_DAEMON_VERSION=%s\n' "$release_id" > /etc/workbench/release.env
+HOST_TYPE="$host_type" WB_DAEMON_CONFIG="$config" \
+WORKBENCH_HOST_POLICY_ENV="$config_root/host-policy.env" \
+WORKBENCH_ENVIRONMENT="$workbench_environment" \
+SHARED_CAPACITY_PROJECT="$shared_capacity_project" \
+bash infra/configure-multitenant.sh
+if [[ "$workbench_environment" == staging ]]; then
+  install -m 0644 apps/daemon/systemd/workbench-daemon@.service \
+    /etc/systemd/system/workbench-daemon@.service
+else
+  install -m 0644 apps/daemon/systemd/workbench-daemon.service \
+    /etc/systemd/system/workbench-daemon.service
+fi
+install -m 0644 /dev/null "$config_root/release.env"
+printf 'WB_DAEMON_VERSION=%s\n' "$release_id" > "$config_root/release.env"
 systemctl daemon-reload
-systemctl restart workbench-daemon
-systemctl is-active --quiet workbench-daemon
+systemctl restart "$daemon_service"
+systemctl is-active --quiet "$daemon_service"
 EXPECTED_HOST_ID="$host_id" HOST_TYPE="$host_type" \
 EXPECTED_MAX_TENANTS="$max_tenants" EXPECTED_VCPU_CAPACITY="$vcpu_capacity" \
 EXPECTED_RAM_TOTAL_MB="$ram_total_mb" EXPECTED_RAM_RESERVE_MB="$ram_reserve_mb" \
-EXPECTED_DISK_TOTAL_GB="$disk_total_gb" bash infra/audit-multitenant.sh
+EXPECTED_DISK_TOTAL_GB="$disk_total_gb" WB_DAEMON_CONFIG="$config" \
+WORKBENCH_HOST_POLICY_ENV="$config_root/host-policy.env" \
+WORKBENCH_ENVIRONMENT="$workbench_environment" DAEMON_SERVICE="$daemon_service" \
+SHARED_CAPACITY_PROJECT="$shared_capacity_project" bash infra/audit-multitenant.sh
 REMOTE
 }
 
@@ -893,6 +1005,8 @@ onboard_host() {
   local ram_reserve_mb=0
   local vcpu_overcommit=$DEFAULT_VCPU_OVERCOMMIT
   local disk_capacity_percent=70
+  local tenant_limit=$DEFAULT_TENANT_LIMIT
+  local daemon_port=$DEFAULT_DAEMON_PORT
   local tls_cert_path="-"
   local tls_key_path="-"
   local skip_image=false
@@ -916,6 +1030,8 @@ onboard_host() {
       --ram-reserve-mb) ram_reserve_mb=${2:-}; shift ;;
       --vcpu-overcommit) vcpu_overcommit=${2:-}; shift ;;
       --disk-capacity-percent) disk_capacity_percent=${2:-}; shift ;;
+      --tenant-limit) tenant_limit=${2:-}; shift ;;
+      --daemon-port) daemon_port=${2:-}; shift ;;
       --tls-cert-path) tls_cert_path=${2:-}; shift ;;
       --tls-key-path) tls_key_path=${2:-}; shift ;;
       --skip-image) skip_image=true ;;
@@ -950,6 +1066,12 @@ onboard_host() {
   [[ "$disk_capacity_percent" =~ ^[0-9]+$ ]] && \
     (( disk_capacity_percent >= 1 && disk_capacity_percent <= 90 )) || \
     die "Invalid --disk-capacity-percent"
+  [[ "$tenant_limit" =~ ^[0-9]+$ ]] || die "Invalid --tenant-limit"
+  [[ "$daemon_port" =~ ^[0-9]+$ ]] && \
+    (( daemon_port >= 1 && daemon_port <= 65535 )) || die "Invalid --daemon-port"
+  if [[ "$WORKBENCH_ENVIRONMENT" == staging && "$tenant_limit" == 0 ]]; then
+    die "Staging on shared hardware requires a positive --tenant-limit"
+  fi
   if [[ "$host_type" != dedicated && -n "$dedicated_user" ]]; then
     die "--dedicated-user is valid only for dedicated hosts"
   fi
@@ -1018,7 +1140,9 @@ REMOTE
   ssh_root_run "$management_host" "$management_port" "$management_user" bash -s -- \
     "$host_id" "$host_type" "$WORKER_RPC_PUBLIC_KEY" "$zfs_loop_gb" "$pool_name" \
     "$tls_cert_path" "$tls_key_path" "$release" "$skip_image" "$ram_reserve_mb" \
-    "$vcpu_overcommit" "$disk_capacity_percent" <<'REMOTE'
+    "$vcpu_overcommit" "$disk_capacity_percent" "$tenant_limit" "$daemon_port" \
+    "$WORKBENCH_ENVIRONMENT" "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" \
+    "$DAEMON_SERVICE" "$TENANT_PROJECT" "$SHARED_CAPACITY_PROJECT" <<'REMOTE'
 set -Eeuo pipefail
 host_id=$1
 host_type=$2
@@ -1032,14 +1156,26 @@ skip_image=$9
 ram_reserve_mb=${10}
 vcpu_overcommit=${11}
 disk_capacity_percent=${12}
+tenant_limit=${13}
+daemon_port=${14}
+workbench_environment=${15}
+repo_dir=${16}
+config_dir=${17}
+daemon_service=${18}
+project_name=${19}
+shared_capacity_project=${20}
 export HOST_ID="$host_id" HOST_TYPE="$host_type" WORKER_RPC_PUBLIC_KEY="$worker_public_key"
 export ZFS_LOOP_GB="$zfs_loop_gb" POOL_NAME="$pool_name" DAEMON_VERSION="$release_id"
 export HOST_RAM_RESERVE_MB="$ram_reserve_mb" VCPU_OVERCOMMIT="$vcpu_overcommit"
-export DISK_CAPACITY_PERCENT="$disk_capacity_percent"
+export DISK_CAPACITY_PERCENT="$disk_capacity_percent" HOST_TENANT_LIMIT="$tenant_limit"
+export DAEMON_PORT="$daemon_port" WORKBENCH_ENVIRONMENT="$workbench_environment"
+if [[ "$workbench_environment" == staging ]]; then export SHARED_PHYSICAL_HOST=1; fi
+export REPO_DIR="$repo_dir" CONFIG_DIR="$config_dir" DAEMON_SERVICE="$daemon_service"
+export PROJECT_NAME="$project_name" SHARED_CAPACITY_PROJECT="$shared_capacity_project"
 if [[ "$tls_cert_path" != "-" ]]; then
   export TLS_CERT_PATH="$tls_cert_path" TLS_KEY_PATH="$tls_key_path"
 fi
-cd /opt/workbench
+cd "$repo_dir"
 bash infra/bootstrap.sh
 if [[ "$skip_image" != true ]]; then
   bash infra/build-image.sh
@@ -1049,7 +1185,7 @@ REMOTE
 
   local public_registration registration
   public_registration=$(ssh_root_run "$management_host" "$management_port" "$management_user" \
-    "jq -c . /etc/workbench/registration.json")
+    "jq -c . '$REMOTE_CONFIG_DIR/registration.json'")
   registration=$(printf '%s\n' "$public_registration" | jq -c \
     --arg sshHostname "$ssh_hostname" \
     --arg daemonEndpoint "$daemon_endpoint" \

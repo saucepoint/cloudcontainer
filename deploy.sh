@@ -2,7 +2,8 @@
 # Release the usebench.dev control plane from a clean checkout.
 #
 # Usage:
-#   ./deploy.sh [--yes] [--dry-run] [--skip-install] [--skip-checks]
+#   ./deploy.sh [--environment production|staging]
+#               [--yes] [--dry-run] [--skip-install] [--skip-checks]
 #               [--skip-migrations] [--skip-verify] [--allow-dirty]
 #               [--url URL]
 #
@@ -24,6 +25,7 @@ SKIP_CHECKS=false
 SKIP_MIGRATIONS=false
 SKIP_VERIFY=false
 ALLOW_DIRTY=false
+TARGET_ENVIRONMENT=production
 WORKER_URL="${DEPLOY_URL:-}"
 
 usage() {
@@ -39,6 +41,8 @@ Release the Cloudflare Worker in this repository. By default the script:
   6. requests the deployed Worker URL as a smoke test.
 
 Options:
+  --environment production|staging
+                      Select the isolated control plane (default: production).
   --yes, -y           Do not ask before applying remote changes.
   --dry-run           Run local release gates and print remote actions only.
   --skip-install      Do not run npm ci.
@@ -54,7 +58,7 @@ Examples:
   npm run deploy
   npm run deploy -- --yes
   npm run deploy -- --dry-run
-  DEPLOY_URL=https://staging.example.com npm run deploy -- --yes
+  npm run deploy -- --environment staging --yes
 EOF
 }
 
@@ -83,18 +87,20 @@ require_command() {
 }
 
 read_worker_url() {
-  node <<'NODE'
-const fs = require("node:fs");
-
-const config = fs.readFileSync("apps/worker/wrangler.jsonc", "utf8");
-const match = config.match(/^\s*"BASE_URL"\s*:\s*"([^"]+)"/m);
-
-if (!match) {
-  process.exitCode = 1;
-} else {
-  process.stdout.write(match[1]);
+  case "$TARGET_ENVIRONMENT" in
+    production) printf '%s\n' "https://usebench.dev" ;;
+    staging) printf '%s\n' "https://staging.usebench.dev" ;;
+    *) return 1 ;;
+  esac
 }
-NODE
+
+worker_npm_script() {
+  local production_script=$1
+  if [[ "$TARGET_ENVIRONMENT" == staging ]]; then
+    printf '%s:staging\n' "$production_script"
+  else
+    printf '%s\n' "$production_script"
+  fi
 }
 
 confirm_remote_release() {
@@ -131,6 +137,11 @@ confirm_remote_release() {
 
 while (($#)); do
   case "$1" in
+    --environment)
+      (($# >= 2)) || die "--environment requires production or staging."
+      TARGET_ENVIRONMENT=$2
+      shift
+      ;;
     --yes|-y)
       ASSUME_YES=true
       ;;
@@ -168,9 +179,14 @@ while (($#)); do
   shift
 done
 
+case "$TARGET_ENVIRONMENT" in
+  production|staging) ;;
+  *) die "--environment must be production or staging (got: $TARGET_ENVIRONMENT)" ;;
+esac
+
 cd "$ROOT_DIR"
 
-info "Checking release prerequisites"
+info "Checking $TARGET_ENVIRONMENT release prerequisites"
 require_command git
 require_command node
 require_command npm
@@ -228,9 +244,9 @@ fi
 if [[ "$DRY_RUN" == true ]]; then
   info "Dry run complete"
   if [[ "$SKIP_MIGRATIONS" == false ]]; then
-    printf 'Would run: npm run db:migrate:remote -w apps/worker\n'
+    printf 'Would run: npm run %s -w apps/worker\n' "$(worker_npm_script db:migrate:remote)"
   fi
-  printf 'Would run: npm run deploy -w apps/worker\n'
+  printf 'Would run: npm run %s -w apps/worker\n' "$(worker_npm_script deploy)"
   if [[ "$SKIP_VERIFY" == false ]]; then
     printf 'Would request: %s/\n' "${WORKER_URL%/}"
   fi
@@ -243,11 +259,11 @@ confirm_remote_release
 if [[ "$SKIP_MIGRATIONS" == false ]]; then
   info "Applying remote D1 migrations"
   warn "Remote D1 migrations do not roll back automatically."
-  run npm run db:migrate:remote -w apps/worker
+  run npm run "$(worker_npm_script db:migrate:remote)" -w apps/worker
 fi
 
-info "Deploying the Cloudflare Worker"
-run npm run deploy -w apps/worker
+info "Deploying the $TARGET_ENVIRONMENT Cloudflare Worker"
+run npm run "$(worker_npm_script deploy)" -w apps/worker
 
 if [[ "$SKIP_VERIFY" == false ]]; then
   info "Smoke-testing the deployed Worker"

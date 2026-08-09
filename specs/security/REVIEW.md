@@ -1,32 +1,29 @@
-# Security review: authentication and World ID cleanup
+# Security review: staging environment and shared-host isolation
 
-**Scope:** `main...refactor/auth-world-id-cleanup`
+**Scope:** working-tree staging environment changes
 **Result:** PASS — no findings at confidence ≥ 8/10
 
-## Data-flow review
+## Trust-boundary review
 
-### Authentication
+### Cloudflare control planes
 
-- Better Auth remains mounted at `/api/auth/*`; session loading and `requireAccount` / `requireUser` authorization are unchanged.
-- Social provider and trusted-linking configuration now contains only Google and GitHub. Passkey registration still requires a short-lived HMAC-signed server context.
-- Removing Apple bindings and UI does not create a fallback authentication path or alter generic account-row deletion.
+- Production and staging use distinct Worker scripts, D1 databases, custom domains, Cron triggers, Better Auth secrets, credential master keys, invite/fleet administrator secrets, and Worker RPC signing keys.
+- Wrangler environment bindings and secrets are non-inheritable; staging provider IDs default to empty so production OAuth or World ID settings are not accidentally exposed.
+- Staging tenant SSH allocation is restricted to ports 40000–49999 while production remains on 30000–39999. Invalid range configuration fails closed.
 
-### World ID
+### Shared physical host
 
-- Both World ID endpoints require an authenticated account.
-- The Worker creates signed RP context server-side and the browser requests only a World ID 4 `proof_of_human` credential; legacy v3 proofs are rejected before external I/O.
-- Submitted proofs must match the configured action, environment, and the hash of the authenticated internal user ID before they reach the fixed `developer.world.org` verifier host.
-- The verifier URL is derived only from a validated `rp_...` configuration value; users cannot control its scheme or host.
-- D1 statements are developer-authored SQL with bound parameters. Nullifier insertion and account verification remain one batch; duplicate nullifiers cannot verify another user.
-- Storage failures now propagate as 500 rather than being mislabeled as proof reuse. Upstream 5xx/malformed responses become 502; user proof failures remain 400.
-- The raw proof is bounded by the Worker's 256 KiB body middleware and forwarded unchanged only after local binding checks.
+- Staging has a separate release tree, root-owned config tree, systemd service, daemon listener, Worker signing trust root, X25519 key, Incus project, host identity, and D1 fleet row.
+- Shared-host staging bootstrap verifies existing production infrastructure and does not reinstall packages, rewrite nftables, or restart Incus. This prevents a staging setup from disrupting production tenants.
+- The independent schedulers are constrained by static `HOST_TENANT_LIMIT` partitions. Staging setup fails if production plus staging project caps exceed the physical resource-derived ceiling or if project host classes differ. Production capacity changes automatically include an existing staging project in the same check.
+- Host controller values interpolated into remote shell operations are fixed environment constants or validated IDs, host classes, integers, hostnames, paths, and URLs. Secrets remain in a mode-0600 curl config or are supplied through environment/stdin paths; no secret value is added to source, command output, D1 jobs, or daemon logs.
 
-### Browser and dependencies
+### Data and request paths
 
-- React renders all dynamic text; no unsafe HTML sinks were added.
-- The pinned IDKit CDN asset retains a verified SHA-384 SRI hash and `crossOrigin="anonymous"`.
-- `npm audit --audit-level=high` reports zero vulnerabilities after the lockfile-only PostCSS update.
+- Worker HTTP authentication, fleet bearer comparison, signed daemon RPC verification, sealed credential delivery, D1 query parameterization, and tenant ownership checks are unchanged.
+- A staging Worker cannot send a valid request to a production daemon because the daemon accepts exactly one environment-specific Ed25519 public key.
+- Separate Incus projects prevent either daemon from enumerating or mutating the other environment's tenant containers and custom volumes.
 
 ## Findings
 
-No SQL injection, XSS, SSRF, authorization bypass, IDOR, unsafe deserialization, weak cryptography, or secret-exposure finding met the 8/10 reporting threshold.
+No command injection, auth bypass, cross-environment IDOR, secret exposure, unsafe deserialization, SQL injection, XSS, SSRF, or cryptographic-key reuse finding met the 8/10 reporting threshold.

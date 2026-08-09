@@ -106,8 +106,9 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - Dashboard status, a key-gated SSH command and host-key fingerprints,
   post-ready key management, read-only credential presence, lifecycle controls,
   and account deletion.
-- One deployed control-plane Worker and a D1-registered fleet of heterogeneous
-  Incus hosts. Budget hosts accept only free accounts, regular hosts accept
+- One production control-plane Worker and a D1-registered fleet of heterogeneous
+  Incus hosts, plus an isolated staging Worker, D1 database, secret set, and
+  daemon trust domain at `staging.usebench.dev` for release validation. Budget hosts accept only free accounts, regular hosts accept
   only paid accounts, and a dedicated host accepts only its assigned paid
   account and has exactly one tenant slot.
 - An authenticated fleet controller for host onboarding, registration,
@@ -556,8 +557,8 @@ tokens reduce but do not remove this inherent risk.
 
 | Component | Current implementation |
 |---|---|
-| Web/control plane | One Hono application on Cloudflare Workers, serving SSR HTML and JSON APIs |
-| Durable state | Cloudflare D1 |
+| Web/control plane | One Hono application deployed as independent production and staging Cloudflare Workers, serving SSR HTML and JSON APIs |
+| Durable state | Independent production and staging Cloudflare D1 databases |
 | Identity and sessions | Better Auth with Cloudflare D1 and the passkey plugin |
 | Reconciler | Worker Cron Trigger every five minutes |
 | Shared contract | TypeScript package with Zod wire schemas, crypto, and signed-request helpers |
@@ -567,6 +568,9 @@ tokens reduce but do not remove this inherent risk.
 | Fleet operations | `infra/hostctl.sh` using the secret-authenticated Worker fleet API and management SSH |
 
 There is no separate Cloudflare Pages application in the current release.
+Staging is an operational environment, not a second production tenant pool.
+Its Worker secrets, D1 state, daemon signing key, fleet administrator secret,
+and host sealing keys are independent from production.
 
 ### Worker-to-daemon RPC
 
@@ -677,7 +681,12 @@ Placement requires all of the following at reservation time:
 - an available, non-quarantined SSH port on that host.
 
 Every host row carries its own independent CPU, RAM, reserve, disk, and tenant
-ceilings; class selects the tenant shape, not a fixed host shape. Two budget
+ceilings; class selects the tenant shape, not a fixed host shape. When a
+physical machine is shared by production and staging, each control plane uses a
+separate daemon process, signing/sealing keys, listener, Incus project, SSH port
+range, and statically capped host row. Because separate D1 databases cannot
+coordinate reservations, the sum of those project tenant caps must not exceed
+the physical resource-derived ceiling. Two budget
 hosts may therefore register 4 vCPU/8 GiB and 8 vCPU/16 GiB respectively, while
 a regular host may independently register 8 vCPU/16 GiB. Bootstrap derives
 each machine's tenant ceiling from its online-vCPU overcommit ceiling,
@@ -790,7 +799,9 @@ World ID nullifiers remain with a cleared user link so neither can be reused.
   production storage design; production hosts require encrypted real ZFS.
 - There are no backups. Host or pool loss means permanent user-data loss.
 - The daemon endpoint is public and currently relies on TLS plus signed
-  requests; unsolicited probes are expected and are rejected.
+  requests; unsolicited probes are expected and are rejected. Production and
+  staging daemons never share Worker signing keys, X25519 private keys, config
+  trees, listener ports, or Incus tenant projects.
 - There is no mTLS binding or private network path.
 - The daemon job registry and replay nonce store are in memory.
 - The current Certbot deploy hook restarts the daemon, so an uncoordinated

@@ -23,6 +23,8 @@ export type Bindings = Omit<
   | "WORLD_ID_RP_ID"
   | "WORLD_ID_ACTION"
   | "WORLD_ID_ENVIRONMENT"
+  | "SSH_PORT_RANGE_START"
+  | "SSH_PORT_RANGE_END"
 > & {
   // vars (re-widened: `wrangler types` emits the literal placeholder values)
   BASE_URL: string;
@@ -35,6 +37,8 @@ export type Bindings = Omit<
   WORLD_ID_RP_ID: string;
   WORLD_ID_ACTION: string;
   WORLD_ID_ENVIRONMENT: "production" | "staging";
+  SSH_PORT_RANGE_START: string;
+  SSH_PORT_RANGE_END: string;
   // secrets
   BETTER_AUTH_SECRET: string;
   CREDENTIAL_MASTER_KEY: string;

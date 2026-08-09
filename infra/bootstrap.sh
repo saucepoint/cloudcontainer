@@ -18,38 +18,90 @@
 set -euo pipefail
 
 : "${HOST_TYPE:?HOST_TYPE must be budget, regular, or dedicated}"
+WORKBENCH_ENVIRONMENT="${WORKBENCH_ENVIRONMENT:-production}"
+SHARED_CAPACITY_PROJECT="${SHARED_CAPACITY_PROJECT:-}"
+SHARED_CAPACITY_CONFIG="${SHARED_CAPACITY_CONFIG:-/etc/workbench/daemon.json}"
+case "$WORKBENCH_ENVIRONMENT" in
+  production)
+    DEFAULT_REPO_DIR=/opt/workbench
+    DEFAULT_CONFIG_DIR=/etc/workbench
+    DEFAULT_PROJECT_NAME=workbench
+    DEFAULT_DAEMON_PORT=8443
+    DAEMON_SERVICE="${DAEMON_SERVICE:-workbench-daemon}"
+    SYSTEMD_UNIT_SOURCE=workbench-daemon.service
+    SYSTEMD_UNIT_DEST=workbench-daemon.service
+    ;;
+  staging)
+    DEFAULT_REPO_DIR=/opt/workbench-staging
+    DEFAULT_CONFIG_DIR=/etc/workbench-staging
+    DEFAULT_PROJECT_NAME=workbench-staging
+    DEFAULT_DAEMON_PORT=9443
+    DAEMON_SERVICE="${DAEMON_SERVICE:-workbench-daemon@staging}"
+    SYSTEMD_UNIT_SOURCE=workbench-daemon@.service
+    SYSTEMD_UNIT_DEST=workbench-daemon@.service
+    SHARED_CAPACITY_PROJECT="${SHARED_CAPACITY_PROJECT:-workbench}"
+    SHARED_CAPACITY_CONFIG="${SHARED_CAPACITY_CONFIG:-/etc/workbench/daemon.json}"
+    ;;
+  *)
+    echo "!! WORKBENCH_ENVIRONMENT must be production or staging" >&2
+    exit 1
+    ;;
+esac
 HOST_ID="${HOST_ID:-host-$(hostname -s)}"
-DAEMON_PORT="${DAEMON_PORT:-8443}"
+DAEMON_PORT="${DAEMON_PORT:-$DEFAULT_DAEMON_PORT}"
 POOL_NAME="${POOL_NAME:-}"
 PROJECT_NAME="${PROJECT_NAME:-}"
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
-REPO_DIR="${REPO_DIR:-/opt/workbench}"
+REPO_DIR="${REPO_DIR:-$DEFAULT_REPO_DIR}"
+CONFIG_DIR="${CONFIG_DIR:-$DEFAULT_CONFIG_DIR}"
+DAEMON_CONFIG="$CONFIG_DIR/daemon.json"
+WORKBENCH_HOST_POLICY_ENV="${WORKBENCH_HOST_POLICY_ENV:-$CONFIG_DIR/host-policy.env}"
+export WORKBENCH_ENVIRONMENT DAEMON_SERVICE SHARED_CAPACITY_PROJECT SHARED_CAPACITY_CONFIG
+export WB_DAEMON_CONFIG="$DAEMON_CONFIG" WORKBENCH_HOST_POLICY_ENV
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"   # >0: create a file-backed zpool of this size (dev boxes)
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}" # dev-only escape hatch; dir cannot enforce quotas
+SHARED_PHYSICAL_HOST="${SHARED_PHYSICAL_HOST:-0}"
 DAEMON_VERSION="${DAEMON_VERSION:-bootstrap}"
+if [[ "$SHARED_PHYSICAL_HOST" == 1 && "$WORKBENCH_ENVIRONMENT" != staging ]]; then
+  echo "!! SHARED_PHYSICAL_HOST is supported only for staging" >&2
+  exit 1
+fi
 # shellcheck source=infra/host-policy.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/host-policy.sh"
 
 echo "== [1/6] packages =="
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl gnupg ca-certificates nftables jq rsync openssl dnsmasq-base
+if [[ "$SHARED_PHYSICAL_HOST" == 1 ]]; then
+  for command_name in incus node nft jq rsync openssl; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+      echo "!! shared production host is missing required command: $command_name" >&2
+      exit 1
+    }
+  done
+  [[ "$(node --version | cut -c2-3)" -ge 22 ]] || {
+    echo "!! shared production host requires Node.js 22+" >&2
+    exit 1
+  }
+else
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq curl gnupg ca-certificates nftables jq rsync openssl dnsmasq-base
 
-if ! command -v incus >/dev/null; then
-  apt-get install -y -qq incus
+  if ! command -v incus >/dev/null; then
+    apt-get install -y -qq incus
+  fi
+
+  if ! command -v node >/dev/null || [[ "$(node --version | cut -c2-3)" -lt 22 ]]; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y -qq nodejs
+  fi
 fi
 
-if ! command -v node >/dev/null || [[ "$(node --version | cut -c2-3)" -lt 22 ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y -qq nodejs
-fi
-
-if [[ -f /etc/workbench/daemon.json ]]; then
-  POOL_NAME="${POOL_NAME:-$(jq -er '.storagePool // "default"' /etc/workbench/daemon.json)}"
-  PROJECT_NAME="${PROJECT_NAME:-$(jq -er '.project // "workbench"' /etc/workbench/daemon.json)}"
+if [[ -f "$DAEMON_CONFIG" ]]; then
+  POOL_NAME="${POOL_NAME:-$(jq -er '.storagePool // "default"' "$DAEMON_CONFIG")}"
+  PROJECT_NAME="${PROJECT_NAME:-$(jq -er --arg project "$DEFAULT_PROJECT_NAME" '.project // $project' "$DAEMON_CONFIG")}"
 fi
 POOL_NAME="${POOL_NAME:-default}"
-PROJECT_NAME="${PROJECT_NAME:-workbench}"
+PROJECT_NAME="${PROJECT_NAME:-$DEFAULT_PROJECT_NAME}"
 [[ "$HOST_ID" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || {
   echo "!! HOST_ID must contain only lowercase letters, digits, and hyphens" >&2
   exit 1
@@ -80,7 +132,12 @@ PROJECT_NAME="${PROJECT_NAME:-workbench}"
 }
 
 echo "== [2/6] incus init + storage =="
-if ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
+if [[ "$SHARED_PHYSICAL_HOST" == 1 ]]; then
+  incus storage show "$POOL_NAME" >/dev/null 2>&1 || {
+    echo "!! shared production storage pool is missing: $POOL_NAME" >&2
+    exit 1
+  }
+elif ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
   if [[ "$ZFS_LOOP_GB" -gt 0 ]]; then
     apt-get install -y -qq zfsutils-linux || true
     if ! modprobe zfs 2>/dev/null; then
@@ -108,18 +165,24 @@ fi
 # It leaves the calculated capacity variables available for D1 registration.
 # Persist non-secret per-host overrides so every later deploy and audit derives
 # the same ceilings instead of silently reverting to controller defaults.
-install -d -m 0755 /etc/workbench
-install -m 0644 /dev/null /etc/workbench/host-policy.env
-cat >/etc/workbench/host-policy.env <<EOF
+install -d -m 0755 "$CONFIG_DIR"
+install -m 0644 /dev/null "$WORKBENCH_HOST_POLICY_ENV"
+cat >"$WORKBENCH_HOST_POLICY_ENV" <<EOF
 VCPU_OVERCOMMIT=${VCPU_OVERCOMMIT}
 DISK_CAPACITY_PERCENT=${DISK_CAPACITY_PERCENT}
 HOST_RAM_RESERVE_MB=${HOST_RAM_RESERVE_MB:-0}
+HOST_TENANT_LIMIT=${HOST_TENANT_LIMIT:-0}
 EOF
 # shellcheck source=infra/configure-multitenant.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/configure-multitenant.sh"
 
 echo "== [3/6] nftables baseline =="
-mkdir -p /etc/nftables.d
+if [[ "$SHARED_PHYSICAL_HOST" == 1 ]]; then
+  systemctl is-active --quiet nftables
+  systemctl is-active --quiet incus
+  nft list table inet workbench >/dev/null
+else
+  mkdir -p /etc/nftables.d
 cat >/etc/nftables.d/workbench.nft <<'NFT'
 table inet workbench {
   set wb-v4-connrate {
@@ -161,9 +224,10 @@ After=nftables.service
 UNIT
 systemctl daemon-reload
 systemctl restart incus
+fi
 
 echo "== [4/6] daemon install =="
-mkdir -p "$REPO_DIR" /etc/workbench
+mkdir -p "$REPO_DIR" "$CONFIG_DIR"
 if [[ ! -f "$REPO_DIR/package.json" ]]; then
   echo "!! copy the repo to $REPO_DIR first (rsync -a --exclude node_modules ./ host:$REPO_DIR/) then re-run"
   exit 1
@@ -171,10 +235,10 @@ fi
 (cd "$REPO_DIR" && npm ci --omit=dev --workspaces --include-workspace-root >/dev/null)
 
 echo "== [5/6] keys + config =="
-if [[ -f /etc/workbench/daemon.json ]]; then
+if [[ -f "$DAEMON_CONFIG" ]]; then
   if ! jq -e --arg host_id "$HOST_ID" --arg host_type "$HOST_TYPE" \
     '.hostId == $host_id and (.hostType // "budget") == $host_type' \
-    /etc/workbench/daemon.json >/dev/null; then
+    "$DAEMON_CONFIG" >/dev/null; then
     echo "!! existing daemon config belongs to another host ID or host type"
     exit 1
   fi
@@ -189,13 +253,13 @@ else
   X25519_PRIV=$(echo "$KEYS_JSON" | jq -r .privateKey)
   X25519_PUB=$(echo "$KEYS_JSON" | jq -r .publicKey)
 
-  TLS_CERT_PATH="${TLS_CERT_PATH:-/etc/workbench/daemon.crt}"
-  TLS_KEY_PATH="${TLS_KEY_PATH:-/etc/workbench/daemon.key}"
+  TLS_CERT_PATH="${TLS_CERT_PATH:-$CONFIG_DIR/daemon.crt}"
+  TLS_KEY_PATH="${TLS_KEY_PATH:-$CONFIG_DIR/daemon.key}"
   if [[ -n "${TLS_CERT_PATH:-}" && -n "${TLS_KEY_PATH:-}" && \
     -f "$TLS_CERT_PATH" && -f "$TLS_KEY_PATH" ]]; then
     : # Use operator-provisioned trusted TLS material.
-  elif [[ "$TLS_CERT_PATH" == "/etc/workbench/daemon.crt" && \
-    "$TLS_KEY_PATH" == "/etc/workbench/daemon.key" ]]; then
+  elif [[ "$TLS_CERT_PATH" == "$CONFIG_DIR/daemon.crt" && \
+    "$TLS_KEY_PATH" == "$CONFIG_DIR/daemon.key" ]]; then
     # Development-only bootstrap certificate. A Worker probe will fail until
     # the operator replaces it with a publicly trusted certificate.
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
@@ -221,18 +285,19 @@ else
       x25519PrivateKey: $x25519PrivateKey, baseImage: "workbench-base",
       storagePool: $storagePool, project: $project,
       tlsCertPath: $tlsCertPath, tlsKeyPath: $tlsKeyPath}' \
-    > /etc/workbench/daemon.json
-  chmod 600 /etc/workbench/daemon.json "$TLS_KEY_PATH"
-  echo "$X25519_PUB" > /etc/workbench/daemon.x25519.pub
+    > "$DAEMON_CONFIG"
+  chmod 600 "$DAEMON_CONFIG" "$TLS_KEY_PATH"
+  echo "$X25519_PUB" > "$CONFIG_DIR/daemon.x25519.pub"
 fi
 
-install -m 0644 /dev/null /etc/workbench/release.env
-printf 'WB_DAEMON_VERSION=%s\n' "$DAEMON_VERSION" > /etc/workbench/release.env
+install -m 0644 /dev/null "$CONFIG_DIR/release.env"
+printf 'WB_DAEMON_VERSION=%s\n' "$DAEMON_VERSION" > "$CONFIG_DIR/release.env"
 
-cp "$REPO_DIR/apps/daemon/systemd/workbench-daemon.service" /etc/systemd/system/
+cp "$REPO_DIR/apps/daemon/systemd/$SYSTEMD_UNIT_SOURCE" \
+  "/etc/systemd/system/$SYSTEMD_UNIT_DEST"
 systemctl daemon-reload
-systemctl enable --now workbench-daemon
-systemctl restart workbench-daemon
+systemctl enable --now "$DAEMON_SERVICE"
+systemctl restart "$DAEMON_SERVICE"
 
 echo "== [6/6] register host =="
 IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
@@ -242,10 +307,10 @@ IPV4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
   echo "!! could not detect the host's routed IPv4 address" >&2
   exit 1
 }
-TLS_CERT_PATH=$(jq -r .tlsCertPath /etc/workbench/daemon.json)
+TLS_CERT_PATH=$(jq -r .tlsCertPath "$DAEMON_CONFIG")
 CERT_FP=$(openssl x509 -in "$TLS_CERT_PATH" -noout -fingerprint -sha256 | cut -d= -f2)
-X25519_PUB=$(cat /etc/workbench/daemon.x25519.pub)
-REGISTRATION_PATH=/etc/workbench/registration.json
+X25519_PUB=$(cat "$CONFIG_DIR/daemon.x25519.pub")
+REGISTRATION_PATH="$CONFIG_DIR/registration.json"
 jq -n \
   --arg id "$HOST_ID" \
   --arg hostType "$HOST_TYPE" \

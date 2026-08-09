@@ -209,6 +209,94 @@ state HOST_ID active`. Existing tenants remain assigned while the host is
 draining. If an approximate legacy capacity backfill does not match the
 canonical host calculation, run `hostctl capacity HOST_ID` before activation.
 
+## Staging and shared physical hosts
+
+`staging.usebench.dev` is a separate Cloudflare Worker, D1 database, fleet
+inventory, secret set, and daemon trust domain. Select it with:
+
+    WORKBENCH_ENVIRONMENT=staging bash infra/hostctl.sh list
+    # equivalent:
+    npm run hostctl:staging -- list
+
+Environment selection changes the default control-plane URL and every remote
+daemon namespace. Production remains the default to preserve existing
+operations.
+
+| Resource | Production | Staging |
+|---|---|---|
+| Worker | `workbench` | `workbench-staging` |
+| D1 | `workbench` binding | `workbench-staging` binding |
+| URL | `usebench.dev` | `staging.usebench.dev` |
+| Release tree | `/opt/workbench` | `/opt/workbench-staging` |
+| Config tree | `/etc/workbench` | `/etc/workbench-staging` |
+| Service | `workbench-daemon` | `workbench-daemon@staging` |
+| Incus project | `workbench` | `workbench-staging` |
+| Daemon port | 8443 | 9443 |
+| Tenant SSH ports | 30000–39999 | 40000–49999 |
+
+A shared physical host must run both daemon processes. Do not point both
+Workers at one daemon: each process accepts exactly one Worker signing key and
+owns one X25519 sealing key and one Incus project. The staging daemon may reuse
+the same checked release, base-image alias, storage pool, bridge, public SSH
+hostname, and trusted certificate files, but not a config directory, project,
+listener port, host ID, or private key.
+
+### Mandatory static capacity partition
+
+Production D1 and staging D1 cannot transact against each other. Registering
+the full physical host ceiling in both databases would permit overcommit even
+though each scheduler is internally correct. `HOST_TENANT_LIMIT` therefore
+caps each environment's Incus project and D1 host row. The sum of production
+and staging caps must not exceed the resource-derived ceiling for the shared
+host class.
+
+Before adding one staging slot to a production host whose current safe ceiling
+is `N`:
+
+1. deploy the environment-aware daemon release to production;
+2. drain and set the production cap to `N - 1` through the controller;
+3. verify production is active with the reduced D1 and Incus project ceiling;
+4. onboard staging with `--tenant-limit 1`; and
+5. verify both projects and both fleet inventories before activation.
+
+Example for a 38-slot host:
+
+    npm run hostctl -- deploy --host HOST_ID
+    npm run hostctl -- capacity HOST_ID --tenant-limit 37 --yes
+
+    set -a
+    source ~/.config/usebench/staging.env
+    set +a
+    npm run hostctl:staging -- onboard \
+      --id HOST_ID-staging \
+      --type budget \
+      --management-host MANAGEMENT_HOST \
+      --ssh-hostname SSH_HOSTNAME \
+      --daemon-endpoint https://DAEMON_HOSTNAME:9443 \
+      --daemon-port 9443 \
+      --tenant-limit 1 \
+      --tls-cert-path /etc/letsencrypt/live/DAEMON_HOSTNAME/fullchain.pem \
+      --tls-key-path /etc/letsencrypt/live/DAEMON_HOSTNAME/privkey.pem \
+      --skip-image \
+      --activate
+
+Staging bootstrap fails closed when the production project cap plus staging
+cap exceeds the physical ceiling or when the two projects use different host
+classes. Never bypass that check with manual project or D1 edits. To increase
+staging capacity later, reduce production first, then run environment-specific
+`hostctl capacity --tenant-limit N` commands. Keep both control planes drained
+until both sides of a repartition are complete.
+
+Routine staging releases use the same controller flow without touching the
+production service or tree:
+
+    npm run hostctl:staging -- deploy --all
+
+A failed staging release remains draining in staging D1. Roll it back from the
+staging backup while operating only on `/opt/workbench-staging`,
+`/etc/workbench-staging`, and `workbench-daemon@staging`; never restore the
+production paths as part of a staging rollback.
+
 ## New host onboarding
 
 ### 1. Prepare storage and TLS

@@ -46,7 +46,56 @@
     "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
     "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
     "WORLD_ID_ACTION": "verify-account-1",
-    "WORLD_ID_ENVIRONMENT": "production"
+    "WORLD_ID_ENVIRONMENT": "production",
+    // Production and staging may share a physical host. Their independent D1
+    // schedulers must never allocate from overlapping host-port ranges.
+    "SSH_PORT_RANGE_START": "30000",
+    "SSH_PORT_RANGE_END": "39999"
+  },
+  "env": {
+    "staging": {
+      "name": "workbench-staging",
+      "assets": {
+        "directory": "./public"
+      },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "workbench-staging",
+          "database_id": "6b72f277-2029-45ef-848c-f6df95a8a62b",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
+      "routes": [
+        {
+          "pattern": "staging.usebench.dev",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "BASE_URL": "https://staging.usebench.dev",
+        "DEV_AUTH": "0",
+        // Provider applications are opt-in for staging. Add staging callback
+        // URLs before setting an ID and its environment-specific secret.
+        "GITHUB_APP_CLIENT_ID": "",
+        "GITHUB_APP_SLUG": "",
+        "AUTH_GOOGLE_CLIENT_ID": "",
+        "AUTH_GITHUB_CLIENT_ID": "",
+        "WORLD_ID_APP_ID": "",
+        "WORLD_ID_RP_ID": "",
+        "WORLD_ID_ACTION": "verify-account-staging-1",
+        "WORLD_ID_ENVIRONMENT": "staging",
+        "SSH_PORT_RANGE_START": "40000",
+        "SSH_PORT_RANGE_END": "49999"
+      }
+    }
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   BETTER_AUTH_SECRET       — high-entropy Better Auth cookie/token secret

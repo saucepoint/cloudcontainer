@@ -24,12 +24,44 @@ function blockAllPortsExcept(db: import("node:sqlite").DatabaseSync, hostId: str
 }
 
 describe("allocatePort", () => {
-  it("returns a port inside the range", async () => {
+  it("returns a port inside the default production range", async () => {
     const { env } = makeEnv();
     await seedHost(env);
     const port = await allocatePort(env, "host-1");
     expect(port).toBeGreaterThanOrEqual(PORT_RANGE_START);
     expect(port).toBeLessThanOrEqual(PORT_RANGE_END);
+  });
+
+  it("uses a disjoint environment-specific range", async () => {
+    const { env } = makeEnv({
+      SSH_PORT_RANGE_START: "40000",
+      SSH_PORT_RANGE_END: "40009",
+    });
+    await seedHost(env);
+    const port = await allocatePort(env, "host-1");
+    expect(port).toBeGreaterThanOrEqual(40000);
+    expect(port).toBeLessThanOrEqual(40009);
+  });
+
+  it("ignores historical reservations outside the configured range", async () => {
+    const { env } = makeEnv({
+      SSH_PORT_RANGE_START: "40000",
+      SSH_PORT_RANGE_END: "40000",
+    });
+    await seedHost(env);
+    await env.DB.prepare(
+      "INSERT INTO port_quarantine (host_id, port, released_at) VALUES (?, ?, ?)",
+    ).bind("host-1", 30000, Date.now()).run();
+    expect(await allocatePort(env, "host-1")).toBe(40000);
+  });
+
+  it("fails closed when the configured range is invalid", async () => {
+    const { env } = makeEnv({
+      SSH_PORT_RANGE_START: "50000",
+      SSH_PORT_RANGE_END: "40000",
+    });
+    await seedHost(env);
+    await expect(allocatePort(env, "host-1")).rejects.toThrow(/SSH port range/);
   });
 
   it("never hands out a port that is in use or freshly quarantined", async () => {

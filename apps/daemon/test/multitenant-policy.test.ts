@@ -108,6 +108,20 @@ printf '%s %s %s %s %s\n' \
     expect(hostController).toContain("Reservations per online host vCPU (default/max: 4)");
   });
 
+  it("supports static capacity partitions for shared production and staging hosts", () => {
+    expect(hostPolicy).toContain("HOST_TENANT_LIMIT");
+    expect(hostPolicy).toContain("RESOURCE_TENANT_SLOTS");
+    expect(configurePolicy).toContain("SHARED_CAPACITY_PROJECT");
+    expect(configurePolicy).toContain("shared project tenant caps exceed physical capacity");
+    expect(configurePolicy).toContain("incus project show workbench-staging");
+    expect(bootstrap).toContain("SHARED_PHYSICAL_HOST");
+    expect(bootstrap).toContain("workbench-staging");
+    expect(bootstrap).toContain("workbench-daemon@staging");
+    expect(hostController).toContain("WORKBENCH_ENVIRONMENT");
+    expect(hostController).toContain("--tenant-limit");
+    expect(hostController).toContain("--daemon-port");
+  });
+
   it("checks local capacity and image availability before a host can return to service", () => {
     expect(auditPolicy).toContain("EXPECTED_MAX_TENANTS");
     expect(auditPolicy).toContain("calculated tenant ceiling covers the D1 registration");
