@@ -6,7 +6,7 @@ PASS
 
 ## Checklist
 
-- ✓ **Supply chain:** no dependencies added; lockfile unchanged.
+- ✓ **Supply chain:** no dependency added; Wrangler was updated to 4.120.0 and lockfile-only Hono/nanoid patches remove newly reported advisories. `npm audit --audit-level=high` reports zero vulnerabilities.
 - ✓ **Secret hygiene:** no credential-shaped value appears in the diff. Staging secrets were generated independently and uploaded through Wrangler secret storage; retained operator values are outside the repository in a mode-0600 file.
 - ✓ **Security:** separate trust roots, D1 state, Incus project, daemon listener/service/config, and SSH ranges; shared-host capacity fails closed. `specs/security/REVIEW.md` has no HIGH-confidence finding.
 - ✓ **Scope:** changes are limited to staging Worker/D1/release commands, shared-daemon isolation, capacity partitioning, focused tests, and source-of-truth documentation.
@@ -27,7 +27,8 @@ PASS
 
 - `npm run typecheck` — pass
 - `npm run lint` — pass
-- `npm test` — pass (491 tests at the full-suite checkpoint)
+- `npm test` — pass (491 tests at the final full-suite checkpoint)
+- `npm audit --audit-level=high` — pass (zero vulnerabilities)
 - Focused post-review tests — pass (19 tests)
 - staging D1 migrations — current through `0018_setup_drafts.sql`
 - staging Worker — deployed; public-DNS-resolved HTTPS request returns 200

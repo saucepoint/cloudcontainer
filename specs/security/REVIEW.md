@@ -26,4 +26,4 @@
 
 ## Findings
 
-No command injection, auth bypass, cross-environment IDOR, secret exposure, unsafe deserialization, SQL injection, XSS, SSRF, or cryptographic-key reuse finding met the 8/10 reporting threshold.
+No command injection, auth bypass, cross-environment IDOR, secret exposure, unsafe deserialization, SQL injection, XSS, SSRF, or cryptographic-key reuse finding met the 8/10 reporting threshold. Wrangler 4.120.0 and lockfile-only Hono/nanoid patches were applied after newly published advisories were detected; `npm audit --audit-level=high` reports zero vulnerabilities.
