@@ -125,6 +125,8 @@ printf '%s %s %s %s %s\n' \
     // use a sentinel instead of shifting every following positional argument.
     expect(hostController).toContain('"${SHARED_CAPACITY_PROJECT:--}"');
     expect(hostController).toContain('if [[ "$shared_capacity_project" == - ]]');
+    expect(hostController).toContain('WB_DAEMON_CONFIG="$config_dir/daemon.json"');
+    expect(hostController).toContain('DAEMON_SERVICE="$daemon_service"');
   });
 
   it("checks local capacity and image availability before a host can return to service", () => {

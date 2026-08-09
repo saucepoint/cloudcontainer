@@ -1183,7 +1183,10 @@ bash infra/bootstrap.sh
 if [[ "$skip_image" != true ]]; then
   bash infra/build-image.sh
 fi
-bash infra/audit-multitenant.sh
+HOST_TYPE="$host_type" WB_DAEMON_CONFIG="$config_dir/daemon.json" \
+WORKBENCH_HOST_POLICY_ENV="$config_dir/host-policy.env" \
+WORKBENCH_ENVIRONMENT="$workbench_environment" DAEMON_SERVICE="$daemon_service" \
+SHARED_CAPACITY_PROJECT="$shared_capacity_project" bash infra/audit-multitenant.sh
 REMOTE
 
   local public_registration registration
