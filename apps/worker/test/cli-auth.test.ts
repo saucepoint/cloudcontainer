@@ -93,6 +93,7 @@ describe("CLI browser authentication bridge", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       verified: true,
+      eligible: true,
       worldIdAvailable: true,
       githubAvailable: false,
       hasWorkbench: false,

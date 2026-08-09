@@ -7,11 +7,13 @@ learning VPS administration.
 
 Public signup is free with World ID or administrator-invite eligibility
 verification: one Incus system container per account, reached over public-key
-SSH. Operator-entitled paid and dedicated accounts are placement-ready, but
-Stripe, self-service upgrades, email, backups, and automatic failover are not
-current features. Environments are intentionally described as cloud containers
-rather than hardware-isolated VMs. See [SPEC.md](./SPEC.md) for the normative
-release contract.
+SSH. Paid Checkout, Portal, webhook reconciliation, and in-place resource
+transitions are implemented behind the disabled `BILLING_ENABLED` launch gate;
+they remain unavailable until Stripe, a Cloudflare Queue, and the corresponding
+Worker configuration are supplied. Dedicated service remains operator-managed.
+Email, backups, and automatic failover are not current features. Environments
+are intentionally described as cloud containers rather than hardware-isolated
+VMs. See [SPEC.md](./SPEC.md) for the normative release contract.
 
 ## Repository layout
 
@@ -36,16 +38,19 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    browser, receives a one-time loopback callback, and resumes onboarding in
    the terminal.
 2. A new or previously unverified account proves one-person eligibility with
-   World ID or redeems an eight-character, single-use administrator invite.
-   Existing verified accounts skip this step.
+   World ID or redeems an eight-character, single-use administrator invite for
+   permanent Free eligibility. When billing is enabled, an authenticated owner
+   may instead start a seven-day Paid trial without becoming permanently
+   eligible for Free. Stripe charges the saved payment method after the trial.
 3. Onboarding requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the server. Later credential
    changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
-4. The Worker maps the account to its enforced host class, reserves capacity
-   and an SSH port on an eligible healthy host, stores state in D1, seals
+4. The Worker maps the account to shared or dedicated tenancy, reserves the
+   requested container's exact CPU, RAM, disk, tenant slot, and an SSH port on
+   an eligible healthy host, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
 5. The daemon clones workbench-base inside a restricted Incus project,
@@ -57,8 +62,9 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    set drives dashboard and MOTD guidance even though every binary is available.
 6. The dashboard displays clear waiting/building/ready/error states. It reveals
    the SSH command and host-key fingerprints only after an SSH key is added. If
-   its matching capacity pool is full, that pool's FIFO waitlist is admitted
-   automatically by the reconciler without blocking independent host classes.
+   shared capacity is full, one Free/Paid FIFO uses bounded smaller-request
+   backfill with a starvation cap. Dedicated account-bound placement remains
+   independent.
 7. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
@@ -161,6 +167,64 @@ Optional secrets:
   `AUTH_*_CLIENT_ID` variables.
 - WORLD_ID_SIGNING_KEY, paired with `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
   `WORLD_ID_ACTION`. Invite verification remains available without World ID.
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. These have no effect on new
+  sales until the Price, display amount/currency, Checkout lifetime, Queue, and
+  `BILLING_ENABLED=1` are also configured.
+
+### Paid billing setup
+
+Billing is fail-closed and remains hidden unless all of these are present:
+
+- `BILLING_ENABLED=1`, set only after sandbox acceptance and a shared-fleet
+  capacity review;
+- `STRIPE_PRICE_PAID_MONTHLY`, containing the one supported recurring Price ID;
+- `PAID_PLAN_MONTHLY_PRICE` (a decimal such as `20.00`) and
+  `PAID_PLAN_CURRENCY` (an uppercase ISO code such as `USD`), matching that
+  Stripe Price and supplying the server-rendered price disclosure;
+- `BILLING_CHECKOUT_SESSION_MINUTES`, an integer from 30 through 1440 that
+  bounds abandoned Checkout attempts and is also sent to Stripe;
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as Worker secrets; and
+- a `BILLING_EVENTS` Cloudflare Queue bound as both producer and consumer.
+
+Optional non-secret policy variables are `STRIPE_TAX_ENABLED` (`0` until tax
+readiness is approved), `BILLING_GRACE_DAYS`, and
+`BILLING_EXPORT_WINDOW_DAYS`. Omitting the export-window value disables
+automatic billing destruction; it is intentionally not given an implicit
+deadline.
+
+Create the production Queue and dead-letter Queue, then add this shape to
+`apps/worker/wrangler.jsonc` using the final queue names:
+
+```jsonc
+"queues": {
+  "producers": [
+    { "binding": "BILLING_EVENTS", "queue": "usebench-billing-events" }
+  ],
+  "consumers": [
+    {
+      "queue": "usebench-billing-events",
+      "max_batch_size": 10,
+      "max_batch_timeout": 5,
+      "max_retries": 10,
+      "dead_letter_queue": "usebench-billing-events-dlq"
+    }
+  ]
+}
+```
+
+In Stripe, create one monthly Paid Price, enable the Customer Portal for
+payment-method and invoice management, permit cancellation at period end, and
+leave arbitrary product/quantity switching disabled. Register
+`https://YOUR_BASE_URL/api/stripe/webhook` as an account event destination with
+API version `2025-03-31.basil` and the event set listed in
+[MONETIZATION.md](./MONETIZATION.md#97-events-to-subscribe-to). Store the
+resulting signing secret with `wrangler secret put STRIPE_WEBHOOK_SECRET`.
+Checkout always selects the configured Price server-side; its success redirect
+does not grant access. Every self-service Paid Checkout starts a fixed seven-day
+trial, collects a payment method using Stripe's default Checkout behavior, and
+asks Stripe to cancel if no payment method is present at trial end. A canceled
+trial or failed first charge removes Paid access; verified owners return to
+Free resources, while paid-bypass owners are billing-suspended.
 
 Generate service keys with:
 
@@ -328,6 +392,10 @@ compatible Worker before publishing a CLI version that uses it.
 `0018_setup_drafts.sql` adds expiring, non-secret onboarding checkpoints so the
 browser and CLI can resume setup without storing pasted credentials or SSH key
 material. Apply the Worker migration before publishing a client that uses it.
+`0019_monetization_foundation.sql` is expand-first: it backfills shared versus
+dedicated tenancy, preserves existing paid/dedicated accounts as explicit
+manual entitlements, and adds trial/billing/event/transition state. Deploy the mixed
+daemon capability fleet-wide before setting `BILLING_ENABLED=1`.
 
 The CLI package can be built and inspected without publishing:
 
@@ -377,25 +445,23 @@ also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md).
 `hostctl` is the supported registration and mutation path; do not construct a
 hosts row with ad hoc SQL.
 
-Host classes are enforced end to end:
+Tenancy mode is enforced end to end. `budget` and `regular` remain as legacy
+rollout labels, but both are shared hosts after they report
+`mixed-tier-shared-v1`:
 
-| Host class | Eligible account | Advertised / enforced shape | Tenant ceiling |
+| Tenancy | Eligible account | Advertised / enforced shape | Tenant ceiling |
 |---|---|---|---|
-| budget | free only | 1 / 1 vCPU, 1536 MiB RAM, 1 GiB swap, 5+5 GiB disk | calculated per host |
-| regular | paid only | 2 / 3 vCPU, 4096 MiB RAM, swap disabled, 8+8 GiB disk | calculated per host |
-| dedicated | one assigned paid account | paid shape | exactly one |
+| shared | free and paid | per-container Free or Paid shape | configured safety ceiling plus additive resource budgets |
+| dedicated | one assigned paid account | Paid shape | exactly one |
 
 Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
-remainder is tenant RAM. Its CPU reservation capacity defaults to four times
-the detected online vCPU count, and an operator may select a lower multiplier
-from 1 through 4. CPU tenant capacity is rounded up after dividing by the
-class reservation, while RAM permits 1.25x oversubscription and is also rounded
-up. The calculated tenant ceiling is the minimum of those CPU/RAM limits plus
-safe disk, swap where required, and available isolated ID maps.
-The scheduler rechecks that ceiling and all resource counters transactionally.
-Every host registers its own numbers, so two budget hosts (for example 4
-vCPU/8 GiB and 8 vCPU/16 GiB) can have different ceilings, independent of an
-8-vCPU/16-GiB regular host.
+remainder is tenant RAM. Its CPU reservation budget defaults to four times the
+detected online vCPU count, and an operator may select a lower multiplier from
+1 through 4. Every admission adds that container's actual 1-vCPU Free or
+3-vCPU Paid reservation, hard RAM, and doubled home/root disk reservation.
+RAM permits 1.25x oversubscription. `max_tenants` remains a separate isolation
+and operational safety ceiling. Selection and the authoritative D1 write
+recheck the same resource, health, tenancy, tenant, and port predicates.
 After a deliberate hardware or host-policy change,
 `npm run hostctl -- capacity HOST_ID` drains, recalculates, safely re-registers,
 audits, and probes the new ceiling before restoring prior active state.
@@ -421,9 +487,10 @@ image, audits the host, registers it as draining, probes the signed daemon, and
 activates only when explicitly requested. Existing-host updates use `hostctl
 deploy`; never rerun bootstrap as an update mechanism.
 
-`hostctl rehome` applies a changed account plan by destroying the old instance
-before waitlisting it on the new class. `hostctl reclass` safely repurposes an
-empty host. Forced dead-host retirement evacuates desired rows and frees a
+Ordinary Free/Paid plan changes resize in place and never invoke destructive
+re-home. `hostctl rehome` remains an explicit administrative, destructive path
+for tenancy changes and legacy recovery. `hostctl reclass` safely repurposes
+an empty host. Forced dead-host retirement evacuates desired rows and frees a
 dedicated assignment after the failed hardware is isolated; `onboard
 --replace-dead`, `history`, and `remove` provide the replacement and
 deregistration lifecycle without raw D1 edits. These are destructive
@@ -431,8 +498,9 @@ reprovisioning paths, not backup or live-migration features.
 
 ## Current limitations
 
-- Public signup is free; paid/dedicated entitlements are administrative until
-  Stripe, paid upgrade, email, and dunning UI exist.
+- Self-service Paid is launch-gated and unavailable until Stripe, Queue, policy,
+  capacity, tax, and sandbox acceptance are configured. Dedicated remains
+  operator-managed.
 - A development budget host may use file-backed ZFS, but every such host is
   explicitly non-production and contributes only its calculated safe capacity.
 - Development storage is file-backed ZFS without encryption. Production must

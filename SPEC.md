@@ -85,11 +85,15 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - One environment per account.
 - A free tier with 1 vCPU, 1536 MiB RAM, 1024 MiB swap, a 5 GiB persistent
   home volume, and a 5 GiB disposable root filesystem. The public 1-vCPU plan
-  is backed by an enforced and reserved 2-vCPU Incus allowance.
-- An operator-entitled paid tier with 2 vCPU, 4096 MiB RAM, no configured swap,
+  is backed by an enforced and reserved 1-vCPU Incus allowance.
+- A paid tier with 2 vCPU, 4096 MiB RAM, no configured swap,
   an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
   The public 2-vCPU plan is backed by an enforced and reserved 3-vCPU allowance.
-  Stripe and self-service upgrades are not part of this release.
+  Stripe-hosted self-service purchase and in-place upgrades are available only
+  when the complete billing configuration and `BILLING_ENABLED` launch gate
+  are enabled. Every self-service Paid subscription begins with a seven-day
+  free trial before Stripe attempts the first charge. Dedicated service remains
+  operator-entitled.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
 - Optional SSH key, enrollment-token flow, model credentials, Cloudflare, Supabase, and Convex tokens,
@@ -102,14 +106,15 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
   and local SSH setup.
 - Asynchronous provision, start, stop, rebuild, destroy, key-sync, and
   credential-refresh jobs.
-- Automatic FIFO waitlist admission when host capacity becomes available.
+- Automatic bounded-backfill FIFO waitlist admission when host capacity becomes
+  available.
 - Dashboard status, a key-gated SSH command and host-key fingerprints,
   post-ready key management, read-only credential presence, lifecycle controls,
   and account deletion.
 - One deployed control-plane Worker and a D1-registered fleet of heterogeneous
-  Incus hosts. Budget hosts accept only free accounts, regular hosts accept
-  only paid accounts, and a dedicated host accepts only its assigned paid
-  account and has exactly one tenant slot.
+  Incus hosts. Shared hosts accept both Free and Paid resource shapes after
+  reporting the mixed-tier capability. A dedicated host accepts only its
+  assigned paid account and has exactly one tenant slot.
 - An authenticated fleet controller for host onboarding, registration,
   drain/probe/state operations, destructive host evacuation and container
   re-homing, class changes, generation replacement, deregistration, policy
@@ -117,7 +122,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Explicitly not in the current release
 
-- Stripe, self-service paid upgrades, email notifications, or dunning.
+- Email delivery for application-specific billing notices, self-service
+  dedicated purchase, refunds, metered billing, or arbitrary plan switching.
 - Backups, snapshot replication, restore after host loss, or live migration.
 - A web terminal or browser IDE.
 - More than one environment per account.
@@ -128,7 +134,7 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 
 ### Roadmap, not a commitment
 
-- Self-service paid upgrades, Stripe, email, and a documented grace/export
+- Email delivery, additional paid plans, and a legally reviewed grace/export
   policy.
 - Encrypted production storage, replicated backups, and restore tooling.
 - Regional placement, automated capacity acquisition, and host evacuation.
@@ -152,9 +158,10 @@ require both a resident key and user verification.
 
 After authentication, the control plane applies this routing contract:
 
-- a user without product eligibility verification goes to `/verify`;
-- a verified user without a configured workbench goes to `/onboarding`; and
-- a verified user with a configured workbench goes to `/dashboard`.
+- an account without permanent Free verification or current paid eligibility
+  goes to `/verify`;
+- an eligible account without a configured workbench goes to `/onboarding`; and
+- an eligible account with a configured workbench goes to `/dashboard`.
 
 The verification screen offers World ID Proof of Human and a single-use
 administrator invite. World ID 4.0-only requests are signed by the Worker, bind
@@ -162,12 +169,19 @@ the proof signal to the authenticated internal user ID, and are verified
 through the Developer Portal. The verified nullifier is stored permanently so the same
 person cannot verify another account. An invite is also verification evidence,
 not an authentication credential: the account must already have a valid Better
-Auth session before redeeming it. Unverified sessions cannot access onboarding,
-the dashboard, or workbench APIs.
+Auth session before redeeming it. An ineligible session cannot provision or
+mutate a workbench. It may access account security, billing status, hosted Paid
+Checkout, and an existing workbench's read-only dashboard so an expired paid
+owner can manage billing and export data.
 
-Public signup is free and needs no credit card. Paid and dedicated service are
-operator-entitled until billing exists; the browser cannot self-assert a paid
-placement class. The landing page also states that the environment is a
+Public signup offers permanently eligible Free after World ID/invite
+verification. When the billing launch gate is enabled, any authenticated owner
+may start a seven-day Paid trial without gaining permanent Free eligibility.
+Stripe collects the payment method in Checkout and charges it after the trial.
+The browser
+cannot submit a Price, Customer, subscription, tier, or placement mode; the
+server derives those values from configured billing state. Dedicated service
+is operator-managed. The landing page also states that the environment is a
 shared-kernel cloud container. Account security allows authenticated users to
 add backup passkeys at any time.
 
@@ -242,17 +256,17 @@ Browser SSO handoff records and exchange codes expire and are single-use.
 - With capacity, the environment enters provisioning immediately.
 - Without capacity, it enters waitlisted and retains the selected agents and
   optional setup.
-- The reconciler admits waitlisted users automatically in FIFO order by
-  requested_at, then container created_at, with user_id as the final
-  deterministic tie-breaker within each independent placement pool. A full
-  budget pool does not block regular paid admission, and each account-bound
-  dedicated host is its own pool.
-- Admission reserves host RAM, disk, and an SSH port before it marks the
+- The reconciler uses one shared FIFO ordered by requested_at, container
+  created_at, then user_id. It tries the oldest request first and may inspect at
+  most eight later shared requests for bounded backfill. Each successful
+  backfill increments the oldest row's skip count; after three skips the oldest
+  cannot be bypassed. Dedicated account-bound placement remains independent.
+- Admission reserves host CPU, RAM, disk, and an SSH port before it marks the
   waitlist row admitted and enqueues the provision job. A failed reservation
   must leave the user waitlisted rather than oversubscribe a host.
-- The requested host class is persisted with the container row when it first
-  waitlists; a later account-field change cannot silently move that request to
-  another infrastructure class.
+- The requested tenancy mode and legacy rollout class are persisted with the
+  container row when it first waitlists; a later account-field change cannot
+  silently move that request.
 - The dashboard explains that admission is automatic and keeps checking without
   requiring a reload.
 - Success shows the exact SSH command and SSH host-key fingerprints once an
@@ -602,10 +616,11 @@ below-reservation reductions, and controls draining/active/dead state. New
 hosts are always inserted as draining. Activation requires a recent valid probe
 and zero current failures; a dedicated host additionally requires an eligible
 assigned dedicated account.
-An empty drained host may change class only together with a fresh capacity
-report and a new signed probe. An evacuated dead ID may be replaced as a new
-generation, or deregistered, while immutable history retains the old class,
-capacity, release, and hardware telemetry. No raw D1 mutation is required.
+An empty drained host may change its legacy class/tenancy configuration only
+together with a fresh capacity report and a new signed probe. An evacuated dead
+ID may be replaced as a new generation, or deregistered, while immutable
+history retains the old class, capacity, release, and hardware telemetry. No
+raw D1 mutation is required.
 A forced dead transition is a manual disaster action: it fails active jobs,
 quarantines ports, detaches desired container rows, clears the dedicated
 assignment and allocation counters, reconciles eligible accounts to their
@@ -613,11 +628,13 @@ current service plans, and returns them to the appropriate FIFO. It does not
 copy host-local home data, so the failed machine must first be isolated.
 A fleet-introducing migration also drains every legacy host until its inferred
 class policy and daemon release have been deployed and explicitly verified.
-A signed administrator probe requires explicit class, release identity, and
-CPU hardware telemetry, and rejects a wrong host ID/class or a RAM/vCPU
-registration that exceeds the daemon's hardware report. The background
-reconciler alone tolerates omitted new fields during a rolling interval. The API never returns a host
-credential private key because no such key leaves the host.
+A signed administrator probe requires explicit legacy class, tenancy mode,
+mixed-tier capability, release identity, and CPU hardware telemetry, and
+rejects a wrong host ID/mode/class or a RAM/vCPU registration that exceeds the
+daemon's hardware report. The background reconciler alone tolerates omitted new
+fields during a rolling interval and then applies legacy exact-class placement.
+The API never returns a host credential private key because no such key leaves
+the host.
 
 `infra/hostctl.sh` is the supported mutation client. It discovers management
 targets from D1, never copies local secrets or environment files, and deploys
@@ -628,10 +645,12 @@ probe the exact Git commit release, then restore hosts that began active. Any
 failure and any host that began draining or unhealthy remains draining.
 The same controller can orderly re-home one container by confirming data loss,
 destroying its old Incus instance, then atomically applying the account's
-current service plan and waitlisting it for exact-class placement. Unsupported
-subscription values are rejected before mutation. Existing placements remain
-on their persisted tier and class until this explicit operation, so a billing
-field change alone cannot make ordinary lifecycle traffic diverge mid-job.
+current service plan and waitlisting it. This is an explicit administrative
+path for tenancy changes and recovery; ordinary Free/Paid changes resize the
+existing container in place. Unsupported subscription values are rejected
+before mutation. Existing placements remain on their persisted actual tier
+until a resize succeeds, so a billing event alone cannot make ordinary
+lifecycle traffic diverge mid-job.
 
 ### Asynchronous jobs and convergence
 
@@ -646,6 +665,9 @@ a retry path. Other jobs time out after 15 minutes. The reconciler also:
 - admits the FIFO waitlist;
 - polls recent jobs even when no dashboard is open;
 - refreshes GitHub credentials;
+- retries in-place plan transitions and repairs stale canonical Stripe state;
+- enforces trial, paid-through, optional grace, billing suspension, and
+  explicitly configured export deadlines;
 - expires old transient rows;
 - processes the existing suspended-container cleanup rule; and
 - compares running/stopped D1 state with daemon stats.
@@ -657,37 +679,37 @@ also match.
 
 ### Placement
 
-Only active, recently healthy hosts in the request's exact host class receive
-new environments. The account service plan maps `free` to `budget`, `paid` to
-`regular`, and operator-entitled `dedicated` to an account-bound `dedicated`
-host while retaining paid resource limits. Dedicated hosts have `max_tenants =
-1`; other hosts receive a bootstrap-calculated ceiling.
+Only active, recently healthy hosts in the request's tenancy mode receive new
+environments. The account service plan maps both `free` and `paid` to `shared`;
+operator-entitled `dedicated` maps to an account-bound `dedicated` host while
+retaining paid resource limits. `budget` and `regular` remain dual-written only
+as rolling-release fallback labels. Dedicated hosts have `max_tenants = 1`;
+shared hosts have an independently configured safety ceiling.
 
 Placement requires all of the following at reservation time:
 
-- an exact host-class match and, for dedicated, an exact assigned-user match;
+- an exact tenancy-mode match and, for dedicated, an exact assigned-user match;
+- mixed-tier daemon capability on shared hosts, or an exact legacy class match
+  during the rolling interval;
 - a free tenant slot below `max_tenants`;
-- enough rounded vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
+- enough additive vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
   from the advertised 1/2-vCPU plan value stored on the container;
-- enough rounded 1.25x non-reserved RAM capacity;
+- enough additive 1.25x non-reserved RAM capacity;
 - enough registered disk capacity for both home and root quotas;
 - a recent successful signed daemon stats response with no current failure;
 - a reported daemon release identity (legacy reduced stats never admit work);
   and
 - an available, non-quarantined SSH port on that host.
 
-Every host row carries its own independent CPU, RAM, reserve, disk, and tenant
-ceilings; class selects the tenant shape, not a fixed host shape. Two budget
-hosts may therefore register 4 vCPU/8 GiB and 8 vCPU/16 GiB respectively, while
-a regular host may independently register 8 vCPU/16 GiB. Bootstrap derives
-each machine's tenant ceiling from its online-vCPU overcommit ceiling,
-allocatable RAM, safe storage fraction, swap where the class uses it,
-isolated-ID ranges, and class resource shape. CPU and RAM limits are rounded
-up after applying 4x CPU and 1.25x RAM oversubscription; the CPU/RAM ceiling
-is the smaller of those two limits. The vCPU multiplier defaults to
-the supported maximum of 4 and may be lowered per host. It reserves the larger
-of 3 GiB (3072 MiB) or a rounded-up eight percent of detected total system RAM;
-an operator may configure a larger reserve. One failed daemon health check
+Every host row carries independent CPU, RAM, reserve, disk, and tenant budgets.
+The scheduler scores the post-placement normalized headroom deterministically,
+avoids a single-resource hotspot, and then minimizes aggregate slack. The same
+resource, health, tenancy, tenant, and port predicates gate the authoritative
+D1 reservation against races. The vCPU budget defaults to the supported
+maximum of four times online CPUs and may be lowered per host. RAM retains the
+1.25x policy. The host reserves the larger of 3 GiB (3072 MiB) or a rounded-up
+eight percent of detected total RAM; an operator may configure a larger
+reserve. One failed daemon health check
 immediately pauses new placement; three consecutive failures mark an active host unhealthy, and
 a later valid signed stats response recovers it. Draining hosts continue to be
 probed and reconciled but receive neither a new tenant nor a new daemon job;
@@ -695,6 +717,57 @@ already-started jobs remain pollable, and key/credential edits defer to the
 next full start snapshot. CPU/RAM/disk accounting,
 tenant-ceiling checks, port assignment, and FIFO admission are committed
 together so concurrent requests cannot double-allocate capacity.
+
+### Billing, entitlement, and plan transitions
+
+Permanent Free eligibility and time-bounded paid entitlement are independent.
+World ID, invite, and development verification can yield Free after Paid ends;
+payment alone never does. Manual paid/dedicated entitlements have an explicit
+source and are never fabricated as, or overwritten by, Stripe state.
+
+New Paid sales are exposed only when `BILLING_ENABLED=1`, the single supported
+monthly Price is configured server-side, its matching
+`PAID_PLAN_MONTHLY_PRICE` and `PAID_PLAN_CURRENCY` disclosure values exist,
+`BILLING_CHECKOUT_SESSION_MINUTES` is an integer from 30 through 1440, both
+Stripe secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
+requires an authenticated owner but not Free verification, stores one Customer
+mapping, permits one open attempt and one non-terminal subscription, and never
+accepts a client Price or plan. The account and dashboard render the configured
+amount and currency. The success redirect is display-only. Portal sessions
+require the stored Customer mapping.
+
+The public webhook verifies Stripe's signature over the exact raw body within
+a five-minute tolerance and publishes only event ID, type, and creation time.
+It returns success only after Queue publication. The at-least-once consumer
+deduplicates by event ID, re-fetches the Event and canonical Subscription,
+validates internal user metadata, Customer, configured Price, quantity, the
+seven-day trial bound, and one-subscription invariants, and applies monotonic
+D1 facts. Canonical `trialing` state grants access only through `trial_end`;
+only a positive-value `invoice.paid` may advance `service_until`, so Stripe's
+zero-value opening trial invoice is not paid-through service. Payment failure
+never advances a deadline. Older events cannot shorten
+a newer deadline or reverse newer canonical subscription state. The Cron
+reconciler performs bounded stale-subscription repair rather than polling every
+account.
+
+A paid entitlement creates an idempotent in-place resize intent. The current
+container tier and resource fields do not change until the daemon succeeds.
+Free-to-Paid claims only the positive CPU/RAM/disk delta on its current mixed
+shared host; insufficient capacity leaves the Free container usable in
+`upgrade_pending` and retries automatically. Resize failure retains the claimed
+delta and retries without double reservation. Success restores the prior
+running/stopped state. Paid-to-Free releases CPU/RAM after success and retains
+an already-grown 8 GiB home/root reservation as explicit grandfathered
+storage. Automated paid changes never invoke destructive re-home.
+
+Canceling a trial removes Paid access immediately. A failed first post-trial
+charge does the same; a failed renewal preserves already-paid service and any
+configured grace, then expires. At the applicable trial, service, or grace
+deadline, a permanently Free-eligible owner is downgraded in place. An owner
+who used paid bypass is billing-suspended and
+directed to billing and verification recovery plus operator-assisted export
+guidance. Automatic destruction is disabled unless
+`BILLING_EXPORT_WINDOW_DAYS` is explicitly configured.
 
 ---
 
@@ -710,8 +783,8 @@ together so concurrent requests cannot double-allocate capacity.
 | stopped | User intentionally stopped the environment |
 | error | A lifecycle operation failed; detail and recovery are shown |
 | destroying | Permanent deletion is active |
-| suspended | Reserved internal state; no current billing UI drives it |
-| upgrade_pending | Reserved for a future paid upgrade flow |
+| suspended | Billing access ended for an owner without permanent Free eligibility; billing, verification, and operator-assisted export guidance remain available |
+| upgrade_pending | The current environment remains usable while an in-place plan resize waits or retries |
 
 Job states are queued, running, succeeded, and failed. Supported current user
 actions are start, stop, rebuild, destroy, and retry where valid. Background
@@ -730,18 +803,24 @@ operations synchronize keys and credentials.
 | invite_redemptions | One permanent redemption per invite; user link clears on account deletion |
 | world_id_nullifiers | Canonical decimal nullifier unique per action; user link clears on deletion |
 | ssh_keys | Multiple public keys per user; never private keys |
-| containers | user_id unique; at most one environment per account; persisted tier/class plus nullable re-home target applied only after old-instance destruction; selected GitHub repositories are non-secret JSON metadata |
-| hosts | Current host generation and class, independent conservative CPU/RAM/disk and tenant ceilings, allocation counters, health/release telemetry, management address, SSH hostname, daemon endpoint, X25519 public key, optional dedicated-account assignment, and retirement time |
+| containers | user_id unique; at most one environment per account; actual tier, tenancy mode, legacy class, billing suspension/deadline, grandfathered storage, and nullable administrative re-home target; selected GitHub repositories are non-secret JSON metadata |
+| hosts | Current host generation, tenancy mode, rollout class/capabilities, independent CPU/RAM/disk and tenant budgets, allocation counters, health/release telemetry, management address, SSH hostname, daemon endpoint, X25519 public key, optional dedicated-account assignment, and retirement time |
 | host_history | Immutable class, capacity, release, and hardware snapshot for each retired host ID/generation |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
 | setup_drafts | One expiring, non-secret onboarding draft per user; selections only, never credentials or key material |
 | enrollment_tokens | Hash only; one-hour expiry; single use |
 | oauth_states | Short-lived, user-bound authorization attempts |
-| waitlist | One row per user; requested_at ordering and admitted_at audit |
+| waitlist | One row per user; requested_at ordering, bounded-backfill skip count, and admitted_at audit |
 | port_quarantine | Host/port composite identity; 30-day hold |
 | notifications | Global in-app announcements with optional expiry; no secret payloads |
 | notification_reads | One read marker per notification and user; cascades on account deletion |
+| account_entitlements | One effective paid/dedicated entitlement source with trial, paid-through, and grace projections per user |
+| stripe_customers | One internal user to Stripe Customer mapping; account deletion is restricted while present |
+| stripe_subscriptions | Canonical non-card subscription facts, trial bounds, monotonic event/sync markers, and paid-through deadlines |
+| stripe_checkout_attempts | One open Checkout attempt per user through a partial unique index |
+| stripe_billing_events | Event-ID dedupe, processing attempts, sanitized error codes, and no webhook bodies |
+| container_plan_transitions | One idempotent in-place transition per container with exact claimed deltas and prior runtime state |
 
 ---
 
@@ -857,9 +936,13 @@ Current automated coverage includes:
 - admin-secret invite generation, HMAC-only invite storage, authenticated
   one-time redemption races, v4-only World ID user-signal binding, remote
   verification, and permanent nullifier uniqueness;
-- state transitions, ports, placement, jobs, timeout/retry, waitlist admission,
-  host-class isolation, dedicated assignment, heterogeneous capacity ceilings,
-  and reconciler logic;
+- state transitions, ports, mixed-tier placement, jobs, timeout/retry, bounded
+  waitlist backfill, dedicated assignment, heterogeneous resource budgets, and
+  reconciler logic;
+- raw Stripe webhook verification, metadata-only Queue publication, event
+  deduplication, monotonic paid-through projection, and the disabled sales gate;
+- in-place upgrade delta reservation, no-capacity preservation, idempotent
+  resize retry, prior-state restoration, and storage-grandfathered downgrade;
 - authenticated host registration/probe/state APIs, daemon release telemetry,
   and fleet-controller release ordering;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -890,12 +973,18 @@ public release, an operator must record:
 9. stop, start, rebuild with /home/dev preserved, and destroy;
 10. forced provision failure and retry;
 11. automatic FIFO waitlist admission;
-12. budget, regular, and account-bound dedicated placement, including
-    cross-pool waitlist progress and each host's calculated final slot;
+12. mixed Free/Paid shared placement and account-bound dedicated placement,
+    including bounded-backfill fairness, fragmentation, and exact final
+    CPU/RAM/disk accounting;
 13. host reboot/autostart and daemon reconciliation while active and draining;
 14. port-25 and connection-rate enforcement;
 15. keyboard-only and screen-reader status/error checks; and
-16. one fleet-controller daemon rollout and rollback using infra/RUNBOOK.md.
+16. one fleet-controller daemon rollout and rollback using infra/RUNBOOK.md;
+17. Stripe sandbox signup, unverified paid bypass, success-redirect non-grant,
+    renewal, payment failure, scheduled cancellation and undo, expiry, and
+    resubscription; and
+18. running and stopped in-place upgrade, no-capacity retry, resize failure,
+    downgrade, and grandfathered disk behavior.
 
 Manual results are release evidence; they must not be described as automated
 coverage.
@@ -931,8 +1020,8 @@ manual checks above have been completed for affected areas.
    a one-hour, single-use enrollment token can add a public key and allow SSH.
 7. **Waitlist:** insufficient capacity produces a clear waitlisted state.
    Capacity release admits users automatically in deterministic FIFO order
-   within the matching pool without double allocation; one exhausted class or
-   dedicated account does not block an independent class/account pool.
+   with bounded smaller-request backfill and a starvation cap, without double
+   allocation; dedicated account pools remain independent.
 8. **Dashboard efficiency:** initial load uses one aggregate request. Only the
    container view polls during transitional or waitlisted states using
    non-overlapping five-second or thirty-second schedules; one timeout is
@@ -958,6 +1047,17 @@ manual checks above have been completed for affected areas.
     daemon release, host onboarding begins draining and requires a signed probe,
     and the documented fleet rollback path has been exercised for any release
     that changes the shared contract.
+15. **Billing integrity:** Checkout uses only the configured server Price; a
+    seven-day trial delays the first charge; a redirect cannot grant service;
+    the raw webhook is verified before durable
+    metadata-only Queue publication; duplicate/out-of-order events converge on
+    canonical Stripe state; zero-value trial invoices and payment failure never
+    extend paid-through service; canceled trials and failed first charges remove
+    Paid access; and disabled billing cannot contact Stripe for a new sale.
+16. **Safe plan change:** Free-to-Paid claims only the resource delta and keeps
+    the current container usable when capacity is absent; retries cannot
+    double-reserve; success restores running/stopped state; Paid-to-Free does
+    not shrink storage; and automated paid changes never destroy/re-home.
 
 ---
 

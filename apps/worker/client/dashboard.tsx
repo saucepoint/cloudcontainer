@@ -61,12 +61,23 @@ function ContainerCard({
           <BusyLabel busy={busy}>{STATUS_LABELS[container.status]}</BusyLabel>
         </span>
       </div>
-      <p className="muted">{container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.diskGb} GB Storage · {container.tier}</p>
+      <p className="muted">
+        {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.diskGb} GB Storage · actual plan {container.tier}
+        {container.planTransition ? ` · desired plan ${container.planTransition.desiredTier}` : ""}
+      </p>
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
       {container.status === "waitlisted" ? <p>All hosts are full. Your place is saved.</p> : null}
       {container.status === "stopped" ? <p>Files are safe. Start the workbench to use SSH.</p> : null}
-      {container.status === "suspended" ? <p className="notice error">This workbench is suspended. Your files are not currently accessible.</p> : null}
-      {container.status === "upgrade_pending" ? <p className="notice warning">Your upgrade is waiting for host capacity. No action is needed.</p> : null}
+      {container.status === "suspended" ? (
+        <p className="notice error">
+          This workbench is suspended and your files are not currently accessible. Resubscribe or complete Free verification to restore access; contact support for export help before any displayed deadline.
+        </p>
+      ) : null}
+      {container.status === "upgrade_pending" ? (
+        <p className="notice warning">
+          Payment confirmed. Your existing workbench remains available while we allocate capacity for the larger plan.
+        </p>
+      ) : null}
       {container.status === "destroying" ? <p><BusyLabel busy>Deleting…</BusyLabel></p> : null}
       {container.status === "error" ? (
         <>
@@ -101,6 +112,7 @@ function DashboardApp() {
   const [loaded, setLoaded] = React.useState(false);
   const [container, setContainer] = React.useState<ContainerView | null>(null);
   const [keys, setKeys] = React.useState<SshKey[]>([]);
+  const [billing, setBilling] = React.useState<DashboardSnapshot["billing"] | null>(null);
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [actionBusy, setActionBusy] = React.useState(false);
@@ -122,6 +134,7 @@ function DashboardApp() {
       refreshNeeded.current = false;
       applyContainer(snapshot.container);
       setKeys(snapshot.keys);
+      setBilling(snapshot.billing);
       setLoaded(true);
     } catch (error) {
       if (!redirectIfSignedOut(error)) {
@@ -197,6 +210,23 @@ function DashboardApp() {
     applyContainer(containerResult.container);
   };
 
+  const openBilling = async (path: "/api/billing/checkout" | "/api/billing/portal") => {
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const result = await api<{ url: string }>(path, { method: "POST" });
+      window.location.assign(result.url);
+    } catch (error) {
+      setActionError(displayError(error, "Billing is temporarily unavailable."));
+      setActionBusy(false);
+    }
+  };
+
+  const liveStripeSubscription = Boolean(
+    billing?.subscription &&
+    !["canceled", "incomplete_expired"].includes(billing.subscription.status),
+  );
+
   if (!loaded) {
     return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><span className="sr-only">Loading your workbench…</span><div className="skel skel-title" /><div className="skel skel-line" /><div className="skel skel-line short" /></div></>;
   }
@@ -204,6 +234,60 @@ function DashboardApp() {
   return (
     <>
       <h1>Your workbench.</h1>
+      {billing?.billing?.state === "past_due" || billing?.billing?.state === "grace" ? (
+        <div className="notice warning" role="status">
+          Your payment needs attention. Paid service remains available only through the displayed billing deadline.
+        </div>
+      ) : null}
+      {billing?.billing?.state === "trialing" && billing.billing.trialUntil ? (
+        <div className="notice" role="status">
+          Your Paid trial ends on {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}. Stripe will charge your payment method after the trial.
+        </div>
+      ) : null}
+      {billing?.billing?.state === "cancel_scheduled" && billing.billing.serviceUntil ? (
+        <div className="notice warning" role="status">
+          Paid service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}.
+        </div>
+      ) : null}
+      {billing?.billing?.state === "expired" ? (
+        <div className="notice error" role="status">
+          Paid access ended. Resubscribe or complete Free verification to restore eligibility.
+        </div>
+      ) : null}
+      {billing && (billing.configured || billing.billing?.source === "stripe") &&
+        billing.entitlement.source !== "manual" ? (
+        <section className="card" aria-labelledby="dashboard-plan-heading">
+          <div className="card-head">
+            <h2 id="dashboard-plan-heading">Plan</h2>
+            <span className={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
+              {billing.entitlement.plan ?? "expired"}
+            </span>
+          </div>
+          {billing.billing?.state === "trialing" && billing.billing.trialUntil ? (
+            <p>
+              Free trial ends {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)} · then {billing.paidPlan?.display.replace(/^7-day free trial, then /, "") ?? "monthly billing"}
+            </p>
+          ) : billing.subscription?.serviceUntil ? (
+            <p>
+              {billing.subscription.cancelAtPeriodEnd ? "Paid until" : "Current paid period ends"}{" "}
+              {new Date(billing.subscription.serviceUntil).toISOString().slice(0, 10)}
+              {billing.billing ? ` · ${billing.billing.state.replaceAll("_", " ")}` : ""}
+            </p>
+          ) : null}
+          {billing.billing?.source === "stripe" && liveStripeSubscription ? (
+            <button className="btn secondary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/portal")}>
+              {billing.subscription?.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
+            </button>
+          ) : (
+            <>
+              {billing.paidPlan ? <p>{billing.paidPlan.display}</p> : null}
+              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
+                {billing.entitlement.plan === "free" ? "Start 7-day Paid trial" : "Resubscribe with trial"} →
+              </button>
+            </>
+          )}
+        </section>
+      ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
       {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}

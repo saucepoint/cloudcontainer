@@ -9,6 +9,7 @@ import {
   INPUT_LIMITS,
   JobRequestSchema,
   MemoryNonceStore,
+  MIXED_TIER_SHARED_CAPABILITY,
   verifyRequest,
   type JobStatusResponse,
   type StatsResponse,
@@ -61,10 +62,14 @@ export function buildApp(opts: {
   });
 
   app.get("/health", (c) => {
+    const tenancyMode = config.tenancyMode ??
+      (config.hostType === "dedicated" ? "dedicated" : "shared");
     const res = HealthResponseSchema.parse({
       ok: true,
       hostId: config.hostId,
       hostType: config.hostType,
+      tenancyMode,
+      capabilities: [MIXED_TIER_SHARED_CAPABILITY],
       version,
     });
     return c.json(res);
@@ -75,6 +80,9 @@ export function buildApp(opts: {
     const res: StatsResponse = {
       hostId: config.hostId,
       hostType: config.hostType,
+      tenancyMode: config.tenancyMode ??
+        (config.hostType === "dedicated" ? "dedicated" : "shared"),
+      capabilities: [MIXED_TIER_SHARED_CAPABILITY],
       version,
       containers: containers
         .filter((ct) => ct.config["user.workbench.id"])

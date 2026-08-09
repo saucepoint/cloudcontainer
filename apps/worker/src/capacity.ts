@@ -3,6 +3,7 @@ import {
   HOST_RAM_OVERCOMMIT_NUMERATOR,
   TIERS,
   type HostType,
+  type TenancyMode,
   type Tier,
 } from "@workbench/contract";
 import type { Bindings, HostRow } from "./types.js";
@@ -25,6 +26,8 @@ export const HOST_FAILURE_THRESHOLD = 3;
 
 export interface PlacementRequest {
   userId: string;
+  tenancyMode?: TenancyMode;
+  /** Legacy daemon fallback during the mixed-tier rollout. */
   hostType: HostType;
   cpu: number;
   ramMb: number;
@@ -32,10 +35,10 @@ export interface PlacementRequest {
 }
 
 /**
- * Select an eligible host with the most complete placements still available
- * across its tenant, rounded CPU/RAM, and disk ceilings. Dedicated hosts
- * additionally require an explicit account assignment. The caller must repeat
- * every check in its write transaction before reserving the host.
+ * Select an eligible host using exact additive CPU/RAM/disk reservations and a
+ * deterministic fragmentation score. Dedicated hosts additionally require an
+ * explicit account assignment. The caller repeats every predicate in its write
+ * transaction before reserving the host.
  */
 export async function pickHost(
   env: Bindings,
@@ -43,15 +46,21 @@ export async function pickHost(
   now: () => number = Date.now,
   excludedHostIds: readonly string[] = [],
 ): Promise<HostRow | null> {
+  const tenancyMode = request.tenancyMode ??
+    (request.hostType === "dedicated" ? "dedicated" : "shared");
   return env.DB.prepare(
     `SELECT h.* FROM hosts h
      WHERE h.status = 'active'
-       AND h.host_type = ?1
-       AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?2)
-       AND h.vcpu_allocated + ?3 <=
-         ((h.vcpu_capacity + ?3 - 1) / ?3) * ?3
-       AND h.ram_allocated_mb + ?4 <=
-         (((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
+       AND h.tenancy_mode = ?1
+       AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = ?2)
+       AND (
+         h.tenancy_mode = 'dedicated'
+         OR h.daemon_capabilities LIKE ?10
+         OR h.host_type = ?11
+       )
+       AND h.vcpu_allocated + ?3 <= h.vcpu_capacity
+       AND (h.ram_allocated_mb + ?4) * ?9 <=
+           (h.ram_total_mb - h.ram_reserve_mb) * ?8
        AND h.disk_total_gb - h.disk_allocated_gb >= ?5
        AND h.max_tenants > (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id)
        AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?6
@@ -61,22 +70,29 @@ export async function pickHost(
        AND h.reported_cpu_logical IS NOT NULL
        AND h.id NOT IN (SELECT value FROM json_each(?7))
      ORDER BY MIN(
-                h.max_tenants - (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
-                CAST((
-                  (((h.vcpu_capacity + ?3 - 1) / ?3) * ?3 - h.vcpu_allocated) / ?3
-                ) AS INTEGER),
-                CAST((
-                  ((((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
-                    - h.ram_allocated_mb) / ?4
-                ) AS INTEGER),
-                CAST((h.disk_total_gb - h.disk_allocated_gb) / ?5 AS INTEGER)
+                CAST((h.vcpu_capacity - h.vcpu_allocated - ?3) * 100000 /
+                  h.vcpu_capacity AS INTEGER),
+                CAST(((h.ram_total_mb - h.ram_reserve_mb) * ?8 -
+                  (h.ram_allocated_mb + ?4) * ?9) * 100000 /
+                  ((h.ram_total_mb - h.ram_reserve_mb) * ?8) AS INTEGER),
+                CAST((h.disk_total_gb - h.disk_allocated_gb - ?5) * 100000 /
+                  h.disk_total_gb AS INTEGER)
               ) DESC,
+              (
+                CAST((h.vcpu_capacity - h.vcpu_allocated - ?3) * 100000 /
+                  h.vcpu_capacity AS INTEGER) +
+                CAST(((h.ram_total_mb - h.ram_reserve_mb) * ?8 -
+                  (h.ram_allocated_mb + ?4) * ?9) * 100000 /
+                  ((h.ram_total_mb - h.ram_reserve_mb) * ?8) AS INTEGER) +
+                CAST((h.disk_total_gb - h.disk_allocated_gb - ?5) * 100000 /
+                  h.disk_total_gb AS INTEGER)
+              ) ASC,
               (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
               h.id
      LIMIT 1`,
   )
     .bind(
-      request.hostType,
+      tenancyMode,
       request.userId,
       request.cpu,
       request.ramMb,
@@ -85,6 +101,8 @@ export async function pickHost(
       JSON.stringify(excludedHostIds),
       HOST_RAM_OVERCOMMIT_NUMERATOR,
       HOST_RAM_OVERCOMMIT_DENOMINATOR,
+      '%"mixed-tier-shared-v1"%',
+      request.hostType,
     )
     .first<HostRow>();
 }

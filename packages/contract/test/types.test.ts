@@ -23,6 +23,7 @@ import {
   HOST_RAM_OVERCOMMIT_NUMERATOR,
   HOST_RAM_RESERVE_PERCENT,
   HOST_TYPES,
+  TENANCY_MODES,
   LLM_PROVIDERS,
   LlmKeysSchema,
   MAX_HOST_VCPU_OVERCOMMIT,
@@ -61,12 +62,13 @@ describe("tier capacities", () => {
     expect(TIERS.paid.diskGb).toBe(8);
   });
 
-  it("maps free, paid, and dedicated service plans to isolated host pools", () => {
+  it("maps free and paid plans to shared tenancy while keeping dedicated isolated", () => {
     expect(HOST_TYPES).toEqual(["budget", "regular", "dedicated"]);
+    expect(TENANCY_MODES).toEqual(["shared", "dedicated"]);
     expect(SERVICE_PLANS).toEqual({
-      free: { tier: "free", hostType: "budget" },
-      paid: { tier: "paid", hostType: "regular" },
-      dedicated: { tier: "paid", hostType: "dedicated" },
+      free: { tier: "free", tenancyMode: "shared", hostType: "budget" },
+      paid: { tier: "paid", tenancyMode: "shared", hostType: "regular" },
+      dedicated: { tier: "paid", tenancyMode: "dedicated", hostType: "dedicated" },
     });
   });
 
@@ -134,7 +136,7 @@ describe("HostRegistrationSchema", () => {
       ...host,
       daemonPublicKey: "c2hvcnQ=",
     }).success).toBe(false);
-    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 25 }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 25 }).success).toBe(true);
     expect(HostRegistrationSchema.safeParse({
       ...host,
       ramTotalMb: 65536,
@@ -142,7 +144,7 @@ describe("HostRegistrationSchema", () => {
     }).success).toBe(false);
   });
 
-  it("allows either RAM or vCPU to determine a shared host tenant ceiling", () => {
+  it("keeps the operational tenant ceiling independent of mixed resource admission", () => {
     const ramConstrained = {
       ...host,
       ramTotalMb: 8192,
@@ -155,7 +157,7 @@ describe("HostRegistrationSchema", () => {
     expect(HostRegistrationSchema.safeParse({
       ...ramConstrained,
       maxTenants: 6,
-    }).success).toBe(false);
+    }).success).toBe(true);
 
     const cpuConstrained = {
       ...host,
@@ -169,7 +171,7 @@ describe("HostRegistrationSchema", () => {
     expect(HostRegistrationSchema.safeParse({
       ...cpuConstrained,
       maxTenants: 5,
-    }).success).toBe(false);
+    }).success).toBe(true);
   });
 
   it("requires dedicated hosts to have exactly one slot and rejects assignments on shared hosts", () => {

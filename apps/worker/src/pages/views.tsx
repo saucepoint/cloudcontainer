@@ -113,8 +113,9 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
 
 export const VerificationPage: FC<{
   worldIdAvailable: boolean;
+  paidAvailable?: boolean;
   notificationCount?: number;
-}> = ({ worldIdAvailable, notificationCount = 0 }) => (
+}> = ({ worldIdAvailable, paidAvailable = false, notificationCount = 0 }) => (
   <Layout
     title="Verify your account"
     loggedIn
@@ -132,12 +133,14 @@ export const VerificationPage: FC<{
     <p class="lead">
       The free tier is limited to one account per person. {worldIdAvailable
         ? "Verify with World ID or redeem a single-use invite"
-        : "Redeem a single-use invite"} before creating your workbench.
+        : "Redeem a single-use invite"} before creating a free workbench.
+      {paidAvailable ? " You can also continue with Paid without free-tier verification." : ""}
     </p>
     <div
       id="account-verification-root"
-      class={worldIdAvailable ? "verification-grid" : undefined}
+      class={worldIdAvailable || paidAvailable ? "verification-grid" : undefined}
       data-world-id-available={String(worldIdAvailable)}
+      data-paid-available={String(paidAvailable)}
     ></div>
     <script type="module" src="/account.js"></script>
   </Layout>
@@ -173,6 +176,40 @@ export const AccountPage: FC<{
   worldIdVerified?: boolean;
   notifications?: NotificationView[];
   unreadNotificationCount?: number;
+  billing?: {
+    configured: boolean;
+    paidPlan: {
+      price: string;
+      currency: string;
+      interval: "month";
+      trialDays: number;
+      display: string;
+    } | null;
+    entitlement: {
+      eligible: boolean;
+      plan: string | null;
+      source: string | null;
+      state: string;
+      accessUntil: number | null;
+    };
+    billing: {
+      plan: string;
+      source: string;
+      state: string;
+      trialUntil: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+    subscription: {
+      status: string;
+      cancelAtPeriodEnd: boolean;
+      cancelAt: number | null;
+      trialStart: number | null;
+      trialEnd: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+  };
 }> = ({
   passkeyCount,
   continueHref,
@@ -182,12 +219,54 @@ export const AccountPage: FC<{
   worldIdVerified = false,
   notifications = [],
   unreadNotificationCount = notifications.filter((notification) => notification.readAt === null).length,
+  billing,
 }) => {
   const containerMustBeDestroyed = containerStatus !== null && containerStatus !== "waitlisted";
   return (
     <Layout title="Account" loggedIn notificationCount={unreadNotificationCount}>
       <h1>{welcome ? "Your account is ready." : "Account."}</h1>
-      <p class="lead">Manage passkeys, credentials, and notifications for your account.</p>
+      <p class="lead">Manage your plan, passkeys, credentials, and notifications.</p>
+      {billing ? (
+        <section id="billing" class="card" aria-labelledby="billing-heading">
+          <div class="card-head">
+            <h2 id="billing-heading">Plan</h2>
+            <span class={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
+              {billing.entitlement.plan ?? "No active plan"}
+            </span>
+          </div>
+          {billing.billing?.source === "stripe" && billing.subscription &&
+          !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
+            <>
+              <p>
+                Paid · {billing.billing.state.replaceAll("_", " ")}
+                {billing.billing.state === "trialing" && billing.billing.trialUntil
+                  ? ` · trial ends ${new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}`
+                  : billing.billing.state === "expired" && billing.subscription.trialEnd
+                  ? " · trial access ended"
+                  : billing.billing.serviceUntil
+                  ? ` · ${billing.subscription.cancelAtPeriodEnd ? "paid until" : "current paid period ends"} ${new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}`
+                  : " · confirming payment"}
+              </p>
+              <button id="billing-portal-btn" class="btn secondary" type="button">
+                {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
+              </button>
+            </>
+          ) : billing.billing?.source === "manual" ? (
+            <p>Operator-managed {billing.billing.plan} entitlement.</p>
+          ) : billing.configured ? (
+            <>
+              <p>
+                Upgrade to 2 vCPU, 4 GB RAM, and 8 GB persistent home storage
+                {billing.paidPlan ? ` with a ${billing.paidPlan.display}` : ""}.
+              </p>
+              <button id="billing-checkout-btn" class="btn primary" type="button">
+                Start 7-day Paid trial →
+              </button>
+            </>
+          ) : <p class="muted">Paid subscriptions are not available yet.</p>}
+          <p id="billing-status" class="muted" role="status" aria-live="polite"></p>
+        </section>
+      ) : null}
       <section id="notifications" class="card" aria-labelledby="notifications-heading" data-unread-count={unreadNotificationCount}>
         <div class="card-head">
           <h2 id="notifications-heading">Notifications</h2>

@@ -14,6 +14,7 @@ function container(overrides: Partial<ContainerView> = {}): ContainerView {
     cpu: 1,
     ramMb: 1536,
     diskGb: 5,
+    planTransition: null,
     sshCommand: null,
     hostKeyFingerprints: [],
     job: null,

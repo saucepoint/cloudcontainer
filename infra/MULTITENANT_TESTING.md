@@ -1,8 +1,9 @@
 # Multi-host and multi-tenant staging acceptance
 
-This is the destructive release gate for heterogeneous budget, regular, and
-dedicated Incus hosts. Use disposable staging accounts and data. Complete it
-for every hardware shape and class before that combination accepts users.
+This is the destructive release gate for heterogeneous shared and dedicated
+Incus hosts. `budget` and `regular` are retained as rollout labels for shared
+hardware. Use disposable staging accounts and data. Complete it for every
+hardware shape and tenancy mode before that combination accepts users.
 
 The executable policy is `infra/host-policy.sh`; this document tests that the
 daemon, host, D1 scheduler, and fleet controller enforce the same policy. Do
@@ -11,17 +12,16 @@ tests, and `SPEC.md` together.
 
 ## Test matrix
 
-| Pool | Test accounts | Required placement | Advertised / enforced CPU and other limits |
+| Tenancy | Test accounts | Required placement | Advertised / enforced CPU and other limits |
 |---|---|---|---|
-| budget | at least two free plus one overflow | free only | 1 / 1 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home and root |
-| regular | at least two paid plus one overflow | paid only | 2 / 3 vCPU, 4096 MiB RAM, no swap, 8 GiB home and root |
-| dedicated | two dedicated-entitled accounts and one shared paid account | only the assigned account; exactly one tenant | paid limits |
+| shared | at least two Free, two Paid, and one overflow | Free and Paid concurrently on one capable host | Free: 1 / 1 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home/root; Paid: 2 / 3 vCPU, 4096 MiB RAM, no swap, 8 GiB home/root |
+| dedicated | two dedicated-entitled accounts and one shared paid account | only the assigned account; exactly one tenant | Paid limits |
 
-Also include one active host of a different class during each capacity test.
-That proves an exhausted pool does not block an independent FIFO pool.
+Also include an account-bound dedicated host during shared capacity tests. That
+proves shared FIFO work does not block an independent dedicated pool.
 
-Minimum useful hardware is whatever yields two complete slots for budget or
-regular after reserves. If a host calculates fewer than two, it can pass
+Minimum useful hardware is whatever yields at least one Free plus one Paid
+reservation after reserves. If a host cannot fit that pair, it can pass
 single-host provisioning but cannot supply multi-tenant isolation evidence.
 Use a larger staging host; do not weaken policy to manufacture a slot.
 
@@ -39,19 +39,21 @@ Record the output, Git commit, host hardware, ZFS layout, Incus version, daemon
 release, class, registered resource counters, and calculated tenant ceiling.
 The host must be active only after its signed probe and audit pass.
 
-Confirm test accounts have the intended service plan. A browser must not be
-able to assert `paid` or `dedicated`; those are operator entitlements.
+Confirm test accounts have the intended effective entitlement. A browser must
+not be able to assert a Price, plan, tier, or placement mode. Paid must come
+from a canonical sandbox subscription or explicit manual entitlement;
+dedicated remains operator-managed.
 
 ## Capacity calculation and admission
 
-For the class under test, independently compute:
+For the host under test, independently compute:
 
     ram_reserve_mb = max(3072, ceil(ram_total_mb * 8 / 100), configured_higher_reserve)
     vcpu_capacity = online_host_vcpus * vcpu_overcommit  # integer 1..4; default 4
     cpu_slots = ceil(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 3 paid
     ram_slots = ceil((ram_total_mb - ram_reserve_mb) * 1.25 / tenant_ram_mb)
     disk_slots = floor(safe_disk_gb / (2 * tenant_disk_gb))
-    swap_slots = floor(host_swap_mb / tenant_swap_mb)  # budget only
+    swap_slots = floor(host_swap_mb / 1024)  # every shared slot can be Free
     idmap_slots = floor(min(root_subuid_count, root_subgid_count) / 65536) - 1  # explicit ranges only
 
     expected_slots = min(cpu_slots, ram_slots, disk_slots[, swap_slots, idmap_slots])
@@ -71,38 +73,40 @@ it drains before policy changes, rejects a ceiling below current allocations,
 clears stale health telemetry, audits and probes the new registration, and
 reactivates only when that host began active.
 
-Register two budget shapes independently, for example 4 vCPU/8 GiB and
-8 vCPU/16 GiB, plus an 8-vCPU/16-GiB regular host. At the default 4x policy,
-their CPU/RAM slot counts are 16/5, 32/12, and 11/5 respectively, before disk,
-swap, and ID-map ceilings. RAM must therefore bind these examples at 5, 12, and
-5 tenants. Also test a CPU-bound shape: a 4-vCPU/16-GiB budget host with
-`--vcpu-overcommit 1` has 4 CPU slots and 11 RAM slots. Confirm the scheduler
-scores every host's own CPU, allocatable RAM, disk, and `max_tenants` instead
-of applying a class-wide machine size.
+Register at least two shared hardware shapes and confirm the scheduler scores
+each host's post-placement normalized CPU, RAM, and disk headroom plus
+`max_tenants`, with deterministic host-ID tie-breaking. Exercise fragmentation:
+create a state where Paid fits only one host but Free fits both, and verify the
+least-waste choice does not create a single-resource hotspot.
 
-Create `expected_slots + 1` disposable matching accounts and provision them
-concurrently. Confirm:
+Create a mixed sequence whose summed reservations reaches one resource budget,
+then submit one additional request concurrently. Confirm:
 
-- exactly `expected_slots` containers are assigned and the extra account is
+- exactly the requests that fit are assigned and the extra account is
   waitlisted;
-- every assigned host class exactly matches the persisted placement class;
-- `vcpu_allocated = expected_slots * provisioned_tenant_cpu`;
-- `ram_allocated_mb = expected_slots * tenant_ram_mb`;
-- `disk_allocated_gb = expected_slots * 2 * tenant_disk_gb`;
+- every assigned host tenancy mode matches persisted placement mode and the
+  daemon reports `mixed-tier-shared-v1`;
+- `vcpu_allocated = free_count + 3 * paid_count`;
+- `ram_allocated_mb = 1536 * free_count + 4096 * paid_count`;
+- `disk_allocated_gb = 10 * free_count + 16 * paid_count`, except for explicit
+  grandfathered Free storage, which remains 16;
 - tenant count never exceeds `max_tenants`;
 - every assigned container has a unique SSH port on that host; and
 - repeated and concurrent provision requests do not change those totals.
 
 Destroy one disposable environment. Confirm all three counters decrement once,
-the SSH port enters quarantine, and the oldest matching-pool waitlist entry is
-admitted on the next reconciler pass.
+the SSH port enters quarantine, and the shared FIFO is reconsidered on the next
+reconciler pass.
 
-## Class isolation and independent FIFO pools
+## Tenancy isolation and bounded FIFO backfill
 
 Exercise all negative routes:
 
-- free accounts never land on regular or dedicated hosts;
-- shared paid accounts never land on budget or dedicated hosts;
+- Free and Paid both land on a capable shared host regardless of its legacy
+  `budget`/`regular` label;
+- a legacy shared daemon without the capability accepts only its exact old
+  class during the rolling interval;
+- shared accounts never land on dedicated hosts;
 - dedicated-entitled account A cannot land on a host assigned to account B;
 - a dedicated host cannot activate without an eligible assignment;
 - changing a dedicated assignment fails unless the host is draining and has
@@ -110,10 +114,13 @@ Exercise all negative routes:
 - an unknown subscription status fails provisioning instead of falling back to
   a cheaper class.
 
-Fill the budget pool, then enqueue another free account followed by a paid
-account while regular capacity remains. The paid account must proceed without
-overtaking another paid account; the blocked free account must remain first in
-the budget FIFO. Repeat with two independently assigned dedicated accounts.
+Make the oldest shared request too large for current fragmented capacity while
+a later smaller request fits. Confirm the scheduler scans no more than eight
+later rows, admits at most one backfill per pass, preserves the oldest timestamp,
+and increments its skip count. After three successful bypasses, the oldest row
+must not be bypassed again. A request beyond the scan window must not jump the
+queue merely because its plan differs. Repeat with two independently assigned
+dedicated accounts to prove their account-bound progress remains independent.
 
 ## Host policy and tenant isolation
 
@@ -143,17 +150,18 @@ the 1024-process limit, `security.idmap.isolated=true`, nesting disabled, and
 an SSH proxy bound to the assigned port.
 
 For disk enforcement, fill disposable data on both `/home/dev` and `/` beyond
-the class quota. Each write must fail locally without exhausting the pool or
-affecting another tenant. Remove the files afterward.
+each container's actual tier quota. Each write must fail locally without
+exhausting the pool or affecting another tenant. Remove the files afterward.
 
 Create a file owned by `dev` in `/home/dev`, run an application rebuild, and
 confirm the file remains owned and writable by `dev`. This exercises the custom
 volume's isolated-idmap transition while the root filesystem is replaced.
 
-For memory enforcement, exceed the class RAM limit. A budget tenant may use at
-most 1024 MiB configured swap; regular and dedicated tenants must report no
-configured swap. The workload may be killed inside the tenant, but the host and
-neighboring SSH sessions must stay responsive with no host OOM event.
+For memory enforcement, exceed each tier's RAM limit. A Free tenant may use at
+most 1024 MiB configured swap; Paid and dedicated tenants must report no
+configured swap even when they share the same host. The workload may be killed
+inside the tenant, but the host and neighboring SSH sessions must stay
+responsive with no host OOM event.
 
 Run CPU stress in every tenant simultaneously. Each must remain bounded to its
 exact enforced allowance (1 free, 3 paid/dedicated), while the UI advertises
@@ -162,7 +170,7 @@ exact enforced allowance (1 free, 3 paid/dedicated), while the UI advertises
 ## Health, drain, and controller release tests
 
 1. Stop one tenant through the application and leave another running.
-2. Drain the host with `hostctl state`; a new matching account must wait while
+2. Drain the host with `hostctl state`; a new shared account must wait while
    existing tenants keep running.
 3. Reboot the host. The running tenant must return and the stopped tenant must
    remain stopped.
@@ -172,10 +180,11 @@ exact enforced allowance (1 free, 3 paid/dedicated), while the UI advertises
    pause. After three failures, an active host must be `unhealthy`.
 6. Start the daemon. A valid signed stats response must clear failures and
    recover an unhealthy host; a draining host must stay draining.
-7. Make the daemon report a wrong host ID or class. The signed fleet probe must
-   fail and activation must be rejected. Repeat with class, release, or CPU
-   hardware telemetry omitted: rolling reconciliation may read it, but the
-   administrator probe must reject it and clear stale activation evidence.
+7. Make the daemon report a wrong host ID, class, or tenancy mode. The signed
+   fleet probe must fail and activation must be rejected. Repeat with class,
+   tenancy mode, capability, release, or CPU hardware telemetry omitted:
+   rolling reconciliation may read it, but the administrator probe must reject
+   it and clear stale activation evidence.
 
 Exercise the release controller from a new clean commit:
 
@@ -210,25 +219,39 @@ account B or a shared paid account must remain unplaced even when the host has
 free CPU/RAM/disk counters. After A destroys its environment, drain the host,
 assign B, probe, activate, and confirm only B can use it.
 
-## Re-home, retirement, and identity lifecycle tests
+## Plan transition, re-home, retirement, and identity lifecycle tests
 
-On disposable data, change a free account entitlement to paid. Confirm its
-existing budget container can still start, stop, rebuild, and destroy against
-its persisted placement. Then run:
+On disposable data, grant Paid to a running Free owner. Confirm only the
+positive 2-vCPU, 2560-MiB RAM, and 6-GiB doubled-disk delta is claimed before a
+resize job, the actual container row remains Free until daemon success, and the
+same host/container identity returns to running with Paid limits. Repeat from
+stopped and confirm it returns to stopped. Deliver the grant twice and confirm
+one transition/job. Force a resize failure, then confirm retry does not claim
+the delta twice.
+
+Fill the current host so the delta cannot fit. The upgrade must remain
+`waiting_capacity`; the Free container, SSH, and home data remain usable, and
+no destructive re-home job exists. Release capacity and confirm reconciliation
+converges. Then expire Paid on a permanently Free-eligible owner: the container
+must downgrade in place, release CPU/RAM, retain 8-GiB home/root quotas, and set
+the grandfathered-storage marker.
+
+Separately exercise the explicit destructive administrative re-home path on
+disposable data:
 
     npm run hostctl -- rehome CONTAINER_ID --yes
 
-The old daemon must report successful destroy before D1 releases the old
-2-vCPU/RAM/disk reservation. The row must then be hostless, paid/regular,
-advertised as 2 vCPU, waitlisted, and later admitted with a 3-vCPU reservation.
-An unsupported subscription value must reject re-home without mutation. A
-manually corrupted tier/class mismatch must fail a spec-bearing job with the
-actionable re-home error before daemon dispatch, while destroy remains usable.
+The old daemon must report successful destroy before D1 releases its actual
+CPU/RAM/disk reservation. The row must then be hostless and waitlisted on the
+requested tenancy. An unsupported subscription value must reject re-home
+without mutation. A manually corrupted tenancy/class mismatch must fail a
+spec-bearing job with the actionable re-home error before daemon dispatch,
+while destroy remains usable.
 
-Exercise `hostctl reclass` on an empty disposable host. Confirm a class change
-without a fresh capacity report is rejected, the daemon reports the new class,
-the class-specific CPU policy changes, old health evidence is cleared, and the
-host cannot activate until audit and probe succeed.
+Exercise `hostctl reclass` on an empty disposable host. Confirm a class/tenancy
+change without a fresh capacity report is rejected, the daemon reports both new
+values and capability, old health evidence is cleared, and the host cannot
+activate until audit and probe succeed.
 
 Finally simulate an irrecoverable dedicated host with an active job and one
 tenant. Drain and isolate the machine, then force-retire it. Confirm atomically:
@@ -257,8 +280,8 @@ Stop admission immediately for any:
 - cross-tenant packet, quota bypass, idmap overlap, or host-device access;
 - duplicate SSH port or counter below zero/above a registered limit;
 - tenant count beyond `max_tenants`;
-- placement on the wrong class or dedicated assignment;
-- daemon identity/class/release mismatch accepted by the Worker; or
+- placement in the wrong tenancy mode or dedicated assignment;
+- daemon identity/class/tenancy/capability/release mismatch accepted by the Worker; or
 - tenant lifecycle state changing across reboot contrary to the control plane.
 
 This remains shared-kernel isolation, not hardware-isolated virtualization.

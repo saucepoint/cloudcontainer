@@ -49,6 +49,13 @@ if [[ "$REQUESTED_HOST_RAM_RESERVE_MB_SET" == true ]]; then
 fi
 
 HOST_TYPE="${HOST_TYPE:-budget}"
+if [[ -z "${TENANCY_MODE:-}" ]]; then
+  if [[ "$HOST_TYPE" == "dedicated" ]]; then
+    TENANCY_MODE=dedicated
+  else
+    TENANCY_MODE=shared
+  fi
+fi
 MAX_VCPU_OVERCOMMIT=4
 HOST_RAM_OVERCOMMIT_NUMERATOR=5
 HOST_RAM_OVERCOMMIT_DENOMINATOR=4
@@ -58,7 +65,7 @@ VCPU_OVERCOMMIT="${VCPU_OVERCOMMIT:-$MAX_VCPU_OVERCOMMIT}"
 DISK_CAPACITY_PERCENT="${DISK_CAPACITY_PERCENT:-70}"
 TENANT_PROCESS_LIMIT="${TENANT_PROCESS_LIMIT:-1024}"
 TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
-WORKBENCH_POLICY_VERSION=5
+WORKBENCH_POLICY_VERSION=6
 
 case "$HOST_TYPE" in
   budget)
@@ -90,6 +97,24 @@ case "$HOST_TYPE" in
     return 1 2>/dev/null || exit 1
     ;;
 esac
+
+if [[ "$TENANCY_MODE" != "shared" && "$TENANCY_MODE" != "dedicated" ]]; then
+  echo "!! TENANCY_MODE must be shared or dedicated (got: $TENANCY_MODE)" >&2
+  return 1 2>/dev/null || exit 1
+fi
+if [[ "$HOST_TYPE" == "dedicated" && "$TENANCY_MODE" != "dedicated" ]] || \
+  [[ "$HOST_TYPE" != "dedicated" && "$TENANCY_MODE" != "shared" ]]; then
+  echo "!! HOST_TYPE $HOST_TYPE conflicts with tenancy mode $TENANCY_MODE" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+# Every shared host can receive Free, whose advertised contract includes 1 GiB
+# of bounded swap. Reserve that worst-case per tenant even when the legacy
+# rollout class is regular/Paid.
+SLOT_SWAP_MB=$TENANT_SWAP_MB
+if [[ "$TENANCY_MODE" == "shared" ]]; then
+  SLOT_SWAP_MB=1024
+fi
 
 TENANT_DISK_RESERVATION_GB=$(( TENANT_DISK_GB * 2 ))
 
@@ -173,8 +198,8 @@ calculate_host_capacity() {
   if (( DISK_SLOTS < TENANT_SLOTS )); then TENANT_SLOTS=$DISK_SLOTS; fi
   SWAP_TOTAL_MB=$(awk '/SwapTotal/ { print int($2 / 1024) }' /proc/meminfo)
   SWAP_SLOTS=0
-  if (( TENANT_SWAP_MB > 0 )); then
-    SWAP_SLOTS=$(( SWAP_TOTAL_MB / TENANT_SWAP_MB ))
+  if (( SLOT_SWAP_MB > 0 )); then
+    SWAP_SLOTS=$(( SWAP_TOTAL_MB / SLOT_SWAP_MB ))
     if (( SWAP_SLOTS < TENANT_SLOTS )); then TENANT_SLOTS=$SWAP_SLOTS; fi
   fi
   if [[ "$HOST_TYPE" == "dedicated" && "$TENANT_SLOTS" -gt 1 ]]; then
@@ -203,10 +228,16 @@ calculate_host_capacity() {
     return 1
   fi
 
-  # Incus project limits cover the logical reservations admitted by the final
-  # tenant ceiling. RAM slots already include the 1.25x host overcommit.
-  CPU_LIMIT=$(( TENANT_SLOTS * TENANT_CPU ))
-  RAM_LIMIT_MB=$(( TENANT_SLOTS * TENANT_RAM_MB ))
+  # Shared project limits match D1's additive resource budgets; individual
+  # instances still receive their exact tier limits. Dedicated remains bounded
+  # by its single paid tenant shape.
+  if [[ "$TENANCY_MODE" == "shared" ]]; then
+    CPU_LIMIT=$VCPU_CAPACITY
+    RAM_LIMIT_MB=$(( RAM_CAPACITY_MB * HOST_RAM_OVERCOMMIT_NUMERATOR / HOST_RAM_OVERCOMMIT_DENOMINATOR ))
+  else
+    CPU_LIMIT=$TENANT_CPU
+    RAM_LIMIT_MB=$TENANT_RAM_MB
+  fi
 
   # One distinct 65,536-ID range per tenant plus the trusted image-build map.
   IDMAP_REQUIRED=$(( (TENANT_SLOTS + 1) * 65536 ))

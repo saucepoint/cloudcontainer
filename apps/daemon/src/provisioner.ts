@@ -123,8 +123,10 @@ export class Provisioner {
   }
 
   private validateHostTier(tier: keyof typeof TIERS): void {
-    const expectedTier = this.config.hostType === "budget" ? "free" : "paid";
-    if (tier !== expectedTier) {
+    const tenancyMode = this.config.tenancyMode ??
+      (this.config.hostType === "dedicated" ? "dedicated" : "shared");
+    const allowed = tenancyMode === "shared" || tier === "paid";
+    if (!allowed) {
       throw new Error(`job tier ${tier} is not allowed on a ${this.config.hostType} host`);
     }
   }

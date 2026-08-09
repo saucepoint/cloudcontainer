@@ -23,6 +23,9 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  // Billing remains disabled until the operator creates the primary and DLQ
+  // queues, adds BILLING_EVENTS as both producer and consumer, supplies the
+  // Stripe vars/secrets documented in README.md, and sets BILLING_ENABLED=1.
   "routes": [
     {
       "pattern": "usebench.dev",
@@ -47,6 +50,11 @@
     "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
     "WORLD_ID_ACTION": "verify-account-1",
     "WORLD_ID_ENVIRONMENT": "production"
+    // Intentionally omitted launch-time billing vars:
+    // BILLING_ENABLED, STRIPE_PRICE_PAID_MONTHLY, PAID_PLAN_MONTHLY_PRICE,
+    // PAID_PLAN_CURRENCY, BILLING_CHECKOUT_SESSION_MINUTES,
+    // STRIPE_TAX_ENABLED, BILLING_GRACE_DAYS,
+    // BILLING_EXPORT_WINDOW_DAYS.
   }
   // Secrets (set via `wrangler secret put <NAME>`):
   //   BETTER_AUTH_SECRET       — high-entropy Better Auth cookie/token secret
@@ -61,4 +69,6 @@
   //   AUTH_GOOGLE_CLIENT_SECRET — Google OAuth secret (paired with client ID)
   //   AUTH_GITHUB_CLIENT_SECRET — GitHub OAuth secret (paired with client ID)
   //   WORLD_ID_SIGNING_KEY      — World ID 4.0 RP signing key
+  //   STRIPE_SECRET_KEY         — Stripe API key used only by server-side Billing calls
+  //   STRIPE_WEBHOOK_SECRET     — signing secret for /api/stripe/webhook
 }

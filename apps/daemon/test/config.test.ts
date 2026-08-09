@@ -23,6 +23,7 @@ describe("loadConfig", () => {
     expect(config).toMatchObject({
       ...required,
       hostType: "budget",
+      tenancyMode: "shared",
       listenPort: 8443,
       baseImage: "workbench-base",
       storagePool: "default",
@@ -44,6 +45,7 @@ describe("loadConfig", () => {
     );
     expect(config.listenPort).toBe(9000);
     expect(config.hostType).toBe("regular");
+    expect(config.tenancyMode).toBe("shared");
     expect(config.storagePool).toBe("tank");
     expect(config.baseImage).toBe("custom");
     expect(config.project).toBe("tenants");
@@ -65,6 +67,11 @@ describe("loadConfig", () => {
   it("rejects an unknown host type", () => {
     expect(() => loadConfig(writeConfig({ ...required, hostType: "premium-ish" })))
       .toThrow("invalid daemon host type");
+  });
+
+  it("rejects a tenancy mode that conflicts with the legacy host class", () => {
+    expect(() => loadConfig(writeConfig({ ...required, tenancyMode: "dedicated" })))
+      .toThrow("host type and tenancy mode conflict");
   });
 
   it("rejects malformed control-plane and host keys", () => {

@@ -18,6 +18,7 @@ import {
   getContainerForUser,
   HostJobAdmissionError,
 } from "./jobs.js";
+import { effectiveEntitlementForUser } from "./entitlements.js";
 import type { Bindings, ContainerRow, UserRow } from "./types.js";
 
 interface ProvisionInput {
@@ -49,10 +50,15 @@ export async function startProvision(
   user: UserRow,
   input: ProvisionInput,
 ): Promise<ContainerRow> {
-  const servicePlan = servicePlanForSubscription(user.subscription_status);
+  const entitlement = await effectiveEntitlementForUser(env, user);
+  if (!entitlement.eligible || entitlement.plan === null) {
+    throw new ProvisioningNotAllowedError(user.subscription_status);
+  }
+  const servicePlan = servicePlanForSubscription(entitlement.plan);
   const tierName = servicePlan.tier;
   const tier = TIERS[tierName];
   const placementClass = servicePlan.hostType;
+  const placementMode = servicePlan.tenancyMode;
   const containerId = crypto.randomUUID();
   const now = Date.now();
   const agents = JSON.stringify(input.agents);
@@ -71,6 +77,7 @@ export async function startProvision(
       env,
       {
         userId: user.id,
+        tenancyMode: placementMode,
         hostType: placementClass,
         cpu: reservedCpu,
         ramMb: tier.ramMb,
@@ -99,21 +106,23 @@ export async function startProvision(
            )
            INSERT INTO containers
              (id, user_id, host_id, ssh_port, agents, github_repos, tier,
-              placement_class, cpu, ram_mb, disk_gb, status, created_at)
-           SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
+              placement_class, placement_mode, cpu, ram_mb, disk_gb, status, created_at)
+           SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
            FROM hosts h, request r
            WHERE h.id = ? AND h.status = 'active'
-             AND h.host_type = ?
-             AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?)
+             AND h.tenancy_mode = ?
+             AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = ?)
+             AND (
+               h.tenancy_mode = 'dedicated'
+               OR h.daemon_capabilities LIKE '%"mixed-tier-shared-v1"%'
+               OR h.host_type = ?
+             )
              AND h.max_tenants > (
                SELECT COUNT(*) FROM containers existing WHERE existing.host_id = h.id
              )
-             AND h.vcpu_allocated + r.cpu <=
-               ((h.vcpu_capacity + r.cpu - 1) / r.cpu) * r.cpu
-             AND h.ram_allocated_mb + r.ram_mb <=
-               (((h.ram_total_mb - h.ram_reserve_mb) * r.ram_overcommit_num
-                 + (r.ram_overcommit_den * r.ram_mb) - 1)
-                / (r.ram_overcommit_den * r.ram_mb)) * r.ram_mb
+             AND h.vcpu_allocated + r.cpu <= h.vcpu_capacity
+             AND (h.ram_allocated_mb + r.ram_mb) * r.ram_overcommit_den <=
+                 (h.ram_total_mb - h.ram_reserve_mb) * r.ram_overcommit_num
              AND h.disk_total_gb - h.disk_allocated_gb >= r.disk_gb
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
@@ -134,13 +143,15 @@ export async function startProvision(
           githubRepos,
           tierName,
           placementClass,
+          placementMode,
           tier.cpu,
           tier.ramMb,
           tier.diskGb,
           now,
           host.id,
-          placementClass,
+          placementMode,
           user.id,
+          placementClass,
           heartbeatCutoff,
         ),
         env.DB.prepare(
@@ -197,9 +208,9 @@ export async function startProvision(
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO containers
-           (id, user_id, agents, github_repos, tier, placement_class, cpu,
-            ram_mb, disk_gb, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waitlisted', ?)`,
+           (id, user_id, agents, github_repos, tier, placement_class, placement_mode,
+            cpu, ram_mb, disk_gb, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waitlisted', ?)`,
       ).bind(
         containerId,
         user.id,
@@ -207,6 +218,7 @@ export async function startProvision(
         githubRepos,
         tierName,
         placementClass,
+        placementMode,
         tier.cpu,
         tier.ramMb,
         tier.diskGb,

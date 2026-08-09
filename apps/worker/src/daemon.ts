@@ -77,6 +77,9 @@ export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsRe
   if (stats.hostType !== undefined && stats.hostType !== host.host_type) {
     throw new Error("daemon stats host type mismatch");
   }
+  if (stats.tenancyMode !== undefined && stats.tenancyMode !== host.tenancy_mode) {
+    throw new Error("daemon stats tenancy mode mismatch");
+  }
   if (stats.ramTotalMb + RAM_REPORT_TOLERANCE_MB < host.ram_total_mb) {
     throw new Error("daemon reports less RAM than the registered host capacity");
   }

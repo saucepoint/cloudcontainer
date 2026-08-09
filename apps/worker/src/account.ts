@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireAccount, postLoginPath } from "./auth.js";
+import { billingConfigured } from "./billing.js";
 import { issuePasskeyRegistrationContext } from "./better-auth.js";
 import { readJsonBody } from "./http.js";
 import { hashInviteCode, normalizeInviteCode } from "./invites.js";
@@ -20,10 +21,12 @@ export const accountRoutes = new Hono<AppContext>()
   .get("/account/continue", requireAccount, async (c) =>
     c.redirect(await postLoginPath(c.env, c.get("user").id)))
   .get("/verify", requireAccount, async (c) => {
-    if (c.get("user").verified_at) {
-      return c.redirect(await postLoginPath(c.env, c.get("user").id));
-    }
-    return c.html(String(VerificationPage({ worldIdAvailable: worldIdConfigured(c.env) })));
+    const path = await postLoginPath(c.env, c.get("user").id);
+    if (path !== "/verify") return c.redirect(path);
+    return c.html(String(VerificationPage({
+      worldIdAvailable: worldIdConfigured(c.env),
+      paidAvailable: billingConfigured(c.env),
+    })));
   })
   .post("/api/account/invite/verify", requireAccount, async (c) => {
     const user = c.get("user");

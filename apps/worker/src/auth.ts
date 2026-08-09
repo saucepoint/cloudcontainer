@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { createAuth, signedSessionCookie } from "./better-auth.js";
+import { effectiveEntitlementForUser } from "./entitlements.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -18,7 +19,7 @@ async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
 
 export async function postLoginPath(env: Bindings, userId: string): Promise<string> {
   const user = await getUser(env, userId);
-  if (!user?.verified_at) return "/verify";
+  if (!user || !(await effectiveEntitlementForUser(env, user)).eligible) return "/verify";
   const container = await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?")
     .bind(userId)
     .first();
@@ -47,17 +48,20 @@ export const requireAccount: MiddlewareHandler<AppContext> = async (c, next) => 
   return next();
 };
 
-/** Require both a valid Better Auth session and World ID/invite verification. */
-export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
+/** Require either permanent free eligibility or a current paid/manual entitlement. */
+export const requireEligibleAccount: MiddlewareHandler<AppContext> = async (c, next) => {
   const user = await loadAccount(c);
   if (!user) return deny(c);
-  if (!user.verified_at) {
+  if (!(await effectiveEntitlementForUser(c.env, user)).eligible) {
     return c.req.path.startsWith("/api")
-      ? c.json({ error: "account verification required", redirect: "/verify" }, 403)
+      ? c.json({ error: "an active plan or free-tier verification is required", redirect: "/verify" }, 403)
       : c.redirect("/verify");
   }
   return next();
 };
+
+/** Rolling source compatibility for route modules; new code should use the explicit name. */
+export const requireUser = requireEligibleAccount;
 
 async function findOrCreateDevelopmentUser(env: Bindings, subject: string): Promise<UserRow> {
   const digest = new Uint8Array(await crypto.subtle.digest(

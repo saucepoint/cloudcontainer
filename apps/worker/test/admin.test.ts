@@ -121,6 +121,8 @@ describe("fleet administration", () => {
       ? Response.json({
           hostId: "host-1",
           hostType: "regular",
+          tenancyMode: "shared",
+          capabilities: ["mixed-tier-shared-v1"],
           version: "abc123",
           containers: [],
           ramTotalMb: 65536,
@@ -404,7 +406,7 @@ describe("fleet administration", () => {
       "/api/admin/hosts/host-1",
       adminRequest("PATCH", { capacity: { ...capacity, maxTenants: 25 } }),
       env,
-    )).status).toBe(409);
+    )).status).toBe(200);
     await env.DB.prepare(
       "UPDATE hosts SET vcpu_allocated = 12, ram_allocated_mb = 20000, disk_allocated_gb = 400 WHERE id = 'host-1'",
     ).run();

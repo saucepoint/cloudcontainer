@@ -42,7 +42,7 @@ describe("restricted tenant project policy", () => {
     );
   });
 
-  it("uses one class policy for bootstrap, configuration, and audit", () => {
+  it("uses one tenancy/resource policy for bootstrap, configuration, and audit", () => {
     expect(bootstrap).toContain("/host-policy.sh");
     expect(configurePolicy).toContain("/host-policy.sh");
     expect(auditPolicy).toContain("/host-policy.sh");
@@ -57,16 +57,31 @@ describe("restricted tenant project policy", () => {
     expect(hostPolicy).toContain("TENANT_SLOTS=1");
     expect(hostPolicy).toContain("IDMAP_SLOTS");
     expect(hostPolicy).toContain("unsupported policy entry");
+    expect(hostPolicy).toContain("TENANCY_MODE");
+    expect(bootstrap).toContain("tenancyMode: $tenancyMode");
+    expect(hostController).toContain(".tenancyMode = $tenancy_mode");
   });
 
-  it("keeps the scheduler CPU reservation equal to the enforced class limit", () => {
+  it("keeps per-container CPU enforcement equal to its persisted tier", () => {
     expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=1");
     expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=2");
     expect(hostPolicy).toContain("TENANT_CPU=1");
     expect(hostPolicy).toContain("TENANT_CPU=3");
-    expect(configurePolicy).toContain('limits.cpu="$TENANT_CPU"');
+    expect(configurePolicy).toContain('limits.cpu="$INSTANCE_CPU"');
     expect(configurePolicy).toContain("limits.memory.enforce=hard");
-    expect(auditPolicy).toContain('"$TENANT_CPU"');
+    expect(auditPolicy).toContain('"$INSTANCE_CPU"');
+    expect(configurePolicy).toContain("INSTANCE_TIER");
+    expect(auditPolicy).toContain("INSTANCE_TIER");
+  });
+
+  it("preserves mixed tiers and grandfathered disk during a fleet policy release", () => {
+    expect(configurePolicy).toContain('if [[ "$TENANCY_MODE" == "dedicated"');
+    expect(configurePolicy).toContain('free)');
+    expect(configurePolicy).toContain('paid)');
+    expect(configurePolicy).not.toContain('host classes cannot be mixed');
+    expect(configurePolicy).not.toContain("storage volume set");
+    expect(auditPolicy).toContain('"5GiB" || "$actual" == "8GiB"');
+    expect(hostPolicy).toContain("SLOT_SWAP_MB=1024");
   });
 
   it("rounds up 4x CPU and 1.25x RAM tenant ceilings", () => {
@@ -121,20 +136,13 @@ printf '%s %s %s %s %s\n' \
     expect(auditPolicy).toContain('"${RAM_LIMIT_MB}MiB"');
   });
 
-  it("uses project-aware REST URLs for raw Incus instance queries", () => {
-    expect(configurePolicy).toContain(
-      'incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}"',
-    );
+  it("uses project-aware REST URLs for raw Incus audit queries", () => {
     expect(auditPolicy).toContain(
       'incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}&recursion=1"',
-    );
-    expect(configurePolicy).toContain(
-      "(.metadata.devices.root // .devices.root) != null",
     );
     expect(auditPolicy).toContain(
       ".metadata.expanded_devices[$device][$key] // .expanded_devices[$device][$key]",
     );
-    expect(configurePolicy).not.toContain('incus --project "$PROJECT_NAME" query');
     expect(auditPolicy).not.toContain('incus --project "$PROJECT_NAME" query');
   });
 

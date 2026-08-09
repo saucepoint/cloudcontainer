@@ -36,7 +36,7 @@ Commands:
       selected by its current subscription. Host-local home data is lost.
 
   reclass HOST_ID budget|regular|dedicated [--dedicated-user ID] [--yes]
-      Reconfigure an empty draining host, register class-specific capacity,
+      Reconfigure an empty draining host, register tenancy/resource capacity,
       audit, probe, and restore its previous active state when eligible.
 
   remove HOST_ID [--yes]
@@ -55,7 +55,7 @@ Commands:
       management SSH.
 
   capacity HOST_ID [--yes]
-      Drain the host, reapply its persisted class policy, register its current
+      Drain the host, reapply its persisted tenancy/resource policy, register its current
       conservative capacity, audit, probe, and restore only prior active state.
 
   onboard --id ID --type budget|regular|dedicated
@@ -584,12 +584,16 @@ set -Eeuo pipefail
 host_id=$1
 current_type=$2
 target_type=$3
+target_tenancy=shared
+[[ "$target_type" != dedicated ]] || target_tenancy=dedicated
 config=/etc/workbench/daemon.json
 jq -e --arg host_id "$host_id" --arg current "$current_type" --arg target "$target_type" '
   .hostId == $host_id and (.hostType == null or .hostType == $current or .hostType == $target)
 ' "$config" >/dev/null
 next_config=$(mktemp /etc/workbench/daemon.json.XXXXXX)
-jq --arg host_type "$target_type" '.hostType = $host_type' "$config" > "$next_config"
+jq --arg host_type "$target_type" \
+  --arg tenancy_mode "$target_tenancy" \
+  '.hostType = $host_type | .tenancyMode = $tenancy_mode' "$config" > "$next_config"
 install -o root -g root -m 0600 "$next_config" "$config"
 rm -f -- "$next_config"
 cd /opt/workbench
@@ -719,10 +723,13 @@ cleanup_config() {
   fi
 }
 trap cleanup_config EXIT
-jq --arg host_id "$host_id" --arg host_type "$host_type" '
+tenancy_mode=shared
+[[ "$host_type" != dedicated ]] || tenancy_mode=dedicated
+jq --arg host_id "$host_id" --arg host_type "$host_type" \
+  --arg tenancy_mode "$tenancy_mode" '
   if .hostId != $host_id then error("host identity mismatch")
   elif .hostType != null and .hostType != $host_type then error("host class mismatch")
-  else .hostType = $host_type | .project = "workbench"
+  else .hostType = $host_type | .tenancyMode = $tenancy_mode | .project = "workbench"
   end
 ' "$config" > "$config_new"
 chown root:root "$config_new"

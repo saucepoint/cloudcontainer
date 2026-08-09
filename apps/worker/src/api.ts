@@ -6,7 +6,9 @@ import {
   toHex,
   type JobOp,
 } from "@workbench/contract";
+import { billingStatusForUser } from "./billing.js";
 import {
+  requireAccount,
   requireCredentialSetup,
   requireUser,
 } from "./auth.js";
@@ -40,6 +42,7 @@ import {
   LifecycleJobConflictError,
 } from "./jobs.js";
 import { ProvisioningNotAllowedError, startProvision } from "./placement.js";
+import { cancelUnreservedPlanTransition } from "./plan-transitions.js";
 import { readJsonBody } from "./http.js";
 import {
   markAllNotificationsRead,
@@ -312,22 +315,24 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ status poll
-  .get("/api/container", requireUser, async (c) => {
+  .get("/api/container", requireAccount, async (c) => {
     return c.json({ container: await currentContainerView(c.env, c.get("user").id) });
   })
 
   // One authenticated round trip for the dashboard's initial, mostly-static state.
-  .get("/api/dashboard", requireUser, async (c) => {
-    const userId = c.get("user").id;
-    const [container, keys] = await Promise.all([
+  .get("/api/dashboard", requireAccount, async (c) => {
+    const user = c.get("user");
+    const userId = user.id;
+    const [container, keys, billing] = await Promise.all([
       currentContainerView(c.env, userId),
       sshKeysView(c.env, userId),
+      billingStatusForUser(c.env, user),
     ]);
-    return c.json({ container, keys });
+    return c.json({ container, keys, billing });
   })
 
   // ---------------------------------------------------------- notifications
-  .get("/api/notifications", requireUser, async (c) => {
+  .get("/api/notifications", requireAccount, async (c) => {
     const userId = c.get("user").id;
     const [notifications, unreadCount] = await Promise.all([
       notificationsForUser(c.env, userId),
@@ -349,7 +354,7 @@ export const apiRoutes = new Hono<AppContext>()
   .post("/api/container/:op", requireUser, async (c) => {
     const user = c.get("user");
     const op = c.req.param("op");
-    const container = await getContainerForUser(c.env, user.id);
+    let container = await getContainerForUser(c.env, user.id);
     if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
 
     if (op === "retry") {
@@ -378,6 +383,14 @@ export const apiRoutes = new Hono<AppContext>()
 
     const validOps: JobOp[] = ["start", "stop", "rebuild", "destroy"];
     if (!validOps.includes(op as JobOp)) return c.json({ error: "unknown action" }, 400);
+    if (op === "destroy" && container.status === "upgrade_pending") {
+      if (!(await cancelUnreservedPlanTransition(c.env, container.id))) {
+        return c.json({
+          error: "The resource change has reached the host. Retry deletion after it settles.",
+        }, 409);
+      }
+      container = (await getContainerForUser(c.env, user.id)) ?? container;
+    }
     if (!allowedUserOps(container.status).includes(op as JobOp)) {
       return c.json({ error: `cannot ${op} while ${container.status}` }, 409);
     }
@@ -617,8 +630,16 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ account deletion (U8)
-  .post("/api/account/delete", requireUser, async (c) => {
+  .post("/api/account/delete", requireAccount, async (c) => {
     const user = c.get("user");
+    const billingAccount = await c.env.DB.prepare(
+      "SELECT 1 FROM stripe_customers WHERE user_id = ?",
+    ).bind(user.id).first();
+    if (billingAccount) {
+      return c.json({
+        error: "Billing accounts require support-assisted deletion so subscription and invoice records are retained correctly.",
+      }, 409);
+    }
     const container = await getContainerForUser(c.env, user.id);
     if (container?.host_id) {
       return c.json({ error: "destroy your workbench before deleting your account" }, 409);

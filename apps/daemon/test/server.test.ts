@@ -103,6 +103,8 @@ describe("daemon HTTP API", () => {
       ok: true,
       hostId: "host-1",
       hostType: "budget",
+      tenancyMode: "shared",
+      capabilities: ["mixed-tier-shared-v1"],
       version: "release-abc123",
     });
 
@@ -113,6 +115,8 @@ describe("daemon HTTP API", () => {
       ramAvailableMb: number;
       hostUptimeSec: number;
       hostType: string;
+      tenancyMode: string;
+      capabilities: string[];
       version: string;
     };
     expect(body.containers).toEqual([{ containerId: "c-123", incusStatus: "Running" }]);
@@ -120,6 +124,8 @@ describe("daemon HTTP API", () => {
     expect(body.ramAvailableMb).toBeGreaterThanOrEqual(0);
     expect(body.hostUptimeSec).toBeGreaterThan(0);
     expect(body.hostType).toBe("budget");
+    expect(body.tenancyMode).toBe("shared");
+    expect(body.capabilities).toEqual(["mixed-tier-shared-v1"]);
     expect(body.version).toBe("release-abc123");
   });
 

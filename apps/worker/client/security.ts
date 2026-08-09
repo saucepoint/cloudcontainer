@@ -6,6 +6,31 @@ const notificationsRoot = document.getElementById("notifications");
 let unreadNotificationCount = Number(notificationsRoot?.dataset.unreadCount ?? 0);
 const notificationStatus = document.getElementById("notifications-status");
 
+const billingStatus = document.getElementById("billing-status");
+const checkoutButton = document.getElementById("billing-checkout-btn") as HTMLButtonElement | null;
+const portalButton = document.getElementById("billing-portal-btn") as HTMLButtonElement | null;
+
+function openBilling(path: string, button: HTMLButtonElement, pending: string): void {
+  button.disabled = true;
+  if (billingStatus) billingStatus.textContent = pending;
+  void requestJson<{ url: string }>(path, { method: "POST" })
+    .then((result) => { window.location.assign(result.url); })
+    .catch((error: unknown) => {
+      if (billingStatus) billingStatus.textContent = errorMessage(error, "Billing is temporarily unavailable.");
+      button.disabled = false;
+    });
+}
+
+checkoutButton?.addEventListener("click", () => {
+  openBilling("/api/billing/checkout", checkoutButton, "Opening secure checkout…");
+});
+portalButton?.addEventListener("click", () => {
+  openBilling("/api/billing/portal", portalButton, "Opening billing management…");
+});
+if (new URLSearchParams(window.location.search).get("checkout") === "success" && billingStatus) {
+  billingStatus.textContent = "Checkout completed. Activating your 7-day Paid trial…";
+}
+
 function updateNotificationBadge(): void {
   const notificationLabel = notificationsRoot?.querySelector<HTMLElement>(".notification-count");
   if (notificationLabel) {

@@ -7,6 +7,7 @@ import {
   AgentsSchema,
   GithubReposSchema,
   JobRequestSchema,
+  MIXED_TIER_SHARED_CAPABILITY,
   TIERS,
   sealJson,
   type Agent,
@@ -48,8 +49,15 @@ function validateContainerPlacement(
   // Only spec-bearing operations are rejected by the daemon. Start, stop, and
   // especially destroy remain available so a divergent row is never trapped.
   if (op !== "provision" && op !== "rebuild" && op !== "resize") return;
+  const capabilities = host.daemon_capabilities ?? "";
+  const mixedShared = host.tenancy_mode === "shared" &&
+    capabilities.includes(MIXED_TIER_SHARED_CAPABILITY);
   const hostTier = host.host_type === "budget" ? "free" : "paid";
-  if (container.placement_class !== host.host_type || container.tier !== hostTier) {
+  const compatible = container.placement_mode === host.tenancy_mode && (
+    mixedShared ||
+    (container.placement_class === host.host_type && container.tier === hostTier)
+  );
+  if (!compatible) {
     throw new ContainerPlacementConflictError();
   }
 }
@@ -104,15 +112,19 @@ export function containerAgents(container: ContainerRow): Agent[] {
   return AgentsSchema.parse(JSON.parse(container.agents));
 }
 
-function specOf(container: ContainerRow) {
+function specOf(
+  container: ContainerRow,
+  desired?: { tier: ContainerRow["tier"]; ramMb: number; diskGb: number },
+) {
+  const tier = desired?.tier ?? container.tier;
   return {
     agents: containerAgents(container),
-    tier: container.tier,
+    tier,
     // D1/public views retain the advertised 1/2-vCPU value; daemon job specs
     // carry the actual 1/3-vCPU limit for current releases.
-    cpu: cpuReservation(container.tier),
-    ramMb: container.ram_mb,
-    diskGb: container.disk_gb,
+    cpu: cpuReservation(tier),
+    ramMb: desired?.ramMb ?? container.ram_mb,
+    diskGb: desired?.diskGb ?? container.disk_gb,
     sshPort: container.ssh_port ?? 0,
   };
 }
@@ -170,8 +182,20 @@ export async function buildJobRequest(
         dashboardUrl: env.BASE_URL,
         ...(revision !== undefined ? { revision } : {}),
       };
-    case "resize":
-      return { op, ...base, spec: specOf(container) };
+    case "resize": {
+      const transition = await env.DB.prepare(
+        `SELECT to_tier, target_disk_gb FROM container_plan_transitions
+         WHERE container_id = ? AND state = 'resizing'`,
+      ).bind(container.id).first<{ to_tier: ContainerRow["tier"]; target_disk_gb: number }>();
+      const desired = transition
+        ? {
+            tier: transition.to_tier,
+            ramMb: TIERS[transition.to_tier].ramMb,
+            diskGb: transition.target_disk_gb,
+          }
+        : undefined;
+      return { op, ...base, spec: specOf(container, desired) };
+    }
     case "start": {
       const credRow = await getCredentialsRow(env, container.user_id);
       const payload = buildCredentialPayload(env, credRow);
@@ -319,6 +343,28 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
     await claim.run();
     return;
   }
+  if (job.op === "resize") {
+    const transition = await env.DB.prepare(
+      `SELECT container_id FROM container_plan_transitions
+       WHERE container_id = ? AND state = 'resizing'`,
+    ).bind(job.container_id).first();
+    if (transition) {
+      await env.DB.batch([
+        claim,
+        env.DB.prepare(
+          `UPDATE container_plan_transitions
+           SET state = 'failed_retryable', updated_at = ?, last_error_code = 'resize_failed'
+           WHERE container_id = ? AND state = 'resizing' AND changes() = 1`,
+        ).bind(failedAt, job.container_id),
+        env.DB.prepare(
+          `UPDATE containers
+           SET status = 'upgrade_pending', status_detail = 'resource change will retry automatically'
+           WHERE id = ? AND changes() = 1`,
+        ).bind(job.container_id),
+      ]);
+      return;
+    }
+  }
   await env.DB.batch([
     claim,
     env.DB.prepare(
@@ -331,6 +377,76 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
        )`,
     ).bind(error, job.container_id, job.id, job.container_id),
   ]);
+}
+
+async function finalizePlanTransition(
+  env: Bindings,
+  job: JobRow,
+  container: ContainerRow,
+  completedAt: number,
+): Promise<boolean> {
+  const transition = await env.DB.prepare(
+    `SELECT * FROM container_plan_transitions
+     WHERE container_id = ? AND state = 'resizing'`,
+  ).bind(container.id).first<{
+    to_tier: ContainerRow["tier"];
+    target_disk_gb: number;
+    prior_status: "running" | "stopped";
+    reserved_cpu: number;
+    reserved_ram_mb: number;
+    reserved_disk_gb: number;
+  }>();
+  if (!transition || !container.host_id) return false;
+
+  const target = TIERS[transition.to_tier];
+  const cpuAdjustment = cpuReservation(transition.to_tier) -
+    cpuReservation(container.tier) - transition.reserved_cpu;
+  const ramAdjustment = target.ramMb - container.ram_mb - transition.reserved_ram_mb;
+  const diskAdjustment = transition.target_disk_gb * 2 -
+    container.disk_gb * 2 - transition.reserved_disk_gb;
+  const legacyPlacementClass = transition.to_tier === "free" ? "budget" : "regular";
+
+  const results = (await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE jobs SET status = 'succeeded', updated_at = ?
+       WHERE id = ? AND status IN ('queued','running') AND ? = (
+         SELECT id FROM jobs
+         WHERE container_id = ?
+           AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         ORDER BY rowid DESC LIMIT 1
+       )`,
+    ).bind(completedAt, job.id, job.id, container.id),
+    env.DB.prepare(
+      `UPDATE hosts
+       SET vcpu_allocated = MAX(0, vcpu_allocated + ?),
+           ram_allocated_mb = MAX(0, ram_allocated_mb + ?),
+           disk_allocated_gb = MAX(0, disk_allocated_gb + ?)
+       WHERE id = ? AND changes() = 1`,
+    ).bind(cpuAdjustment, ramAdjustment, diskAdjustment, container.host_id),
+    env.DB.prepare(
+      `UPDATE containers
+       SET tier = ?, placement_class = ?, placement_mode = 'shared',
+           cpu = ?, ram_mb = ?, disk_gb = ?, status = ?, status_detail = NULL,
+           storage_grandfathered = ?, last_upgraded_at = ?
+       WHERE id = ? AND changes() = 1`,
+    ).bind(
+      transition.to_tier,
+      legacyPlacementClass,
+      target.cpu,
+      target.ramMb,
+      transition.target_disk_gb,
+      transition.prior_status,
+      transition.to_tier === "free" && transition.target_disk_gb > TIERS.free.diskGb ? 1 : 0,
+      completedAt,
+      container.id,
+    ),
+    env.DB.prepare(
+      `UPDATE container_plan_transitions
+       SET state = 'complete', updated_at = ?, last_error_code = NULL
+       WHERE container_id = ? AND state = 'resizing' AND changes() = 1`,
+    ).bind(completedAt, container.id),
+  ])) as Array<{ meta?: { changes?: number } }>;
+  return Boolean(results[0]?.meta?.changes && results[3]?.meta?.changes);
 }
 
 /** Atomically claim destroy success, release accounting, and remove the row. */
@@ -388,6 +504,7 @@ async function finalizeDestroy(
       env.DB.prepare(
         `UPDATE containers
          SET host_id = NULL, ssh_port = NULL, tier = ?, placement_class = ?,
+             placement_mode = ?,
              cpu = ?, ram_mb = ?, disk_gb = ?, status = 'waitlisted',
              status_detail = 'plan change awaiting placement',
              host_key_fingerprints = NULL, rehome_tier = NULL,
@@ -396,6 +513,7 @@ async function finalizeDestroy(
       ).bind(
         container.rehome_tier,
         container.rehome_placement_class,
+        container.rehome_placement_class === "dedicated" ? "dedicated" : "shared",
         targetTier.cpu,
         targetTier.ramMb,
         targetTier.diskGb,
@@ -499,8 +617,16 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
     if (job.op === "destroy") {
       const finalized = await finalizeDestroy(env, job, container, completedAt);
       if (!finalized) return (await getJob(env, job.id)) ?? job;
+    } else if (job.op === "resize" && await env.DB.prepare(
+      `SELECT 1 FROM container_plan_transitions
+       WHERE container_id = ? AND state = 'resizing'`,
+    ).bind(container.id).first()) {
+      const finalized = await finalizePlanTransition(env, job, container, completedAt);
+      if (!finalized) return (await getJob(env, job.id)) ?? job;
     } else {
-      const next = successStatusFor(job.op);
+      const next = job.op === "stop" && container.suspension_reason === "billing"
+        ? "suspended"
+        : successStatusFor(job.op);
       let claimed: { meta: { changes?: number } };
       if (next) {
         const statements = [
@@ -508,14 +634,15 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
             "UPDATE jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status IN ('queued','running')",
           ).bind(completedAt, job.id),
           env.DB.prepare(
-            `UPDATE containers SET status = ?, status_detail = NULL
+            `UPDATE containers SET status = ?, status_detail = NULL,
+               suspended_at = CASE WHEN ? = 'suspended' THEN ? ELSE suspended_at END
              WHERE id = ? AND changes() = 1 AND ? = (
                SELECT id FROM jobs
                WHERE container_id = ?
                  AND op IN ('provision','rebuild','start','stop','destroy','resize')
                ORDER BY rowid DESC LIMIT 1
              )`,
-          ).bind(next, container.id, job.id, container.id),
+          ).bind(next, next, completedAt, container.id, job.id, container.id),
         ];
         const result = status.result as ProvisionResult | null;
         if (result?.hostKeyFingerprints?.length) {

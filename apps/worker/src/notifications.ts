@@ -52,12 +52,13 @@ export async function unreadNotificationCount(
     `SELECT COUNT(*) AS count
      FROM notifications n
      WHERE ${active.sql}
+       AND (n.user_id IS NULL OR n.user_id = ?)
        AND NOT EXISTS (
          SELECT 1 FROM notification_reads r
          WHERE r.notification_id = n.id AND r.user_id = ?
        )`,
   )
-    .bind(active.bind, now, userId)
+    .bind(active.bind, now, userId, userId)
     .first<{ count: number }>();
   return Number(row?.count ?? 0);
 }
@@ -75,10 +76,11 @@ export async function notificationsForUser(
      LEFT JOIN notification_reads r
        ON r.notification_id = n.id AND r.user_id = ?
      WHERE ${active.sql}
+       AND (n.user_id IS NULL OR n.user_id = ?)
      ORDER BY n.created_at DESC
      LIMIT 100`,
   )
-    .bind(userId, active.bind, now)
+    .bind(userId, active.bind, now, userId)
     .all<NotificationRow>();
   return rows.results.map(toView);
 }
@@ -111,6 +113,33 @@ export async function createNotification(
   };
 }
 
+export async function createUserNotification(
+  env: Bindings,
+  input: {
+    id: string;
+    userId: string;
+    title: string;
+    message: string;
+    severity: NotificationSeverity;
+    createdAt?: number;
+    expiresAt?: number | null;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO notifications
+       (id, user_id, title, message, severity, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    input.id,
+    input.userId,
+    input.title,
+    input.message,
+    input.severity,
+    input.createdAt ?? Date.now(),
+    input.expiresAt ?? null,
+  ).run();
+}
+
 export async function markNotificationRead(
   env: Bindings,
   userId: string,
@@ -121,9 +150,9 @@ export async function markNotificationRead(
     `INSERT OR IGNORE INTO notification_reads (notification_id, user_id, read_at)
      SELECT n.id, ?, ?
      FROM notifications n
-     WHERE n.id = ?`,
+     WHERE n.id = ? AND (n.user_id IS NULL OR n.user_id = ?)`,
   )
-    .bind(userId, readAt, notificationId)
+    .bind(userId, readAt, notificationId, userId)
     .run();
 }
 
@@ -138,11 +167,12 @@ export async function markAllNotificationsRead(
      SELECT n.id, ?, ?
      FROM notifications n
      WHERE ${active.sql}
+       AND (n.user_id IS NULL OR n.user_id = ?)
        AND NOT EXISTS (
          SELECT 1 FROM notification_reads r
          WHERE r.notification_id = n.id AND r.user_id = ?
        )`,
   )
-    .bind(userId, readAt, active.bind, readAt, userId)
+    .bind(userId, readAt, active.bind, readAt, userId, userId)
     .run();
 }

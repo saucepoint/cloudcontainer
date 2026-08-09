@@ -70,13 +70,20 @@ function usesMobileWorldAppFlow(): boolean {
   return window.matchMedia("(max-width: 700px)").matches;
 }
 
-function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }): React.JSX.Element {
+function AccountVerification({
+  worldIdAvailable,
+  paidAvailable,
+}: {
+  worldIdAvailable: boolean;
+  paidAvailable: boolean;
+}): React.JSX.Element {
   const [pending, setPending] = React.useState(false);
   const [worldStatus, setWorldStatus] = React.useState("");
   const [worldError, setWorldError] = React.useState(false);
   const [worldQr, setWorldQr] = React.useState("");
   const [inviteStatus, setInviteStatus] = React.useState("");
   const [code, setCode] = React.useState("");
+  const [paidStatus, setPaidStatus] = React.useState("");
   const worldAttempt = React.useRef<AbortController | null>(null);
 
   React.useEffect(() => () => worldAttempt.current?.abort(), []);
@@ -156,6 +163,18 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
     }
   };
 
+  const usePaid = async (): Promise<void> => {
+    setPending(true);
+    setPaidStatus("Opening secure checkout…");
+    try {
+      const result = await postJson<{ url: string }>("/api/billing/checkout");
+      window.location.assign(result.url);
+    } catch (error) {
+      setPaidStatus(errorMessage(error, "Checkout is temporarily unavailable."));
+      setPending(false);
+    }
+  };
+
   return (
     <>
       {worldIdAvailable ? (
@@ -181,6 +200,16 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
         </form>
         <p className="muted verification-status" role="status" aria-live="polite">{inviteStatus}</p>
       </section>
+      {paidAvailable ? (
+        <section className="card verification-option" aria-labelledby="paid-heading">
+          <h2 id="paid-heading">Continue with Paid</h2>
+          <p>Start a 7-day free trial through Stripe without using free-tier verification. Your payment method is charged after the trial.</p>
+          <button className="btn primary" type="button" disabled={pending} onClick={() => void usePaid()}>
+            Start 7-day trial →
+          </button>
+          <p className="muted verification-status" role="status" aria-live="polite">{paidStatus}</p>
+        </section>
+      ) : null}
     </>
   );
 }
@@ -188,5 +217,8 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
 const root = document.getElementById("account-verification-root");
 if (root) {
   const worldIdAvailable = root.dataset.worldIdAvailable === "true";
-  createRoot(root).render(<AccountVerification worldIdAvailable={worldIdAvailable} />);
+  const paidAvailable = root.dataset.paidAvailable === "true";
+  createRoot(root).render(
+    <AccountVerification worldIdAvailable={worldIdAvailable} paidAvailable={paidAvailable} />,
+  );
 }

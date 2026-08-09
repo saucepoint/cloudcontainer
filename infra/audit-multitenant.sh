@@ -25,6 +25,9 @@ EXPECTED_DISK_TOTAL_GB="${EXPECTED_DISK_TOTAL_GB:-}"
 if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
   HOST_TYPE=$(jq -r '.hostType // "budget"' "$DAEMON_CONFIG")
 fi
+if [[ -z "${TENANCY_MODE:-}" && -f "$DAEMON_CONFIG" ]]; then
+  TENANCY_MODE=$(jq -er '.tenancyMode // (if (.hostType // "budget") == "dedicated" then "dedicated" else "shared" end)' "$DAEMON_CONFIG")
+fi
 # shellcheck source=infra/host-policy.sh
 source "$SCRIPT_DIR/host-policy.sh"
 
@@ -64,6 +67,18 @@ check_set() {
     pass "$label"
   else
     fail "$label (missing)"
+  fi
+}
+
+check_tier_disk() {
+  local label=$1
+  local tier=$2
+  local actual=$3
+  if [[ "$tier" == "paid" && "$actual" == "8GiB" ]] || \
+    [[ "$tier" == "free" && ("$actual" == "5GiB" || "$actual" == "8GiB") ]]; then
+    pass "$label"
+  else
+    fail "$label (tier=$tier, got ${actual:-<empty>})"
   fi
 }
 
@@ -182,7 +197,7 @@ check_eq "tenant project container ceiling" "$TENANT_SLOTS" \
 check_eq "tenant project disk ceiling" "${DISK_GB}GiB" \
   incus project get "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}"
 
-SWAP_REQUIRED_MB=$(( TENANT_SLOTS * TENANT_SWAP_MB ))
+SWAP_REQUIRED_MB=$(( TENANT_SLOTS * SLOT_SWAP_MB ))
 if (( SWAP_TOTAL_MB >= SWAP_REQUIRED_MB )); then
   pass "host swap fits the tenant ceiling"
 else
@@ -229,13 +244,15 @@ check_eq "profile network bandwidth cap" "$TENANT_NETWORK_LIMIT" \
 
 if [[ -f "$DAEMON_CONFIG" ]] && \
   jq -e --arg project "$PROJECT_NAME" --arg host_type "$HOST_TYPE" \
+    --arg tenancy_mode "$TENANCY_MODE" \
     --arg host_id "$EXPECTED_HOST_ID" \
     '.project == $project and (.hostType // "budget") == $host_type and
+      (.tenancyMode // (if (.hostType // "budget") == "dedicated" then "dedicated" else "shared" end)) == $tenancy_mode and
       ($host_id == "" or .hostId == $host_id)' \
     "$DAEMON_CONFIG" >/dev/null; then
-  pass "daemon identity is scoped to the tenant project and host class"
+  pass "daemon identity is scoped to the tenant project and tenancy mode"
 else
-  fail "daemon identity is scoped to the tenant project and host class"
+  fail "daemon identity is scoped to the tenant project and tenancy mode"
 fi
 BASE_IMAGE=$(jq -r '.baseImage // "workbench-base"' "$DAEMON_CONFIG" 2>/dev/null || true)
 if [[ -n "$BASE_IMAGE" ]] && \
@@ -271,18 +288,41 @@ while IFS= read -r name; do
   tenant_count=$(( tenant_count + 1 ))
   check_set "$name has a control-plane identity" \
     incus --project "$PROJECT_NAME" config get "$name" user.workbench.id
-  check_eq "$name has the class CPU reservation" "$TENANT_CPU" \
+  INSTANCE_TIER=$(incus --project "$PROJECT_NAME" config get \
+    "$name" user.workbench.tier 2>/dev/null || true)
+  case "$INSTANCE_TIER" in
+    free)
+      INSTANCE_CPU=1
+      INSTANCE_RAM_MB=1536
+      INSTANCE_SWAP_MB=1024
+      ;;
+    paid)
+      INSTANCE_CPU=3
+      INSTANCE_RAM_MB=4096
+      INSTANCE_SWAP_MB=0
+      ;;
+    *)
+      fail "$name has supported tier metadata (got ${INSTANCE_TIER:-<empty>})"
+      continue
+      ;;
+  esac
+  if [[ "$TENANCY_MODE" == "dedicated" && "$INSTANCE_TIER" != "paid" ]]; then
+    fail "$name is compatible with dedicated tenancy"
+  else
+    pass "$name is compatible with $TENANCY_MODE tenancy"
+  fi
+  check_eq "$name has its tier CPU reservation" "$INSTANCE_CPU" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu
-  check_eq "$name has the class CPU allowance" "$(( TENANT_CPU * 100 ))%" \
+  check_eq "$name has its tier CPU allowance" "$(( INSTANCE_CPU * 100 ))%" \
     incus --project "$PROJECT_NAME" config get "$name" limits.cpu.allowance
-  check_eq "$name has the class tier metadata" "$TENANT_TIER" \
+  check_eq "$name has tier metadata" "$INSTANCE_TIER" \
     incus --project "$PROJECT_NAME" config get "$name" user.workbench.tier
-  check_eq "$name has the class memory limit" "${TENANT_RAM_MB}MiB" \
+  check_eq "$name has its tier memory limit" "${INSTANCE_RAM_MB}MiB" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory
   check_eq "$name has hard memory enforcement" "hard" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory.enforce
-  if (( TENANT_SWAP_MB > 0 )); then
-    check_eq "$name has the class swap limit" "${TENANT_SWAP_MB}MiB" \
+  if (( INSTANCE_SWAP_MB > 0 )); then
+    check_eq "$name has its tier swap limit" "${INSTANCE_SWAP_MB}MiB" \
       incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
   else
     check_eq "$name has swap disabled" "false" \
@@ -309,12 +349,14 @@ while IFS= read -r name; do
     incus --project "$PROJECT_NAME" config get "$name" security.nesting
   check_eq "$name preserves stopped state across host reboot" "last-state" \
     incus --project "$PROJECT_NAME" config get "$name" boot.autostart
-  check_eq "$name root disk has the class quota" "${TENANT_DISK_GB}GiB" \
-    expanded_device_value "$name" root size
+  ROOT_DISK_SIZE=$(expanded_device_value "$name" root size 2>/dev/null || true)
+  check_tier_disk "$name root disk has a supported tier/grandfathered quota" \
+    "$INSTANCE_TIER" "$ROOT_DISK_SIZE"
   check_eq "$name home volume uses the tenant pool" "$POOL_NAME" \
     incus --project "$PROJECT_NAME" config device get "$name" home pool
-  check_eq "$name home volume has the class quota" "${TENANT_DISK_GB}GiB" \
-    home_volume_size "$name"
+  HOME_DISK_SIZE=$(home_volume_size "$name" 2>/dev/null || true)
+  check_tier_disk "$name home volume has a supported tier/grandfathered quota" \
+    "$INSTANCE_TIER" "$HOME_DISK_SIZE"
   check_set "$name has an SSH proxy" \
     incus --project "$PROJECT_NAME" config device get "$name" ssh listen
 done < <(incus --project "$PROJECT_NAME" list --format csv -c n)

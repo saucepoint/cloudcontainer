@@ -4,8 +4,14 @@ import { apiRoutes } from "./api.js";
 import { adminRoutes } from "./admin.js";
 import { cliAuthRoutes } from "./cli-auth.js";
 import { fleetAdminRoutes } from "./fleet-admin.js";
-import { authRoutes, requireUser } from "./auth.js";
+import { authRoutes, requireAccount, requireUser } from "./auth.js";
 import { createAuth, handleAuthRequest } from "./better-auth.js";
+import {
+  billingRoutes,
+  billingStatusForUser,
+  processBillingQueue,
+  type BillingQueueBatch,
+} from "./billing.js";
 import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
@@ -63,14 +69,14 @@ app.get("/onboarding", requireUser, async (c) => {
   );
 });
 
-app.get("/dashboard", requireUser, async (c) => {
+app.get("/dashboard", requireAccount, async (c) => {
   const notificationCount = await unreadNotificationCount(c.env, c.get("user").id);
   return c.html(<DashboardPage notificationCount={notificationCount} />);
 });
 
 const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
   const user = c.get("user");
-  const [passkeys, container, credentials, notifications, notificationCount] = await Promise.all([
+  const [passkeys, container, credentials, notifications, notificationCount, billing] = await Promise.all([
     c.env.DB.prepare(
       "SELECT COUNT(*) AS count FROM passkey WHERE user_id = ?",
     )
@@ -80,6 +86,7 @@ const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
     credentialsView(c.env, user.id),
     notificationsForUser(c.env, user.id),
     unreadNotificationCount(c.env, user.id),
+    billingStatusForUser(c.env, user),
   ]);
   return c.html(
     <AccountPage
@@ -91,13 +98,14 @@ const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
       worldIdVerified={user.verification_method === "world_id"}
       notifications={notifications}
       unreadNotificationCount={notificationCount}
+      billing={billing}
     />,
   );
 };
 
-app.get("/account", requireUser, renderAccountPage);
+app.get("/account", requireAccount, renderAccountPage);
 // Keep the old URL working while the navigation and page are now Account.
-app.get("/security", requireUser, renderAccountPage);
+app.get("/security", requireAccount, renderAccountPage);
 
 app.route("/", authRoutes);
 app.route("/", accountRoutes);
@@ -108,6 +116,7 @@ app.route("/", fleetAdminRoutes);
 app.route("/", githubRoutes);
 app.route("/", codexAuthRoutes);
 app.route("/", subscriptionRoutes);
+app.route("/", billingRoutes);
 app.route("/", apiRoutes);
 
 app.notFound((c) => {
@@ -119,6 +128,9 @@ app.notFound((c) => {
 
 export default {
   fetch: app.fetch,
+  async queue(batch, env) {
+    await processBillingQueue(batch as unknown as BillingQueueBatch, env as AppContext["Bindings"]);
+  },
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(reconcile(env as AppContext["Bindings"]));
   },

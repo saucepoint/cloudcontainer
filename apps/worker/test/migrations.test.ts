@@ -447,3 +447,126 @@ describe("0015 host lifecycle migration", () => {
       .toEqual({ vcpu_allocated: 4 });
   });
 });
+
+describe("0019 monetization foundation migration", () => {
+  it("backfills tenancy modes and preserves operator-managed paid access", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('free-user', 'Free', 'free@example.test', 1, 'free', 1, 1),
+        ('paid-user', 'Paid', 'paid@example.test', 1, 'paid', 1, 10),
+        ('dedicated-user', 'Dedicated', 'dedicated@example.test', 1, 'dedicated', 1, 20);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, disk_total_gb,
+         status, joined_at, host_type, max_tenants)
+      VALUES
+        ('shared-host', '192.0.2.10', 'shared.test', 'https://shared.test', 'pub',
+         16384, 3072, 16, 200, 'draining', 1, 'regular', 4),
+        ('dedicated-host', '192.0.2.11', 'dedicated.test', 'https://dedicated.test', 'pub',
+         16384, 3072, 16, 200, 'draining', 1, 'dedicated', 1);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('shared-container', 'free-user', 'shared-host', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'running', 1),
+        ('dedicated-container', 'dedicated-user', 'dedicated-host', 30501, '["codex"]',
+         'paid', 'dedicated', 2, 4096, 8, 'running', 1);
+      INSERT INTO waitlist (user_id, requested_at) VALUES ('paid-user', 30);
+    `);
+
+    db.exec(migration("0019_monetization_foundation.sql"));
+
+    expect(db.prepare("SELECT id, tenancy_mode FROM hosts ORDER BY id").all()).toEqual([
+      { id: "dedicated-host", tenancy_mode: "dedicated" },
+      { id: "shared-host", tenancy_mode: "shared" },
+    ]);
+    expect(db.prepare("SELECT id, placement_mode FROM containers ORDER BY id").all()).toEqual([
+      { id: "dedicated-container", placement_mode: "dedicated" },
+      { id: "shared-container", placement_mode: "shared" },
+    ]);
+    expect(db.prepare(
+      "SELECT user_id, plan, source, state, source_ref FROM account_entitlements ORDER BY user_id",
+    ).all()).toEqual([
+      {
+        user_id: "dedicated-user",
+        plan: "dedicated",
+        source: "manual",
+        state: "manual",
+        source_ref: "legacy-operator",
+      },
+      {
+        user_id: "paid-user",
+        plan: "paid",
+        source: "manual",
+        state: "manual",
+        source_ref: "legacy-operator",
+      },
+    ]);
+    expect(db.prepare("SELECT skip_count FROM waitlist WHERE user_id = 'paid-user'").get())
+      .toEqual({ skip_count: 0 });
+    expect((db.prepare("PRAGMA table_info(account_entitlements)").all() as Array<{ name: string }>)
+      .map((column) => column.name)).toContain("trial_until");
+    expect((db.prepare("PRAGMA table_info(stripe_subscriptions)").all() as Array<{ name: string }>)
+      .map((column) => column.name)).toEqual(expect.arrayContaining(["trial_start", "trial_end"]));
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("enforces one open Checkout attempt per account", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users (id, name, email, email_verified, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 1, 1);
+      INSERT INTO stripe_checkout_attempts (id, user_id, status, expires_at, created_at, updated_at)
+      VALUES ('attempt-1', 'user-1', 'open', 100, 1, 1);
+    `);
+
+    expect(() => db.exec(`
+      INSERT INTO stripe_checkout_attempts (id, user_id, status, expires_at, created_at, updated_at)
+      VALUES ('attempt-2', 'user-1', 'creating', 100, 2, 2);
+    `)).toThrow();
+  });
+});

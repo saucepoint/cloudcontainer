@@ -99,18 +99,25 @@ describe("naming", () => {
 });
 
 describe("provision command construction", () => {
-  it("rejects a tier that does not match the daemon host class", async () => {
+  it("accepts both tiers on shared hosts and rejects free jobs on dedicated hosts", async () => {
     const incus = new Incus(fakeExec([]));
     const budget = new Provisioner(incus, makeConfig());
     const freeRequest = provisionRequest();
     const paidRequest: Extract<JobRequest, { op: "provision" }> = {
       ...freeRequest,
-      spec: { ...freeRequest.spec, tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8 },
+      spec: { ...freeRequest.spec, tier: "paid", cpu: 3, ramMb: 4096, diskGb: 8 },
     };
-    await expect(budget.run(paidRequest)).rejects.toThrow("not allowed on a budget host");
+    await expect(budget.run(paidRequest)).resolves.toMatchObject({ hostKeyFingerprints: [] });
 
     const regular = new Provisioner(incus, { ...makeConfig(), hostType: "regular" });
-    await expect(regular.run(freeRequest)).rejects.toThrow("not allowed on a regular host");
+    await expect(regular.run(freeRequest)).resolves.toMatchObject({ hostKeyFingerprints: [] });
+
+    const dedicated = new Provisioner(incus, {
+      ...makeConfig(),
+      hostType: "dedicated",
+      tenancyMode: "dedicated",
+    });
+    await expect(dedicated.run(freeRequest)).rejects.toThrow("not allowed on a dedicated host");
   });
 
   it("creates volume, init with limits, home + ssh proxy devices, and starts", async () => {

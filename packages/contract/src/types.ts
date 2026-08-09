@@ -134,6 +134,16 @@ export const HOST_TYPES = ["budget", "regular", "dedicated"] as const;
 export const HostTypeSchema = z.enum(HOST_TYPES);
 export type HostType = z.infer<typeof HostTypeSchema>;
 
+export const TENANCY_MODES = ["shared", "dedicated"] as const;
+export const TenancyModeSchema = z.enum(TENANCY_MODES);
+export type TenancyMode = z.infer<typeof TenancyModeSchema>;
+
+/** Capability emitted by daemons that accept both resource tiers on shared hosts. */
+export const MIXED_TIER_SHARED_CAPABILITY = "mixed-tier-shared-v1";
+export const DAEMON_CAPABILITIES = [MIXED_TIER_SHARED_CAPABILITY] as const;
+export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
+export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
+
 export const MIN_HOST_RAM_RESERVE_MB = 3072;
 export const HOST_RAM_RESERVE_PERCENT = 8;
 export const MAX_HOST_VCPU_OVERCOMMIT = 4;
@@ -192,10 +202,15 @@ export function minimumHostRamReserveMb(ramTotalMb: number): number {
  * than the shared regular pool.
  */
 export const SERVICE_PLANS = {
-  free: { tier: "free", hostType: "budget" },
-  paid: { tier: "paid", hostType: "regular" },
-  dedicated: { tier: "paid", hostType: "dedicated" },
-} as const satisfies Record<string, { tier: Tier; hostType: HostType }>;
+  // hostType remains only as a rolling-release fallback for daemons that do
+  // not report mixed-tier support yet. Placement is keyed by tenancyMode.
+  free: { tier: "free", tenancyMode: "shared", hostType: "budget" },
+  paid: { tier: "paid", tenancyMode: "shared", hostType: "regular" },
+  dedicated: { tier: "paid", tenancyMode: "dedicated", hostType: "dedicated" },
+} as const satisfies Record<
+  string,
+  { tier: Tier; tenancyMode: TenancyMode; hostType: HostType }
+>;
 export type ServicePlan = keyof typeof SERVICE_PLANS;
 
 export const HOST_STATUSES = ["active", "draining", "unhealthy", "dead"] as const;
@@ -301,17 +316,15 @@ export const HostRegistrationSchema = z
         message: "only dedicated hosts can be assigned to one account",
       });
     }
-    const tierName = host.hostType === "budget" ? "free" : "paid";
-    const tier = TIERS[tierName];
-    const resourceCeiling = Math.min(
-      hostCpuRamTenantCeiling(host, tierName),
-      Math.floor(host.diskTotalGb / (tier.diskGb * 2)),
-    );
-    if (host.maxTenants > resourceCeiling) {
+    const dedicatedFitsPaid = host.vcpuCapacity >= TIERS.paid.provisionedCpu &&
+      (host.ramTotalMb - host.ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR >=
+        TIERS.paid.ramMb * HOST_RAM_OVERCOMMIT_DENOMINATOR &&
+      host.diskTotalGb >= TIERS.paid.diskGb * 2;
+    if (host.hostType === "dedicated" && !dedicatedFitsPaid) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["maxTenants"],
-        message: "tenant ceiling exceeds registered CPU, RAM, or disk capacity",
+        message: "dedicated host cannot fit the paid resource reservation",
       });
     }
   });
@@ -640,6 +653,8 @@ export const StatsResponseSchema = z
     hostId: z.string(),
     // Optional while a rolling fleet contains mixed daemon versions.
     hostType: HostTypeSchema.optional(),
+    tenancyMode: TenancyModeSchema.optional(),
+    capabilities: z.array(DaemonCapabilitySchema).optional(),
     version: z.string().min(1).max(128).optional(),
     containers: z.array(ContainerStatSchema),
     ramTotalMb: z.number(),
@@ -657,6 +672,8 @@ export const HealthResponseSchema = z
     ok: z.boolean(),
     hostId: z.string(),
     hostType: HostTypeSchema.optional(),
+    tenancyMode: TenancyModeSchema.optional(),
+    capabilities: z.array(DaemonCapabilitySchema).optional(),
     version: z.string(),
   })
   .strict();

@@ -1,0 +1,911 @@
+import { Hono } from "hono";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  billingRoutes,
+  processBillingEventMessage,
+  reconcileBillingState,
+} from "../src/billing.js";
+import {
+  effectiveEntitlement,
+  projectStripeEntitlement,
+} from "../src/entitlements.js";
+import type {
+  AccountEntitlementRow,
+  AppContext,
+  BillingEventMessage,
+  Bindings,
+  UserRow,
+} from "../src/types.js";
+import {
+  createTestSession,
+  fakeDaemon,
+  makeEnv,
+  seedContainer,
+  seedHost,
+  seedUser,
+  stubFetch,
+} from "./helpers/env.js";
+
+const BILLING_CONFIG = {
+  BILLING_ENABLED: "1",
+  STRIPE_SECRET_KEY: "sk_test_local",
+  STRIPE_WEBHOOK_SECRET: "whsec_local",
+  STRIPE_PRICE_PAID_MONTHLY: "price_paid_monthly",
+  PAID_PLAN_MONTHLY_PRICE: "20.00",
+  PAID_PLAN_CURRENCY: "USD",
+  BILLING_CHECKOUT_SESSION_MINUTES: "60",
+  STRIPE_TAX_ENABLED: "0",
+  BILLING_EVENTS: { send: async () => {} },
+} satisfies Partial<Bindings>;
+
+function app() {
+  return new Hono<AppContext>().route("/", billingRoutes);
+}
+
+async function unverifiedUser(env: Bindings, id = "user-1") {
+  await seedUser(env, id);
+  await env.DB.prepare(
+    "UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = ?",
+  ).bind(id).run();
+  const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?")
+    .bind(id).first<UserRow>();
+  if (!user) throw new Error("user vanished");
+  return { user, cookie: await createTestSession(env, id) };
+}
+
+function subscription(
+  periodEnd: number,
+  status = "active",
+  trial: { start: number; end: number } | null = null,
+) {
+  return {
+    id: "sub_paid",
+    customer: "cus_user",
+    status,
+    cancel_at_period_end: false,
+    cancel_at: null,
+    trial_start: trial?.start ?? null,
+    trial_end: trial?.end ?? null,
+    ended_at: null,
+    metadata: { userId: "user-1", plan: "paid" },
+    items: {
+      data: [{
+        id: "si_paid",
+        current_period_end: periodEnd,
+        price: { id: "price_paid_monthly" },
+        quantity: 1,
+      }],
+      has_more: false,
+    },
+  };
+}
+
+function invoiceEvent(
+  id: string,
+  created: number,
+  type = "invoice.paid",
+  invoiceId = "in_paid",
+) {
+  return {
+    id,
+    type,
+    created,
+    data: {
+      object: {
+        id: invoiceId,
+        customer: "cus_user",
+        paid: type === "invoice.paid",
+        amount_paid: type === "invoice.paid" ? 2_000 : 0,
+        status: type === "invoice.paid" ? "paid" : "open",
+        parent: {
+          type: "subscription_details",
+          subscription_details: { subscription: "sub_paid" },
+        },
+      },
+    },
+  };
+}
+
+async function seedStripeCustomer(env: Bindings): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO stripe_customers
+       (user_id, stripe_customer_id, created_at, updated_at)
+     VALUES ('user-1', 'cus_user', 1, 1)`,
+  ).run();
+}
+
+async function seedExpiredStripeSubscription(env: Bindings): Promise<void> {
+  await seedStripeCustomer(env);
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO stripe_subscriptions
+         (stripe_subscription_id, user_id, stripe_customer_id, price_id, plan,
+          stripe_status, cancel_at_period_end, service_until, last_event_created,
+          last_synced_at, created_at, updated_at)
+       VALUES ('sub_paid', 'user-1', 'cus_user', 'price_paid_monthly', 'paid',
+               'canceled', 0, 100, 1, 1, 1, 1)`,
+    ),
+    env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, service_until, source_ref, updated_at)
+       VALUES ('user-1', 'paid', 'stripe', 'active', 100, 'sub_paid', 1)`,
+    ),
+  ]);
+}
+
+function stripeEventRoutes(events: Record<string, unknown>, subscriptions: Record<string, unknown>) {
+  return (url: URL) => {
+    const eventId = url.pathname.match(/^\/v1\/events\/(.+)$/)?.[1];
+    if (eventId && events[eventId]) return Response.json(events[eventId]);
+    const subscriptionId = url.pathname.match(/^\/v1\/subscriptions\/(.+)$/)?.[1];
+    if (subscriptionId && subscriptions[subscriptionId]) {
+      return Response.json(subscriptions[subscriptionId]);
+    }
+    return null;
+  };
+}
+
+async function signature(rawBody: string, secret: string, timestamp: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${timestamp}.${rawBody}`),
+  ));
+  const hex = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `t=${timestamp},v1=${hex}`;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("entitlement projection", () => {
+  const user = {
+    id: "user-1",
+    name: "Test",
+    email: "test@example.test",
+    email_verified: 1,
+    image: null,
+    status: "active",
+    subscription_status: "free",
+    verified_at: null,
+    verification_method: null,
+    created_at: 1,
+    updated_at: 1,
+  } satisfies UserRow;
+
+  it("keeps paid bypass independent from permanent free eligibility", () => {
+    const entitlement = {
+      user_id: user.id,
+      plan: "paid",
+      source: "stripe",
+      state: "active",
+      trial_until: null,
+      service_until: 2_000,
+      grace_until: null,
+      source_ref: "sub_paid",
+      updated_at: 1,
+    } satisfies AccountEntitlementRow;
+    expect(effectiveEntitlement(user, entitlement, 1_999)).toMatchObject({
+      eligible: true,
+      plan: "paid",
+      source: "stripe",
+    });
+    expect(effectiveEntitlement(user, entitlement, 2_000)).toMatchObject({
+      eligible: false,
+      plan: null,
+    });
+    expect(effectiveEntitlement({
+      ...user,
+      verified_at: 1,
+      verification_method: "invite",
+    }, entitlement, 2_000)).toMatchObject({
+      eligible: true,
+      plan: "free",
+      source: "invite",
+    });
+  });
+
+  it("separates scheduled cancellation, payment failure, grace, and expiry", () => {
+    expect(projectStripeEntitlement({
+      stripeStatus: "incomplete",
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEnd: null,
+      serviceUntil: 2_000,
+      graceUntil: null,
+    }, 1_000)).toEqual({ state: "pending", accessUntil: null });
+    expect(projectStripeEntitlement({
+      stripeStatus: "trialing",
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEnd: 2_000,
+      serviceUntil: null,
+      graceUntil: null,
+    }, 1_000)).toEqual({ state: "trialing", accessUntil: 2_000 });
+    expect(projectStripeEntitlement({
+      stripeStatus: "active",
+      cancelAtPeriodEnd: true,
+      cancelAt: 2_000,
+      trialEnd: null,
+      serviceUntil: 2_000,
+      graceUntil: null,
+    }, 1_000)).toEqual({ state: "cancel_scheduled", accessUntil: 2_000 });
+    expect(projectStripeEntitlement({
+      stripeStatus: "past_due",
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEnd: null,
+      serviceUntil: 2_000,
+      graceUntil: 3_000,
+    }, 1_500)).toEqual({ state: "past_due", accessUntil: 2_000 });
+    expect(projectStripeEntitlement({
+      stripeStatus: "past_due",
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEnd: null,
+      serviceUntil: 2_000,
+      graceUntil: 3_000,
+    }, 2_500)).toEqual({ state: "grace", accessUntil: 3_000 });
+    expect(projectStripeEntitlement({
+      stripeStatus: "past_due",
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEnd: null,
+      serviceUntil: 2_000,
+      graceUntil: 3_000,
+    }, 3_000)).toEqual({ state: "expired", accessUntil: null });
+  });
+});
+
+describe("billing routes", () => {
+  it("returns the server-configured price disclosure and fails closed without it", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    const status = await app().request("/api/billing/status", { headers: { cookie } }, env);
+    expect(await status.json()).toMatchObject({
+      configured: true,
+      paidPlan: {
+        price: "20.00",
+        currency: "USD",
+        interval: "month",
+        trialDays: 7,
+        display: "7-day free trial, then USD 20.00/month",
+      },
+    });
+
+    const missingConfig: Partial<Bindings> = { ...BILLING_CONFIG };
+    delete missingConfig.PAID_PLAN_MONTHLY_PRICE;
+    const missingDisclosure = makeEnv(missingConfig).env;
+    const { cookie: missingCookie } = await unverifiedUser(missingDisclosure);
+    const disabled = await app().request(
+      "/api/billing/status",
+      { headers: { cookie: missingCookie } },
+      missingDisclosure,
+    );
+    expect(await disabled.json()).toMatchObject({ configured: false, paidPlan: null });
+  });
+
+  it("keeps new sales disabled until the operator feature flag is enabled", async () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, BILLING_ENABLED: "0" });
+    const { cookie } = await unverifiedUser(env);
+    const fetchMock = stubFetch(() => {
+      throw new Error("disabled billing must not contact Stripe");
+    });
+
+    const response = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an authenticated unverified account start server-priced Checkout", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    const requests: Array<{ path: string; body: URLSearchParams; idempotency: string | null }> = [];
+    stubFetch((url, init) => {
+      const body = new URLSearchParams(String(init.body));
+      requests.push({ path: url.pathname, body, idempotency: new Headers(init.headers).get("idempotency-key") });
+      if (url.pathname === "/v1/customers") {
+        return Response.json({ id: "cus_user", metadata: { userId: "user-1" } });
+      }
+      if (url.pathname === "/v1/checkout/sessions") {
+        return Response.json({
+          id: "cs_checkout",
+          url: "https://checkout.stripe.com/c/pay/test",
+          customer: "cus_user",
+        });
+      }
+      return null;
+    });
+
+    const response = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/test" });
+    expect(requests[0]).toMatchObject({ path: "/v1/customers", idempotency: "customer:user-1" });
+    expect(requests[1]?.body.get("line_items[0][price]")).toBe("price_paid_monthly");
+    expect(requests[1]?.body.get("subscription_data[metadata][userId]")).toBe("user-1");
+    expect(requests[1]?.body.get("subscription_data[trial_period_days]")).toBe("7");
+    expect(requests[1]?.body.get(
+      "subscription_data[trial_settings][end_behavior][missing_payment_method]",
+    )).toBe("cancel");
+    expect(requests[1]?.body.get("automatic_tax[enabled]")).toBe("false");
+    expect(Number(requests[1]?.body.get("expires_at"))).toBeGreaterThan(
+      Math.floor(Date.now() / 1000) + 59 * 60,
+    );
+    expect(await env.DB.prepare("SELECT * FROM account_entitlements").all())
+      .toMatchObject({ results: [] });
+
+    const duplicate = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+    expect(duplicate.status).toBe(409);
+  });
+
+  it("verifies the exact raw webhook before publishing only event metadata", async () => {
+    const sent: BillingEventMessage[] = [];
+    const { env } = makeEnv({
+      ...BILLING_CONFIG,
+      BILLING_EVENTS: { send: async (message) => { sent.push(message); } },
+    });
+    const event = invoiceEvent("evt_webhook", Math.floor(Date.now() / 1000));
+    const raw = JSON.stringify(event);
+    const header = await signature(raw, "whsec_local", event.created);
+    const response = await app().request("/api/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": header },
+      body: raw,
+    }, env);
+    expect(response.status).toBe(204);
+    expect(sent).toEqual([{
+      eventId: "evt_webhook",
+      eventType: "invoice.paid",
+      eventCreated: event.created,
+    }]);
+    expect(JSON.stringify(sent)).not.toContain("cus_user");
+
+    const tampered = await app().request("/api/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": header },
+      body: `${raw} `,
+    }, env);
+    expect(tampered.status).toBe(400);
+  });
+
+  it("rate-limits a new Checkout after a failed session attempt", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    stubFetch((url) => {
+      if (url.pathname === "/v1/customers") {
+        return Response.json({ id: "cus_user", metadata: { userId: "user-1" } });
+      }
+      if (url.pathname === "/v1/checkout/sessions") {
+        return Response.json({ error: { message: "sandbox failure" } }, { status: 500 });
+      }
+      return null;
+    });
+
+    expect((await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env)).status).toBe(502);
+    expect((await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env)).status).toBe(429);
+  });
+
+  it("expires an abandoned Checkout attempt before creating another", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    await env.DB.prepare(
+      `INSERT INTO stripe_checkout_attempts
+         (id, user_id, status, expires_at, created_at, updated_at)
+       VALUES ('attempt-old', 'user-1', 'open', 1, 1, 1)`,
+    ).run();
+    stubFetch((url) => url.pathname === "/v1/checkout/sessions"
+      ? Response.json({
+          id: "cs_replacement",
+          url: "https://checkout.stripe.com/c/pay/replacement",
+          customer: "cus_user",
+        })
+      : null);
+
+    const response = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+    expect(response.status).toBe(201);
+    expect(await env.DB.prepare(
+      "SELECT status FROM stripe_checkout_attempts WHERE id = 'attempt-old'",
+    ).first()).toEqual({ status: "expired" });
+  });
+
+  it("provides a secret-authenticated, non-PII billing support view", async () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, FLEET_ADMIN_SECRET: "support-secret" });
+    await seedUser(env, "user-1", "paid");
+    await seedStripeCustomer(env);
+
+    expect((await app().request("/api/admin/billing/user-1", {
+      headers: { authorization: "Bearer wrong" },
+    }, env)).status).toBe(401);
+    const response = await app().request("/api/admin/billing/user-1", {
+      headers: { authorization: "Bearer support-secret" },
+    }, env);
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      account: { id: "user-1", status: "active" },
+      stripeCustomerId: "cus_user",
+      entitlement: { plan: "paid", source: "manual" },
+    });
+    expect(JSON.stringify(body)).not.toContain("user-1@example.test");
+  });
+});
+
+describe("billing event consumer", () => {
+  it("grants Paid access for exactly the canonical seven-day trial window", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const created = Math.floor(Date.now() / 1000);
+    const trialEnd = created + 7 * 86_400;
+    const event = {
+      id: "evt_trial_started",
+      type: "customer.subscription.created",
+      created,
+      data: { object: { id: "sub_paid", customer: "cus_user" } },
+    };
+    const openingInvoice = invoiceEvent(
+      "evt_trial_zero_invoice",
+      created + 1,
+      "invoice.paid",
+      "in_trial_zero",
+    );
+    openingInvoice.data.object.amount_paid = 0;
+    stubFetch(stripeEventRoutes(
+      { evt_trial_started: event, evt_trial_zero_invoice: openingInvoice },
+      { sub_paid: subscription(trialEnd, "trialing", { start: created, end: trialEnd }) },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+    await processBillingEventMessage(env, {
+      eventId: openingInvoice.id,
+      eventType: openingInvoice.type,
+      eventCreated: openingInvoice.created,
+    });
+
+    expect(await env.DB.prepare(
+      `SELECT state, trial_until, service_until
+       FROM account_entitlements WHERE user_id = 'user-1'`,
+    ).first()).toEqual({
+      state: "trialing",
+      trial_until: trialEnd * 1000,
+      service_until: null,
+    });
+    expect(await env.DB.prepare(
+      `SELECT trial_start, trial_end, service_until
+       FROM stripe_subscriptions WHERE stripe_subscription_id = 'sub_paid'`,
+    ).first()).toEqual({
+      trial_start: created * 1000,
+      trial_end: trialEnd * 1000,
+      service_until: null,
+    });
+    expect(await env.DB.prepare(
+      "SELECT subscription_status FROM users WHERE id = 'user-1'",
+    ).first()).toEqual({ subscription_status: "paid" });
+    expect(await env.DB.prepare(
+      "SELECT title FROM notifications WHERE user_id = 'user-1'",
+    ).first()).toEqual({ title: "Paid trial started" });
+  });
+
+  it("immediately returns a verified waitlisted owner to Free when the trial is canceled", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await seedUser(env, "user-1", "free");
+    await seedStripeCustomer(env);
+    await seedContainer(env, {
+      host_id: null,
+      ssh_port: null,
+      tier: "paid",
+      placement_class: "regular",
+      placement_mode: "shared",
+      cpu: 2,
+      ram_mb: 4096,
+      disk_gb: 8,
+      status: "waitlisted",
+    });
+    const created = Math.floor(Date.now() / 1000);
+    const trialEnd = created + 7 * 86_400;
+    const event = {
+      id: "evt_trial_canceled",
+      type: "customer.subscription.updated",
+      created,
+      data: { object: { id: "sub_paid", customer: "cus_user" } },
+    };
+    const canceledTrial = {
+      ...subscription(trialEnd, "trialing", { start: created, end: trialEnd }),
+      cancel_at_period_end: true,
+    };
+    stubFetch(stripeEventRoutes(
+      { evt_trial_canceled: event },
+      { sub_paid: canceledTrial },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT state FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({ state: "expired" });
+    expect(await env.DB.prepare(
+      `SELECT tier, placement_class, cpu, ram_mb, disk_gb, status
+       FROM containers WHERE id = 'container-1'`,
+    ).first()).toEqual({
+      tier: "free",
+      placement_class: "budget",
+      cpu: 1,
+      ram_mb: 1536,
+      disk_gb: 5,
+      status: "waitlisted",
+    });
+  });
+
+  it("immediately downgrades a verified owner when the first post-trial payment fails", async () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, BILLING_GRACE_DAYS: "3" });
+    await seedUser(env, "user-1", "free");
+    await seedStripeCustomer(env);
+    await seedHost(env, {
+      host_type: "regular",
+      vcpu_allocated: 3,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 16,
+    });
+    await seedContainer(env, {
+      tier: "paid",
+      placement_class: "regular",
+      cpu: 2,
+      ram_mb: 4096,
+      disk_gb: 8,
+    });
+    const daemon = fakeDaemon();
+    const created = Math.floor(Date.now() / 1000);
+    const trialEnd = created - 1;
+    const event = invoiceEvent(
+      "evt_trial_payment_failed",
+      created,
+      "invoice.payment_failed",
+      "in_trial_failed",
+    );
+    const stripeRoute = stripeEventRoutes(
+      { evt_trial_payment_failed: event },
+      {
+        sub_paid: subscription(
+          created + 30 * 86_400,
+          "past_due",
+          { start: trialEnd - 7 * 86_400, end: trialEnd },
+        ),
+      },
+    );
+    stubFetch((url, init) => stripeRoute(url) ?? daemon.route(url, init));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT state, service_until, grace_until FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({ state: "expired", service_until: null, grace_until: null });
+    expect(await env.DB.prepare(
+      `SELECT to_tier, state FROM container_plan_transitions
+       WHERE container_id = 'container-1'`,
+    ).first()).toEqual({ to_tier: "free", state: "resizing" });
+    expect(daemon.submitted).toMatchObject([{ op: "resize", containerId: "container-1" }]);
+  });
+
+  it("grants service from invoice.paid and makes duplicate delivery a no-op", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const created = 1_800_000_000;
+    const event = invoiceEvent("evt_paid", created);
+    const periodEnd = created + 2_592_000;
+    const fetch = stubFetch(stripeEventRoutes(
+      { evt_paid: event },
+      { sub_paid: subscription(periodEnd) },
+    ));
+    const message = { eventId: "evt_paid", eventType: "invoice.paid", eventCreated: created };
+
+    await processBillingEventMessage(env, message);
+    await processBillingEventMessage(env, message);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(await env.DB.prepare(
+      "SELECT source, state, service_until FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({
+      source: "stripe",
+      state: "active",
+      service_until: periodEnd * 1000,
+    });
+    expect(await env.DB.prepare(
+      "SELECT status, attempt_count, subscription_id FROM stripe_billing_events WHERE event_id = 'evt_paid'",
+    ).first()).toEqual({ status: "processed", attempt_count: 1, subscription_id: "sub_paid" });
+    expect(await env.DB.prepare(
+      "SELECT subscription_status, verified_at FROM users WHERE id = 'user-1'",
+    ).first()).toEqual({ subscription_status: "paid", verified_at: null });
+    expect(await env.DB.prepare(
+      "SELECT user_id, title, message FROM notifications WHERE id = 'billing:evt_paid'",
+    ).first()).toEqual({
+      user_id: "user-1",
+      title: "Payment confirmed",
+      message: `Your Paid plan is active through ${new Date(periodEnd * 1000).toISOString().slice(0, 10)}.`,
+    });
+  });
+
+  it("never shortens paid-through service when an older event arrives later", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const newer = invoiceEvent("evt_newer", 1_800_000_100, "invoice.paid", "in_newer");
+    const older = invoiceEvent("evt_older", 1_800_000_000, "invoice.paid", "in_older");
+    let canonicalPeriodEnd = 1_803_000_000;
+    stubFetch((url) => {
+      if (url.pathname === "/v1/events/evt_newer") return Response.json(newer);
+      if (url.pathname === "/v1/events/evt_older") return Response.json(older);
+      if (url.pathname === "/v1/subscriptions/sub_paid") {
+        return Response.json(subscription(canonicalPeriodEnd));
+      }
+      return null;
+    });
+    await processBillingEventMessage(env, {
+      eventId: "evt_newer",
+      eventType: "invoice.paid",
+      eventCreated: newer.created,
+    });
+    canonicalPeriodEnd = 1_802_000_000;
+    await processBillingEventMessage(env, {
+      eventId: "evt_older",
+      eventType: "invoice.paid",
+      eventCreated: older.created,
+    });
+    expect(await env.DB.prepare(
+      "SELECT service_until, last_event_created FROM stripe_subscriptions WHERE stripe_subscription_id = 'sub_paid'",
+    ).first()).toEqual({
+      service_until: 1_803_000_000_000,
+      last_event_created: newer.created,
+    });
+  });
+
+  it("reclaims a billing event left processing by a lost Worker isolate", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const created = 1_800_000_000;
+    const event = invoiceEvent("evt_reclaimed", created);
+    const periodEnd = created + 2_592_000;
+    stubFetch(stripeEventRoutes(
+      { evt_reclaimed: event },
+      { sub_paid: subscription(periodEnd) },
+    ));
+    await env.DB.prepare(
+      `INSERT INTO stripe_billing_events
+         (event_id, event_type, event_created, status, attempt_count,
+          received_at, processing_started_at)
+       VALUES ('evt_reclaimed', 'invoice.paid', ?, 'processing', 1, 1, 1)`,
+    ).bind(created).run();
+
+    await processBillingEventMessage(env, {
+      eventId: "evt_reclaimed",
+      eventType: "invoice.paid",
+      eventCreated: created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT status, attempt_count FROM stripe_billing_events WHERE event_id = 'evt_reclaimed'",
+    ).first()).toEqual({ status: "processed", attempt_count: 2 });
+  });
+
+  it("does not let a delayed terminal event replace a newer live subscription", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO stripe_subscriptions
+           (stripe_subscription_id, user_id, stripe_customer_id, price_id, plan,
+            stripe_status, cancel_at_period_end, service_until, last_event_created,
+            last_synced_at, created_at, updated_at)
+         VALUES ('sub_old', 'user-1', 'cus_user', 'price_paid_monthly', 'paid',
+                 'canceled', 0, 1000, 1, 1, 1, 1)`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO stripe_subscriptions
+           (stripe_subscription_id, user_id, stripe_customer_id, price_id, plan,
+            stripe_status, cancel_at_period_end, service_until, last_event_created,
+            last_synced_at, created_at, updated_at)
+         VALUES ('sub_new', 'user-1', 'cus_user', 'price_paid_monthly', 'paid',
+                 'active', 0, 1900000000000, 2, 2, 2, 2)`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO account_entitlements
+           (user_id, plan, source, state, service_until, source_ref, updated_at)
+         VALUES ('user-1', 'paid', 'stripe', 'active', 1900000000000, 'sub_new', 2)`,
+      ),
+    ]);
+    const event = {
+      id: "evt_old_deleted",
+      type: "customer.subscription.deleted",
+      created: 3,
+      data: { object: { id: "sub_old", customer: "cus_user" } },
+    };
+    stubFetch(stripeEventRoutes(
+      { evt_old_deleted: event },
+      { sub_old: { ...subscription(1), id: "sub_old", status: "canceled" } },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+
+    expect(await env.DB.prepare(
+      "SELECT state, source_ref, service_until FROM account_entitlements WHERE user_id = 'user-1'",
+    ).first()).toEqual({
+      state: "active",
+      source_ref: "sub_new",
+      service_until: 1_900_000_000_000,
+    });
+  });
+
+  it("records payment failure without extending paid service", async () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, BILLING_GRACE_DAYS: "0" });
+    await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    const paid = invoiceEvent("evt_paid", 1_800_000_000);
+    const failed = invoiceEvent(
+      "evt_failed",
+      1_800_000_100,
+      "invoice.payment_failed",
+      "in_failed",
+    );
+    const paidEnd = 1_801_000_000;
+    let current = subscription(paidEnd);
+    stubFetch((url) => {
+      if (url.pathname === "/v1/events/evt_paid") return Response.json(paid);
+      if (url.pathname === "/v1/events/evt_failed") return Response.json(failed);
+      if (url.pathname === "/v1/subscriptions/sub_paid") return Response.json(current);
+      return null;
+    });
+    await processBillingEventMessage(env, {
+      eventId: "evt_paid",
+      eventType: "invoice.paid",
+      eventCreated: paid.created,
+    });
+    current = subscription(1_802_000_000, "past_due");
+    await processBillingEventMessage(env, {
+      eventId: "evt_failed",
+      eventType: "invoice.payment_failed",
+      eventCreated: failed.created,
+    });
+    expect(await env.DB.prepare(
+      "SELECT stripe_status, service_until FROM stripe_subscriptions WHERE stripe_subscription_id = 'sub_paid'",
+    ).first()).toEqual({ stripe_status: "past_due", service_until: paidEnd * 1000 });
+  });
+});
+
+describe("billing deadline reconciliation", () => {
+  it("suspends paid-bypass service without inventing a destruction deadline", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedExpiredStripeSubscription(env);
+    await seedHost(env, {
+      host_type: "regular",
+      vcpu_allocated: 3,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 16,
+    });
+    await seedContainer(env, {
+      tier: "paid",
+      placement_class: "regular",
+      cpu: 2,
+      ram_mb: 4096,
+      disk_gb: 8,
+    });
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await reconcileBillingState(env, 200);
+
+    expect(await env.DB.prepare(
+      `SELECT tier, status, suspension_reason, billing_suspended_at, destroy_after
+       FROM containers WHERE id = 'container-1'`,
+    ).first()).toEqual({
+      tier: "paid",
+      status: "running",
+      suspension_reason: "billing",
+      billing_suspended_at: 200,
+      destroy_after: null,
+    });
+    expect(daemon.submitted).toMatchObject([{ op: "stop", containerId: "container-1" }]);
+  });
+
+  it("downgrades an expired verified owner in place", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await seedUser(env, "user-1", "free");
+    await seedExpiredStripeSubscription(env);
+    await seedHost(env, {
+      host_type: "regular",
+      vcpu_allocated: 3,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 16,
+    });
+    await seedContainer(env, {
+      tier: "paid",
+      placement_class: "regular",
+      cpu: 2,
+      ram_mb: 4096,
+      disk_gb: 8,
+    });
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await reconcileBillingState(env, 200);
+
+    expect(await env.DB.prepare(
+      "SELECT to_tier, target_disk_gb, state FROM container_plan_transitions WHERE container_id = 'container-1'",
+    ).first()).toEqual({ to_tier: "free", target_disk_gb: 8, state: "resizing" });
+    expect(daemon.submitted).toMatchObject([{
+      op: "resize",
+      containerId: "container-1",
+      spec: { tier: "free", cpu: 1, ramMb: 1536, diskGb: 8 },
+    }]);
+  });
+
+  it("stops an expired paid-bypass workbench after a failed reserved upgrade", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await unverifiedUser(env);
+    await seedExpiredStripeSubscription(env);
+    await seedHost(env);
+    await seedContainer(env, { status: "upgrade_pending" });
+    await env.DB.prepare(
+      `INSERT INTO container_plan_transitions
+         (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+          reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at)
+       VALUES ('container-1', 'free', 'paid', 8, 'running', 'failed_retryable',
+               2, 2560, 6, 1, 1)`,
+    ).run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    await reconcileBillingState(env, 200);
+
+    expect(await env.DB.prepare(
+      "SELECT status, suspension_reason FROM containers WHERE id = 'container-1'",
+    ).first()).toEqual({ status: "upgrade_pending", suspension_reason: "billing" });
+    expect(daemon.submitted).toMatchObject([{ op: "stop", containerId: "container-1" }]);
+  });
+});

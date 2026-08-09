@@ -7,9 +7,13 @@ import {
   decryptJsonAtRest,
   HOST_RAM_OVERCOMMIT_DENOMINATOR,
   HOST_RAM_OVERCOMMIT_NUMERATOR,
-  HOST_TYPES,
 } from "@workbench/contract";
 import { daemonStats } from "./daemon.js";
+import {
+  destroyExpiredBillingSuspensions,
+  reconcileBillingState,
+  reconcileStaleStripeSubscriptions,
+} from "./billing.js";
 import {
   cpuReservation,
   diskReservationGb,
@@ -30,11 +34,14 @@ import {
 } from "./jobs.js";
 import { recordHostFailure, recordHostStats } from "./host-health.js";
 import { allocatePort, NoFreePortsError } from "./ports.js";
+import { retryPlanTransitions } from "./plan-transitions.js";
 import { LIFECYCLE_OPS } from "./state.js";
 import type { Bindings, ContainerRow, CredentialsRow, HostRow, JobRow } from "./types.js";
 
 export const STUCK_JOB_MS = 15 * 60 * 1000;
 export const GRACE_DAYS = 7;
+export const WAITLIST_BACKFILL_SCAN_LIMIT = 8;
+export const WAITLIST_MAX_SKIPS = 3;
 const GITHUB_REFRESH_LEAD_MS = 60 * 60 * 1000;
 const BACKGROUND_RETRY_MS = 60 * 60 * 1000;
 
@@ -83,7 +90,6 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
     ["timeout_jobs", timeoutStuckJobs(env, now)],
     ["github_refresh", refreshGithubTokens(env, now)],
     ["grace_expiry", expireSuspendedContainers(env, now)],
-    ["waitlist_admission", admitWaitlistedContainers(env, now)],
     ["expired_row_cleanup", cleanupExpiredRows(env, now)],
   ] as const;
   const results = await Promise.allSettled(tasks.map(([, task]) => task));
@@ -98,6 +104,26 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
       );
     }
   });
+
+  // Billing order is safety-sensitive: refresh canonical Stripe state before
+  // enforcing deadlines, realize entitlement-driven transitions before new
+  // waitlist placements, and only then consider destructive export expiry.
+  const orderedTasks = [
+    ["stripe_reconciliation", () => reconcileStaleStripeSubscriptions(env, now())],
+    ["billing_reconciliation", () => reconcileBillingState(env, now())],
+    ["plan_transitions", () => retryPlanTransitions(env, now())],
+    ["billing_suspension_expiry", () => destroyExpiredBillingSuspensions(env, now())],
+    ["waitlist_admission", () => admitWaitlistedContainers(env, now)],
+  ] as const;
+  for (const [task, run] of orderedTasks) {
+    try {
+      await run();
+    } catch (error) {
+      console.error(
+        JSON.stringify({ event: "reconcile_task_failed", task, error: String(error) }),
+      );
+    }
+  }
 }
 
 /** Poll the daemon for jobs still marked queued/running (dashboard may not be polling). */
@@ -165,7 +191,25 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
        WHERE id = ? AND status IN ('queued','running') AND updated_at <= ?`,
     ).bind(now(), job.id, cutoff);
     let claimed: { meta: { changes?: number } };
-    if (LIFECYCLE_OPS.has(job.op)) {
+    if (job.op === "resize" && await env.DB.prepare(
+      `SELECT 1 FROM container_plan_transitions
+       WHERE container_id = ? AND state = 'resizing'`,
+    ).bind(job.container_id).first()) {
+      const results = (await env.DB.batch([
+        claim,
+        env.DB.prepare(
+          `UPDATE container_plan_transitions
+           SET state = 'failed_retryable', updated_at = ?, last_error_code = 'resize_timeout'
+           WHERE container_id = ? AND state = 'resizing' AND changes() = 1`,
+        ).bind(now(), job.container_id),
+        env.DB.prepare(
+          `UPDATE containers
+           SET status = 'upgrade_pending', status_detail = 'resource change will retry automatically'
+           WHERE id = ? AND changes() = 1`,
+        ).bind(job.container_id),
+      ])) as Array<{ meta: { changes?: number } }>;
+      claimed = results[0] ?? { meta: {} };
+    } else if (LIFECYCLE_OPS.has(job.op)) {
       const results = (await env.DB.batch([
         claim,
         env.DB.prepare(
@@ -187,39 +231,37 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
   }
 }
 
-/** FIFO admission when host capacity returns. Placement re-checks capacity. */
+type WaitingContainer = ContainerRow & { skip_count: number };
+
+/** FIFO admission with bounded shared-pool backfill. Placement re-checks capacity. */
 async function admitWaitlistedContainers(env: Bindings, now: () => number): Promise<void> {
-  // Bound work per class instead of globally. Otherwise twenty older free
-  // entries could hide a paid entry from this Cron pass even though the pools
-  // have independent capacity.
-  const waitingByClass = await Promise.all(HOST_TYPES.map((hostType) =>
+  const [shared, dedicated] = await Promise.all([
     env.DB.prepare(
-      `SELECT c.* FROM containers c
+      `SELECT c.*, w.skip_count FROM containers c
        JOIN waitlist w ON w.user_id = c.user_id
        WHERE c.status = 'waitlisted' AND c.host_id IS NULL
-         AND c.placement_class = ? AND w.admitted_at IS NULL
+         AND c.placement_mode = 'shared' AND w.admitted_at IS NULL
+       ORDER BY w.requested_at, c.created_at, c.user_id
+       LIMIT ?`,
+    ).bind(WAITLIST_BACKFILL_SCAN_LIMIT + 1).all<WaitingContainer>(),
+    env.DB.prepare(
+      `SELECT c.*, w.skip_count FROM containers c
+       JOIN waitlist w ON w.user_id = c.user_id
+       WHERE c.status = 'waitlisted' AND c.host_id IS NULL
+         AND c.placement_mode = 'dedicated' AND w.admitted_at IS NULL
        ORDER BY w.requested_at, c.created_at, c.user_id
        LIMIT 20`,
-    )
-      .bind(hostType)
-      .all<ContainerRow>()));
-  const waiting = waitingByClass.flatMap((result) => result.results);
+    ).all<WaitingContainer>(),
+  ]);
 
-  // Capacity pools are independent. A full budget pool must not block a paid
-  // regular account that appears later in the global FIFO list. Dedicated
-  // hosts are account-bound, so each assigned account is its own pool.
-  const blockedPlacementClasses = new Set<string>();
-  for (const container of waiting) {
-    const placementPool = container.placement_class === "dedicated"
-      ? `dedicated:${container.user_id}`
-      : container.placement_class;
-    if (blockedPlacementClasses.has(placementPool)) continue;
+  const tryAdmission = async (container: WaitingContainer): Promise<boolean> => {
     const hostsWithoutPorts: string[] = [];
     while (true) {
       const host = await pickHost(
         env,
         {
           userId: container.user_id,
+          tenancyMode: container.placement_mode,
           hostType: container.placement_class,
           cpu: cpuReservation(container.tier),
           ramMb: container.ram_mb,
@@ -228,10 +270,7 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
         now,
         hostsWithoutPorts,
       );
-      if (!host) {
-        blockedPlacementClasses.add(placementPool);
-        break;
-      }
+      if (!host) return false;
       let admitted: ContainerRow | null;
       try {
         admitted = await placeWaitlistedContainer(env, container, host, now());
@@ -241,8 +280,7 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
         continue;
       }
       if (!admitted) {
-        blockedPlacementClasses.add(placementPool);
-        break;
+        return false;
       }
       try {
         await enqueueJob(env, "provision", admitted, host);
@@ -261,10 +299,37 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
           hostId: host.id,
           error: error instanceof Error ? error.message : "job dispatch failed",
         }));
-        blockedPlacementClasses.add(placementPool);
+        return false;
       }
-      break;
+      return true;
     }
+  };
+
+  const oldest = shared.results[0];
+  if (oldest) {
+    const oldestAdmitted = await tryAdmission(oldest);
+    if (!oldestAdmitted && oldest.skip_count < WAITLIST_MAX_SKIPS) {
+      for (const candidate of shared.results.slice(1, WAITLIST_BACKFILL_SCAN_LIMIT + 1)) {
+        if (!(await tryAdmission(candidate))) continue;
+        const skipped = await env.DB.prepare(
+          `UPDATE waitlist SET skip_count = MIN(skip_count + 1, ?)
+           WHERE user_id = ? AND admitted_at IS NULL`,
+        ).bind(WAITLIST_MAX_SKIPS, oldest.user_id).run();
+        if (skipped.meta.changes) {
+          console.log(JSON.stringify({
+            event: "waitlist_backfill",
+            blockedUserId: oldest.user_id,
+            admittedUserId: candidate.user_id,
+          }));
+        }
+        break;
+      }
+    }
+  }
+
+  // Dedicated hosts remain account-bound and therefore have independent pools.
+  for (const container of dedicated.results) {
+    await tryAdmission(container);
   }
 }
 
@@ -284,26 +349,28 @@ async function placeWaitlistedContainer(
       `UPDATE containers
        SET host_id = ?, ssh_port = ?, status = 'provisioning', status_detail = NULL
        WHERE id = ? AND status = 'waitlisted' AND host_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM containers occupied
+           WHERE occupied.host_id = ? AND occupied.ssh_port = ?
+         )
          AND EXISTS (
            SELECT 1 FROM hosts h
            WHERE h.id = ? AND h.status = 'active'
-             AND h.host_type = containers.placement_class
-             AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = containers.user_id)
+             AND h.tenancy_mode = containers.placement_mode
+             AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = containers.user_id)
+             AND (
+               h.tenancy_mode = 'dedicated'
+               OR h.daemon_capabilities LIKE '%"mixed-tier-shared-v1"%'
+               OR h.host_type = containers.placement_class
+             )
              AND h.max_tenants > (
                SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
              )
              AND h.vcpu_allocated + CASE containers.tier
-               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END <=
-               ((h.vcpu_capacity + CASE containers.tier
-                 WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END - 1)
-                / CASE containers.tier
-                    WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END)
-               * CASE containers.tier
-                   WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END
-             AND h.ram_allocated_mb + containers.ram_mb <=
-               (((h.ram_total_mb - h.ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
-                 + (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * containers.ram_mb) - 1)
-                / (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * containers.ram_mb)) * containers.ram_mb
+               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END <= h.vcpu_capacity
+             AND (h.ram_allocated_mb + containers.ram_mb) *
+                 ${HOST_RAM_OVERCOMMIT_DENOMINATOR} <=
+                 (h.ram_total_mb - h.ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
              AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
@@ -315,6 +382,8 @@ async function placeWaitlistedContainer(
       host.id,
       port,
       container.id,
+      host.id,
+      port,
       host.id,
       heartbeatCutoff,
     ),
@@ -379,7 +448,9 @@ async function refreshGithubTokens(env: Bindings, now: () => number): Promise<vo
 async function expireSuspendedContainers(env: Bindings, now: () => number): Promise<void> {
   const cutoff = now() - GRACE_DAYS * 24 * 3600 * 1000;
   const expired = await env.DB.prepare(
-    "SELECT * FROM containers WHERE status = 'suspended' AND suspended_at IS NOT NULL AND suspended_at <= ?",
+    `SELECT * FROM containers
+     WHERE status = 'suspended' AND suspension_reason IS NULL
+       AND suspended_at IS NOT NULL AND suspended_at <= ?`,
   )
     .bind(cutoff)
     .all<ContainerRow>();

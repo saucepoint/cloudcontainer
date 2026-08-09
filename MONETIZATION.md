@@ -1,564 +1,1060 @@
-# MONETIZATION.md — Paid-User Readiness & Stripe Onboarding Plan
+# Monetization and Stripe subscription plan
 
-**Status:** Planning · **Branch:** `docs/monetization-plan` · **Last updated:** 2026-08-03
+**Status:** Planning · **Last updated:** 2026-08-07
 
-This document identifies everything required to begin supporting paid users on
-usebench.dev and lays out the implementation plan for self-service onboarding
-via **Stripe Billing**. It is grounded in the current codebase
-(`apps/worker`, `apps/daemon`, `packages/contract`), the release contract
-(`SPEC.md`), and current Stripe/Cloudflare guidance.
+This document defines paid onboarding, billing, entitlement, container upgrades,
+and mixed-tier host placement for usebench.dev.
+
+It is an implementation plan, not the current production contract. `SPEC.md`
+must be updated when these decisions are approved and implemented.
 
 ---
 
-## 1. Current state (what exists today)
+## 1. Goals and scope
 
-The system already has a **placement-ready paid architecture** with no billing
-attached. `users.subscription_status` is `free | paid | dedicated` and is set
-exclusively by operators through the fleet controller; the browser cannot
-self-assert a paid class (`SPEC.md` §4.1: *"Public signup is free and needs no
-credit card. Paid and dedicated service are operator-entitled until billing
-exists"*).
+### 1.1 Required outcomes
 
-| Concern | Where it lives today |
+The first billing release must:
+
+- offer one self-service paid tier through Stripe Checkout;
+- let an authenticated user pay without World ID or an invite;
+- let an already verified free user upgrade from the dashboard;
+- upgrade an existing free container without deleting user data;
+- keep full paid service until a scheduled cancellation takes effect;
+- use the Stripe Customer Portal for payment and cancellation management;
+- tolerate duplicate, delayed, missing, and out-of-order webhooks; and
+- place free and paid containers together on shared hosts.
+
+Dedicated service remains operator-managed in v1. It can use the same
+entitlement model later, but it is not exposed as a Stripe price until its
+capacity and price are approved.
+
+### 1.2 Non-goals for v1
+
+The following are deferred:
+
+- usage-based billing and Stripe Billing Meters;
+- annual billing, credits, coupons, and seat quantities;
+- multiple containers per account;
+- automatic cross-host storage migration; and
+- self-service dedicated-host purchase.
+
+### 1.3 Decisions that still need commercial approval
+
+Engineering must not invent these values:
+
+- paid price and currency;
+- tax registrations and countries served;
+- failed-renewal grace duration;
+- export-window duration;
+- refund and dispute policy; and
+- whether a verified user keeps oversized paid storage after downgrade.
+
+Commercial policy periods must be configuration with tests. The seven-day Paid
+trial is an explicit product requirement and a single exported constant.
+
+---
+
+## 2. Review findings in the previous plan
+
+The previous plan had useful inventory and security guidance, but several
+assumptions were incorrect or incomplete.
+
+| Finding | Correction in this plan |
 |---|---|
-| Plan shapes | `TIERS` in `packages/contract/src/types.ts` (free: 1 vCPU/1536 MiB/1 GiB swap/5+5 GiB; paid: 2 vCPU/4096 MiB/no swap/8+8 GiB) |
-| Plan → placement mapping | `SERVICE_PLANS` (free→budget, paid→regular, dedicated→dedicated) in `packages/contract/src/types.ts` |
-| Entitlement gate | `servicePlanForSubscription()` in `apps/worker/src/placement.ts`; throws `ProvisioningNotAllowedError` for unknown statuses |
-| Placement capacity math | `pickHost()` in `apps/worker/src/capacity.ts`; transactional INSERT guard in `startProvision()` |
-| Waitlist admission | `apps/worker/src/reconciler.ts` (cron `*/5 * * * *`) re-checks tier CPU/RAM/disk reservations per host |
-| Operator entitlement UI/API | `apps/worker/src/fleet-admin.ts` (assigns `subscription_status`, re-homes containers, applies service plan) |
-| User row | `apps/worker/src/auth-schema.ts` (Drizzle) + `apps/worker/src/types.ts` `UserRow` |
-| Reserved states | `suspended` (no billing UI drives it) and `upgrade_pending` ("Reserved for a future paid upgrade flow") in `CONTAINER_STATUSES` |
-| Billing | **None.** No Stripe keys, no billing tables, no email, no webhooks. `SPEC.md` §"Explicitly not in the current release" |
-
-Deliberate design points that make monetization cheap:
-
-- Placement is already **class-segregated** (budget hosts accept only free
-  accounts, regular hosts only paid, dedicated hosts one assigned paid
-  account), so a paid entitlement *automatically* places on the right pool.
-- Host accounting uses **provisioned** reservations (1 free / 3 paid vCPU)
-  independent of public labels (`cpuReservation()`).
-- `SERVICE_PLANS` keeps billing separate from placement
-  ("A dedicated subscription is still a paid account").
-- One container per account ⇒ one subscription per account: a **flat monthly
-  plan is the natural billing unit** — no per-seat complexity.
+| Free and paid hosts were treated as permanently separate pools. | Shared hosts accept both tiers; only dedicated placement remains exclusive. |
+| Paid checkout required prior World ID or invite verification. | A valid paid entitlement is an alternative eligibility path. Authentication is still required. |
+| Cancellation and non-payment were conflated. | Scheduled cancellation preserves paid service through the paid-through time; failed renewal follows a separate dunning policy. |
+| `checkout.session.completed` was treated as proof of payment. | Grant trial access only from canonical `trialing` state and paid-through service only from a positive paid invoice. Delayed methods can complete Checkout before settlement. |
+| Webhooks were acknowledged before durable processing without a queue. | Verify, durably enqueue, then acknowledge. The consumer is idempotent and order-independent. |
+| The draft stored a subscription-level `current_period_end`. | Pin a Stripe API version and read period bounds from the subscription item for current Basil versions. |
+| Stripe retry counts and timing were hard-coded. | Stripe recovery settings are operator configuration; local policy uses timestamps received from Stripe. |
+| Existing free-container upgrades were described only as resize or destructive rehome. | Reserve the resource delta and resize in place. Never destroy data merely to apply a paid plan. |
+| `verified_at` was going to represent paid eligibility. | Keep permanent free eligibility separate from revocable paid entitlement. |
+| A new daemon suspend API was assumed necessary. | The daemon already supports stop/start. Add billing-specific control-plane semantics before adding redundant wire operations. |
+| Price IDs were described as secrets. | Price IDs are non-secret configuration. Secret keys and webhook secrets remain Worker secrets. |
+| Checkout combined `customer_creation: "always"` with an existing customer. | Create or retrieve the Customer first, then pass its ID to Checkout. |
+| A cron intended to repair missed webhooks was underspecified. | Reconciliation compares canonical Stripe state with D1 and drives time-based expiry. |
+| Immediate suspension on disputes was proposed without a product policy. | Disputes alert operators; service changes follow the approved refund and fraud policy. |
+| Cloudflare Email Sending was treated as generally available. | It is currently beta and requires a Workers Paid plan; Stripe email is the launch fallback. |
 
 ---
 
-## 2. Target monetization model (recommendation)
+## 3. Current architecture
 
-### 2.1 Plans
+Today:
 
-| Plan | Stripe Product/Price | Entitlement | Host class | Notes |
-|---|---|---|---|---|
-| Free | no price (signup) | `free` | budget | unchanged |
-| **Pro** | monthly recurring, e.g. $12/mo (recommended starting point) | `paid` | regular | 2 vCPU / 4 GiB / 8+8 GiB |
-| **Dedicated** | monthly recurring, e.g. $49/mo | `dedicated` | dedicated host | one tenant slot, exactly the current dedicated semantics |
+- `users.subscription_status` is `free | paid | dedicated`;
+- `SERVICE_PLANS` maps those values to a tier and host type;
+- `budget` hosts accept only free containers;
+- `regular` hosts accept only paid containers;
+- `dedicated` hosts accept one assigned account;
+- host capacity is calculated using one tier shape per host;
+- the daemon rejects a tier that does not match its configured host type;
+- `resize` can change Incus CPU, RAM, swap, root disk, and home volume size;
+- operator rehome destroys the old instance before reprovisioning; and
+- there are no Stripe customers, subscriptions, or billing webhooks.
 
-Recommendations grounded in market research:
+The current rehome path is explicitly destructive. It is not an acceptable
+paid-upgrade mechanism.
 
-- **Flat monthly, not metered, for v1.** Peer products split between flat
-  (Gitpod flat/usage hybrids) and pay-as-you-go (GitHub Codespaces is
-  usage-based). A homogeneous one-container-per-account product with host-cost
-  ceilings (`TIERS`) is easiest to price flat; per-minute metering adds
-  Billing Meter complexity without v1 upside.
-- **Annual plans later** via Stripe's built-in price switching
-  (`customer.subscription.updated`), not v1.
-- **Dedicated as a second product**, not a `price` on the Pro product, so
-  plan/price → `SERVICE_PLANS` mapping stays 1:1.
-- **Stripe Tax enabled from day one** for digital services (see §8.7); the
-  worker already knows each account's locale via Better Auth signup, and
-  Stripe collects the rest.
+The current `resize` state transition also assumes success means `running`.
+Paid work must preserve whether the container was running or stopped.
 
-### 2.2 Entitlement model (source of truth)
+---
 
-**Stripe is the source of truth; D1 is an authorization cache.** Webhooks
-write entitlement state into D1; the cron reconciler sweeps for drift (missed
-webhooks, stale sync). All existing placement/reconciler code keeps reading
-`users.subscription_status` + `containers.tier/placement_class` — the same
-columns operators write today — so **no placement math changes**.
+## 4. Product plans and eligibility
 
-The only new concept is *how* the status is derived:
+### 4.1 Plan model
 
+| Product plan | Resource tier | Placement mode | Billing source |
+|---|---|---|---|
+| Free | `free` | `shared` | none |
+| Paid | `paid` | `shared` | Stripe or operator |
+| Dedicated | `paid` | `dedicated` | operator in v1 |
+
+Free and Paid differ in container resources, not in shared-host hardware type.
+A host can run any safe combination that fits its resource budget.
+
+### 4.2 Authentication is always required
+
+Payment does not replace authentication. Checkout requires a valid Better Auth
+session and binds the Stripe Customer to the internal user ID.
+
+An unauthenticated visitor must sign in or create an account before Checkout.
+No browser-supplied email or Stripe metadata is trusted as an account binding.
+
+### 4.3 Two independent eligibility paths
+
+Permanent free eligibility remains:
+
+```text
+verified_at != null
+AND verification_method in (world_id, invite, development)
 ```
-Stripe Customer ──subscription──▶ Stripe Subscription (status: trialing|active|past_due|canceled|…)
-                                      │  webhooks + cron sweep
-                                      ▼
-                        D1: customers + subscriptions + billing_events (cache)
-                                      │  entitlement projection
-                                      ▼
-              users.subscription_status  →  SERVICE_PLANS  →  placement
+
+Paid eligibility is time-bound by either a canonical trial or collected service:
+
+```text
+(stripe status is trialing AND trial_end > now AND trial is not canceled)
+OR (stripe entitlement is active AND service_until > now)
 ```
 
----
+Do not set `verified_at` merely because a user paid. Otherwise a user could pay
+once, cancel, and retain free service without satisfying the free-tier gate.
 
-## 3. Required refactors (pre-requisite code changes)
+Authorization becomes:
 
-These are **non-breaking** cleanups that must land before any Stripe code.
+```ts
+function effectiveEntitlement(account, billing, now) {
+  if (billing.manualPlan) return billing.manualPlan;
 
-### R1. Extract an entitlement layer (`apps/worker/src/billing/entitlements.ts`)
+  if (billing.plan === "paid" && billing.accessUntil > now) {
+    return { eligible: true, plan: "paid", source: "stripe" };
+  }
 
-Today `servicePlanForSubscription()` (placement.ts:52) is the only
-entitlement gate, and fleet-admin re-implements plan math inline
-(fleet-admin.ts:256–284). Create one module that:
+  if (account.verifiedAt) {
+    return { eligible: true, plan: "free", source: account.verificationMethod };
+  }
 
-- maps `{ billing mode, stripe subscription status, plan } → subscription_status`;
-- is the **single call site** for `users.subscription_status` writes
-  (webhook handler, cron sweep, fleet-admin legacy path);
-- exposes `entitlementFor(user) → { plan, tier, hostType }` used by
-  placement, reconciler, and the dashboard.
+  return { eligible: false, plan: null, source: null };
+}
+```
 
-### R2. Add billing tables + migration (see §5.1, migration `0017`)
+Replace route assumptions such as “verified means authorized” with a shared
+`requireEligibleAccount` middleware. Update `postLoginPath` and every onboarding,
+dashboard, CLI, credential, and container route to use the same projection.
 
-New D1 tables `stripe_customers`, `stripe_subscriptions`, `stripe_billing_events`.
-Expand-first per repo convention: additive only; nothing existing is dropped.
+### 4.4 User journeys
 
-### R3. Introduce `billing_mode` on users (migration `0017`)
+**Unverified authenticated user:**
 
-`billing_mode TEXT NOT NULL DEFAULT 'manual'` — distinguishes
-operator-entitled accounts (`manual`, the current fleet-admin path) from
-Stripe-managed accounts (`stripe`). This is the seam that lets existing
-paid/dedicated users keep service during the rollout without fabricating
-Stripe subscriptions.
+1. The `/verify` page offers World ID, invite, or “Continue with Paid.”
+2. Paid starts Checkout through an endpoint guarded by `requireAccount`.
+3. The success page shows “activating trial” until canonical Stripe state is processed.
+4. A valid seven-day trial routes the user to onboarding or the dashboard.
 
-### R4. Route registration for a public webhook (`apps/worker/src/index.tsx`)
+**Verified free user without a container:**
 
-Add `app.post("/api/stripe/webhook", ...)` (or `billingRoutes` module mounted
-alongside `subscriptionRoutes` at index.tsx:103). The custom domain
-(`usebench.dev`) is already a public route; the webhook endpoint must be
-public HTTPS with **no auth middleware** (signature verification replaces
-session auth).
+1. The dashboard or account page offers Upgrade.
+2. After the trial is confirmed, onboarding provisions directly with the paid tier.
 
-### R5. Billing status in the dashboard model
+**Verified free user with a container:**
 
-`dashboard-model.ts` already renders `upgrade_pending`; add `past_due` and
-`billing_mode`-aware display so the UI never shows a "paid" state the billing
-system doesn't confirm.
-
-### R6. Encrypted at-rest conventions for Stripe IDs
-
-No card data ever enters D1 (PCI scope stays with Stripe). Customer IDs and
-subscription IDs are not secrets, but keep them out of job rows/logs anyway
-(consistent with `SPEC.md` §10 credential hygiene).
+1. The dashboard offers Upgrade.
+2. Paid resources start when the trial is confirmed.
+3. A plan-transition job upgrades the existing container in place.
+4. The UI shows `upgrade_pending` until the desired resources are applied.
 
 ---
 
-## 4. Required breaking changes
+## 5. Entitlement and billing state
 
-These change existing behavior or contracts and need coordinated
-Worker/daemon/contract releases per `AGENTS.md` (expand-first, runbook).
+### 5.1 Separate facts from projections
 
-### B1. `subscription_status` semantics narrow (contract + fleet-admin)
+Stripe objects are billing facts. Effective entitlement is a local projection.
+Container state is an asynchronous realization of that entitlement.
 
-`SERVICE_PLANS` and `servicePlanForSubscription()` accept exactly
-`free|paid|dedicated`. Stripe subscriptions introduce transient states
-(`trialing`, `past_due`, `canceled`, `unpaid`) that **must not** leak into
-`users.subscription_status`. Projection rule (keeps the enum closed):
+```text
+Stripe Customer + Subscription + paid Invoice
+                    |
+                    v
+D1 billing facts: status, price, cancel flag, trial_end, service_until
+                    |
+                    v
+Effective entitlement: none | free | paid | dedicated
+                    |
+                    v
+Desired container tier and placement mode
+                    |
+                    v
+Actual Incus limits and D1 host reservations
+```
 
-| Stripe subscription status | projected `subscription_status` |
+Do not use `users.subscription_status` as the complete billing state. During a
+rolling migration it can remain a compatibility projection.
+
+### 5.2 Recommended state fields
+
+Use explicit timestamps rather than inferring access from labels:
+
+- `service_until`: exclusive end of paid access;
+- `trial_end`: exclusive end of the fixed seven-day free trial;
+- `cancel_at`: when a scheduled cancellation becomes effective;
+- `grace_until`: optional failed-renewal grace deadline;
+- `last_paid_invoice_id`: prevents an old event extending access twice;
+- `stripe_status`: Stripe's raw subscription status; and
+- `entitlement_state`: local display and workflow state.
+
+Suggested local entitlement states:
+
+```text
+pending | trialing | active | cancel_scheduled | past_due | grace | expired | manual
+```
+
+`past_due` does not itself answer whether access is allowed. Access is allowed
+while an uncanceled `trial_until`, `service_until`, or approved `grace_until`
+is in the future.
+
+### 5.3 Stripe status projection
+
+| Stripe state | Local action |
 |---|---|
-| `trialing`, `active` | plan (`paid` / `dedicated`) |
-| `past_due`, `unpaid` | plan but `billing_status='past_due'` column (new) |
-| `canceled` | `free` after grace/export window (see §8.4) |
-| `incomplete` / `incomplete_expired` | `free` |
+| `incomplete` | No paid access; show payment action required. |
+| `incomplete_expired` | No paid access; allow a fresh Checkout attempt. |
+| `trialing` | Paid resources through `trial_end`; cancellation revokes trial access immediately. |
+| `active` with paid invoice | Paid access through the stored service deadline. |
+| `past_due` | Keep access only through `service_until`, then optional grace. |
+| `unpaid` | Do not extend access; expire at the local deadline. |
+| `paused` | Do not extend access; apply the approved pause policy. |
+| `canceled` | Terminal; expire when the stored paid-through deadline is reached. |
 
-**Breaking:** fleet-admin SQL that enumerates `IN ('free','paid','dedicated')`
-(still valid), and any code that treats `subscription_status` as the full
-billing truth (it becomes entitlement-only). Audit: placement.ts:52,
-fleet-admin.ts:97–284, reconciler.ts:296, auth-schema.ts:10.
-
-### B2. Provision guard changes (behavior, expand-first)
-
-`startProvision()` must refuse **free** provisioning for a `stripe`-mode user
-whose subscription is `past_due` beyond the grace window (currently any
-`free` status can provision). The reconciler must gain a matching guard so a
-downgraded user's waitlisted container cannot sneak onto a paid host.
-
-### B3. `ContainerSpecSchema.tier` stays `free|paid` — no change needed
-
-Dedicated uses the paid shape (SPEC §8), so **no daemon contract change** for
-plans. Daemon never learns about Stripe. This is a deliberate non-change; the
-only daemon-side addition is a **suspend** capability (see B4).
-
-### B4. Daemon: suspend/resume lifecycle (breaking for daemon API)
-
-The container statuses `suspended`/`upgrade_pending` exist in
-`CONTAINER_STATUSES` but no daemon op drives them (`JOB_OPS` has no
-`suspend`). Dunning needs a hard stop that preserves data. Add:
-
-- `JOB_OPS` += `suspend` (Incus `instance stop` + keep rootfs) and `resume`;
-- Worker-side `suspend`/`resume` API paths and reconciler handling for
-  `suspended` containers;
-- daemon `apps/daemon/src/jobs.ts` op handlers + tests.
-
-**Breaking:** new op values flow Worker→daemon; older daemons must reject
-unknown ops gracefully (they already validate `JobRequestSchema`, which is
-strict — ship daemon first, then Worker, per runbook).
-
-### B5. Better Auth schema column (auth-schema.ts)
-
-`subscriptionStatus` stays; add `billingMode` to the Drizzle table definition
-to match migration `0017`. Drizzle is not the migration driver here (raw SQL
-migrations are), so keep the two in sync manually with a test assertion
-(migrations.test.ts pattern).
+The local projection must be a pure function with table-driven tests.
 
 ---
 
-## 5. Required upgrades (infrastructure & dependencies)
+## 6. Scheduled cancellation and service expiry
 
-### 5.1 D1 migration `0017_billing.sql` (draft)
+### 6.1 Paid-through service is mandatory
+
+Customer Portal cancellation must default to period-end cancellation, not
+immediate cancellation.
+
+When Stripe sets `cancel_at_period_end=true`:
+
+- record `cancel_at` and display “Paid until DATE”;
+- stop future renewal, but keep the Paid entitlement;
+- keep paid CPU, RAM, disk, and normal lifecycle controls;
+- allow the customer to reverse cancellation before it takes effect; and
+- do not enqueue resize, downgrade, stop, or destroy work.
+
+That paid-through rule applies after money has been collected. During the free
+trial, `cancel_at_period_end` or a terminal cancellation revokes Paid trial
+access immediately and triggers Free fallback or paid-bypass suspension.
+
+For the one-price v1 subscription, derive the service deadline from the single
+subscription item's `current_period_end` under the pinned Stripe API version.
+
+Do not advance `service_until` merely because a subscription update arrived.
+Advance it after a paid invoice is validated against the expected customer,
+subscription, and price.
+
+```ts
+if (event.type === "invoice.paid" && event.data.object.amount_paid > 0) {
+  const subscription = await fetchCanonicalSubscription(event);
+  assertSupportedSinglePrice(subscription);
+
+  serviceUntil = max(
+    stored.serviceUntil,
+    subscription.items.data[0].current_period_end * 1000,
+  );
+}
+```
+
+At the deadline, Stripe normally emits `customer.subscription.deleted`.
+The local reconciler must also enforce the timestamp in case that event is
+late or missing.
+
+### 6.2 Failed renewal is different from cancellation
+
+A failed first charge after the free trial has no paid-through deadline, so it
+ends trial access immediately. The renewal rules below apply after a positive
+payment established `service_until`.
+
+On `invoice.payment_failed`:
+
+1. Record `past_due` and notify the user.
+2. Keep service through the already paid `service_until` time.
+3. Let Stripe apply the configured recovery policy.
+4. If approved, apply a local grace period after `service_until`.
+5. Never extend `service_until` for an unpaid invoice.
+
+Do not hard-code a retry count or assume a fixed Stripe retry schedule. Smart
+Retries and terminal status behavior are Stripe Dashboard configuration.
+
+### 6.3 Behavior after paid access ends
+
+If the account has permanent free eligibility:
+
+- project the Free plan;
+- apply free CPU, RAM, and swap limits without deleting data;
+- mark oversized paid storage as grandfathered actual allocation; and
+- show that a future rebuild may be required to return to standard free disk.
+
+Incus/ZFS volumes cannot be safely shrunk in place. Automatic destructive
+rebuild is forbidden.
+
+If commercial policy rejects grandfathered storage, ship an explicit export
+and rebuild flow before enabling downgrade. Do not silently delete data.
+
+The current contract ties disk size to `tier`. Grandfathering therefore needs a
+separate actual-storage field or a contract that permits legacy disk limits. Do
+not emit an invalid Free `ContainerSpec` with paid disk values.
+
+If the account used the paid bypass and lacks permanent free eligibility:
+
+- stop the container after paid access and any approved grace end;
+- mark the entitlement expired and the container billing-suspended;
+- offer resubscribe, World ID/invite verification, and export help; and
+- destroy only after the published export deadline and required notices.
+
+A stopped container and a billing-suspended container need different
+control-plane reasons even if both use the daemon's existing stop operation.
+
+### 6.4 Immediate cancellation, refunds, and disputes
+
+Immediate cancellation is an operator exception, not the default portal flow.
+Its service deadline follows the approved refund or fraud policy.
+
+A dispute webhook must alert an operator and record the dispute. It must not
+silently destroy or suspend service unless the approved policy says to do so.
+
+---
+
+## 7. Mixed-tier shared-host refactor
+
+This refactor is a prerequisite for paid self-service. Billing must not be
+coupled to `budget` versus `regular` host pools.
+
+### 7.1 Replace host class with tenancy mode
+
+Target model:
+
+```ts
+type TenancyMode = "shared" | "dedicated";
+
+const SERVICE_PLANS = {
+  free: { tier: "free", tenancyMode: "shared" },
+  paid: { tier: "paid", tenancyMode: "shared" },
+  dedicated: { tier: "paid", tenancyMode: "dedicated" },
+};
+```
+
+Use an expand-first migration:
+
+1. Add `hosts.tenancy_mode` and `containers.placement_mode`.
+2. Backfill `budget` and `regular` as `shared`.
+3. Backfill `dedicated` as `dedicated`.
+4. Dual-read and dual-write during a fleet-compatible release.
+5. Remove old class checks only after every daemon reports support.
+6. Drop or rename legacy columns in a later migration.
+
+### 7.2 Per-container resource admission
+
+A shared host must be evaluated against the requested container's actual
+reservation, not a host-wide tier shape.
+
+Admission requires all of:
+
+```text
+host is active and healthy
+host tenancy_mode is shared
+allocated CPU + requested CPU <= allocatable CPU budget
+allocated RAM + requested RAM <= allocatable RAM budget
+allocated disk + requested disk <= allocatable disk budget
+tenant count + 1 <= max_tenants
+an SSH port is available
+```
+
+The same predicates must appear in host selection and the transactional write.
+The D1 write remains authoritative against races.
+
+Replace tier-rounded host ceilings with additive resource budgets. Keep
+`max_tenants` as a separate isolation and operational safety limit.
+
+Placement should prefer the viable host that leaves the least unusable
+resource slack, while avoiding a single-resource hotspot. The exact score must
+be deterministic and tested with mixed free and paid requests.
+
+### 7.3 Daemon and contract changes
+
+The daemon currently rejects a tier that does not match its host type. Change
+that validation so:
+
+- a shared daemon accepts both `free` and `paid` specs;
+- a dedicated daemon accepts only its assigned account and paid spec;
+- the Worker still validates plan and account binding; and
+- daemon stats report tenancy mode and a rollout-compatible capability.
+
+The daemon does not receive Stripe IDs or billing state. It receives only the
+container operation and desired resource spec.
+
+### 7.4 Waitlist behavior
+
+Free and paid no longer have independent shared pools. Use one FIFO queue with
+an explicit scheduling policy.
+
+Strict FIFO can cause head-of-line blocking when the oldest paid request does
+not fit but later free requests do. Use bounded backfill:
+
+1. Try the oldest request first.
+2. If it cannot fit, inspect a bounded number of later requests.
+3. Admit a smaller request only if the oldest keeps its timestamp and priority.
+4. Record skips and cap them to prevent starvation.
+5. Keep dedicated accounts in account-bound pools.
+
+The policy and fairness bound must be visible in tests and operations docs.
+
+### 7.5 Capacity and rollout risk
+
+Mixed placement improves average density but increases fragmentation risk.
+Track free and paid reservations separately and aggregate by host.
+
+Before enabling paid Checkout, prove that the fleet has room for both new paid
+containers and in-place upgrades. Checkout may be disabled when paid headroom
+falls below an operator-defined reserve.
+
+---
+
+## 8. Upgrading an existing free container
+
+### 8.1 Required invariant
+
+A canonical trial or successful payment grants a Paid entitlement immediately,
+but applying the larger container shape is asynchronous.
+
+The old container must remain usable at its existing free shape until the
+upgrade succeeds. Never destroy it merely because its current host lacks the
+resource delta.
+
+### 8.2 Desired and actual state
+
+Add desired-plan fields or a plan-transition table. Do not overwrite actual
+resource fields before the transition has durably claimed capacity.
+
+Suggested transition states:
+
+```text
+requested -> reserving -> resizing -> complete
+                         -> waiting_capacity
+                         -> failed_retryable
+```
+
+Store the prior lifecycle state so a stopped container remains stopped after
+resize.
+
+### 8.3 In-place upgrade algorithm
+
+```ts
+async function requestPaidUpgrade(userId) {
+  const entitlement = await effectiveEntitlementFor(userId);
+  assert(entitlement.plan === "paid");
+
+  const container = await getContainer(userId);
+  if (!container) return; // onboarding will use paid desired state
+  if (container.tier === "paid") return; // idempotent
+
+  const delta = resources("paid") - actualReservation(container);
+
+  const claimed = await reserveDeltaAndCreateTransition({
+    container,
+    delta,
+    desiredTier: "paid",
+    expectedActualTier: "free",
+  });
+
+  if (!claimed) {
+    await markWaitingForCapacity(container.id);
+    return;
+  }
+
+  await enqueueIdempotentResize(container.id, "paid");
+}
+```
+
+The D1 transaction must:
+
+- confirm the entitlement is still Paid;
+- confirm no lifecycle job or plan transition is active;
+- recheck host health and mixed-tier capacity;
+- reserve only the CPU, RAM, and disk delta;
+- create one transition keyed by container and desired tier; and
+- set `upgrade_pending` without losing the prior state.
+
+On success, commit the actual tier and resource fields, clear the transition,
+and restore `running` or `stopped` as appropriate.
+
+On retryable failure, keep the delta reserved if the daemon might have applied
+part of the resize. Reconciliation should resend the idempotent desired spec.
+An operator-only repair path handles irreconcilable partial changes.
+
+### 8.4 When the current host cannot fit the upgrade
+
+Leave the container running at the free shape and show:
+
+> Payment confirmed. Your existing workbench remains available while we
+> allocate capacity for the larger plan.
+
+Retry on each reconciliation pass and when capacity changes. Define an upgrade
+support target and alert before it is breached. If the target is missed, support
+must offer the approved credit, refund, or migration remedy.
+
+Do not use the current destructive rehome flow. Cross-host upgrade requires a
+separate snapshot/copy/verify/cutover design with rollback. Until that exists,
+in-place upgrade or operator-assisted migration are the only safe paths.
+
+### 8.5 Upgrade concurrency cases
+
+The implementation must define:
+
+- cancellation while upgrade is waiting;
+- refund while resize is active;
+- container stop, rebuild, or destroy during a transition;
+- duplicate paid webhooks;
+- host drain or failure during resize; and
+- a renewal or expiry event during recovery.
+
+User lifecycle controls that conflict with a transition return `409` with a
+clear retry message. Destroy remains available through an explicit transition
+cancellation path.
+
+---
+
+## 9. Stripe integration
+
+### 9.1 Catalog and API version
+
+Create one v1 Paid product with one recurring monthly Price. Store its Price ID
+as non-secret Worker configuration.
+
+Pin the Stripe API version in code and on the webhook destination. Upgrade it
+only with fixture regeneration and contract tests.
+
+Current Basil API versions place billing period fields on subscription items,
+not at the top level of a Subscription.
+
+### 9.2 Configuration
+
+| Binding or setting | Storage |
+|---|---|
+| `STRIPE_SECRET_KEY` | Worker secret |
+| `STRIPE_WEBHOOK_SECRET` | Worker secret |
+| `STRIPE_PRICE_PAID_MONTHLY` | Non-secret Worker var |
+| `STRIPE_TAX_ENABLED` | Non-secret var enabled only after tax readiness |
+| `BILLING_EVENTS` | Cloudflare Queue producer and consumer |
+| `BASE_URL` | Existing non-secret Worker var |
+
+Use a restricted Stripe key if its permissions support every required Billing
+operation. Do not assume Cloudflare egress has stable IPs for a Stripe key IP
+allowlist.
+
+### 9.3 Create Checkout
+
+`POST /api/billing/checkout` uses `requireAccount`, not `requireUser`, so an
+unverified account can choose the paid path.
+
+The endpoint must:
+
+1. Load or create exactly one Stripe Customer for the internal user.
+2. Use a stable Stripe idempotency key such as `customer:${user.id}`.
+3. Persist the Customer mapping before creating Checkout.
+4. Reject or redirect if a non-terminal subscription already exists.
+5. Select the Price from a server-side allowlist.
+6. Create a hosted subscription Checkout Session.
+7. Return the Stripe URL.
+
+```ts
+const customer = await findOrCreateStripeCustomer(user);
+
+const session = await stripe.checkout.sessions.create(
+  {
+    mode: "subscription",
+    customer: customer.stripeCustomerId,
+    client_reference_id: user.id,
+    line_items: [{ price: env.STRIPE_PRICE_PAID_MONTHLY, quantity: 1 }],
+    subscription_data: {
+      metadata: { userId: user.id, plan: "paid" },
+      trial_period_days: 7,
+      trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+    },
+    automatic_tax: { enabled: env.STRIPE_TAX_ENABLED === "1" },
+    success_url: `${env.BASE_URL}/account?checkout=success`,
+    cancel_url: `${env.BASE_URL}/account?checkout=cancelled`,
+  },
+  { idempotencyKey: checkoutAttempt.id },
+);
+```
+
+The server validates Customer, subscription metadata, and Price. Metadata is a
+correlation aid, not authorization by itself.
+
+Restrict v1 payment methods to those whose activation behavior is supported.
+If delayed methods are enabled, wait for settlement before granting service.
+
+The success redirect is never an entitlement signal. It may poll a local
+billing-status endpoint until webhook processing completes.
+
+### 9.4 Customer Portal
+
+`POST /api/billing/portal` requires an authenticated owner and creates a
+short-lived Portal Session for the stored Stripe Customer.
+
+Configure the Portal to:
+
+- update payment methods;
+- view invoices;
+- cancel at the end of the current period; and
+- reverse a scheduled cancellation when Stripe supports the action.
+
+Do not enable arbitrary product switching until every Price maps to a supported
+plan and transition policy.
+
+### 9.5 Webhook ingress
+
+`POST /api/stripe/webhook` is public HTTPS and exempt from session and CSRF
+middleware. Stripe signature verification is its authentication.
+
+```ts
+const rawBody = await c.req.text();
+const signature = c.req.header("stripe-signature");
+
+const event = await verifyStripeEventAsync(
+  rawBody,
+  signature,
+  c.env.STRIPE_WEBHOOK_SECRET,
+);
+
+await c.env.BILLING_EVENTS.send({
+  eventId: event.id,
+  eventType: event.type,
+  eventCreated: event.created,
+});
+return c.body(null, 204);
+```
+
+Use the Stripe SDK's async verification path when supported by the pinned
+version, or a tested Web Crypto verifier. Verification must use the exact raw
+body and a timestamp tolerance.
+
+Return `2xx` only after durable Queue publication. If verification or Queue
+publication fails, return an error so Stripe retries.
+
+### 9.6 Queue consumer and idempotency
+
+Queues are at-least-once. The consumer must safely process duplicates and must
+not assume event order.
+
+For each event:
+
+1. Insert or claim its event ID in `stripe_billing_events`.
+2. If already processed, acknowledge it.
+3. Retrieve the Event by ID, then fetch canonical objects when state may be stale.
+4. Validate Customer, user, Price, and one-subscription invariants.
+5. Apply billing facts and entitlement projection in one D1 batch.
+6. Create any plan-transition intent idempotently.
+7. Mark the event processed.
+8. Retry transient failures; dead-letter or alert permanent failures.
+
+Do not mark an event processed before all required D1 effects commit.
+
+Use both event ID deduplication and monotonic state. An older event must never
+shorten a later paid-through deadline or reverse a newer subscription state.
+
+### 9.7 Events to subscribe to
+
+| Event | Purpose |
+|---|---|
+| `checkout.session.completed` | Correlate Checkout; do not grant access without valid billing state. |
+| `customer.subscription.created` | Sync canonical subscription and Price. |
+| `customer.subscription.updated` | Sync status, cancellation, Price, and period changes. |
+| `customer.subscription.deleted` | Revoke an unpaid trial immediately; otherwise enforce the stored paid-through deadline. |
+| `customer.subscription.paused` | Record a true paused subscription. |
+| `customer.subscription.resumed` | Resync after a true paused subscription resumes. |
+| `invoice.paid` | Advance `service_until` only after validating a positive collected amount; the zero-value trial invoice does not. |
+| `invoice.payment_failed` | End unpaid trial access or mark a renewal past due; never extend service. |
+| `invoice.payment_action_required` | Direct the customer to resolve authentication. |
+| `invoice.finalization_failed` | Alert and request missing tax/location data when applicable. |
+| `charge.dispute.created` | Alert and apply the approved fraud policy. |
+
+Pause-payment collection is not the same as a subscription status of `paused`.
+Do not model those as one event.
+
+### 9.8 Reconciliation
+
+Extend scheduled reconciliation with bounded billing work, or use a dedicated
+scheduled handler.
+
+It must:
+
+- refresh stale non-terminal Stripe subscriptions;
+- repair events missed during webhook outages;
+- enforce `trial_end`, `service_until`, `grace_until`, and export deadlines;
+- retry pending upgrades when capacity changes;
+- detect multiple active subscriptions for one user;
+- compare local Price IDs with the allowlist; and
+- alert on drift instead of guessing.
+
+Do not call Stripe for every user every five minutes. Use stale timestamps,
+pagination, bounded batches, and backoff.
+
+---
+
+## 10. D1 model and migration outline
+
+The next migration number must be chosen from the repository state at
+implementation time. Do not hard-code `0017` in planning.
+
+Suggested additive tables:
 
 ```sql
--- Stripe billing: Stripe is the source of truth; D1 is the authz cache.
+CREATE TABLE account_entitlements (
+  user_id TEXT PRIMARY KEY REFERENCES users(id),
+  plan TEXT CHECK (plan IN ('paid', 'dedicated')),
+  source TEXT CHECK (source IN ('stripe', 'manual')),
+  state TEXT NOT NULL,
+  trial_until INTEGER,
+  service_until INTEGER,
+  grace_until INTEGER,
+  source_ref TEXT,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE stripe_customers (
-  user_id         TEXT PRIMARY KEY REFERENCES users(id),
+  user_id TEXT PRIMARY KEY REFERENCES users(id),
   stripe_customer_id TEXT NOT NULL UNIQUE,
-  created_at      INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE stripe_subscriptions (
-  id                   TEXT PRIMARY KEY,          -- stripe subscription id
-  user_id              TEXT NOT NULL REFERENCES users(id),
-  stripe_customer_id   TEXT NOT NULL,
-  price_id             TEXT NOT NULL,
-  plan                 TEXT NOT NULL,             -- 'paid' | 'dedicated'
-  status               TEXT NOT NULL,             -- Stripe raw status
-  current_period_end   INTEGER NOT NULL,
+  stripe_subscription_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  stripe_customer_id TEXT NOT NULL,
+  price_id TEXT NOT NULL,
+  plan TEXT NOT NULL CHECK (plan IN ('paid')),
+  stripe_status TEXT NOT NULL,
   cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
-  created_at           INTEGER NOT NULL,
-  updated_at           INTEGER NOT NULL
+  cancel_at INTEGER,
+  trial_start INTEGER,
+  trial_end INTEGER,
+  service_until INTEGER,
+  grace_until INTEGER,
+  ended_at INTEGER,
+  last_paid_invoice_id TEXT,
+  last_event_created INTEGER NOT NULL DEFAULT 0,
+  last_synced_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
-CREATE INDEX idx_subscriptions_user ON stripe_subscriptions(user_id);
+CREATE INDEX idx_stripe_subscriptions_user
+  ON stripe_subscriptions(user_id);
 
--- Idempotency ledger for webhook events (dedupe replays).
+CREATE TABLE stripe_checkout_attempts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  stripe_checkout_session_id TEXT UNIQUE,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE stripe_billing_events (
-  event_id     TEXT PRIMARY KEY,
-  type         TEXT NOT NULL,
-  received_at  INTEGER NOT NULL,
-  processed_at INTEGER NOT NULL
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  object_id TEXT,
+  status TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  received_at INTEGER NOT NULL,
+  processed_at INTEGER,
+  last_error_code TEXT
 );
 
--- Projection columns for Stripe-managed users (expand-first).
-ALTER TABLE users ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'manual';
-ALTER TABLE users ADD COLUMN billing_status TEXT;  -- NULL | 'past_due' | 'grace' | 'export_window'
+CREATE TABLE container_plan_transitions (
+  container_id TEXT PRIMARY KEY REFERENCES containers(id),
+  from_tier TEXT NOT NULL,
+  to_tier TEXT NOT NULL,
+  prior_status TEXT NOT NULL,
+  state TEXT NOT NULL,
+  requested_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_error_code TEXT
+);
 ```
 
-### 5.2 Worker secrets (wrangler secret put)
+Also add the mixed-host columns from §7.1. Add check constraints and indexes in
+the final migration after confirming D1's deployed schema and query plans.
 
-| Secret | Purpose |
-|---|---|
-| `STRIPE_SECRET_KEY` | `sk_test_…` locally / `sk_live_…` in prod; never a var |
-| `STRIPE_WEBHOOK_SECRET` | `whsec_…` from the dashboard endpoint config |
-| `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_DEDICATED_MONTHLY` | price IDs (could be vars; secrets keep them out of git) |
+Subscription history permits multiple terminal rows per user. Application logic
+must enforce at most one current non-terminal subscription and alert if Stripe
+disagrees.
 
-### 5.3 Dependency + runtime
+Do not store card data, payment-method details, invoice PDFs, or unrestricted
+webhook payloads in D1 or Queue messages. Keep only the facts and object IDs
+needed for authorization, support, reconciliation, and audit.
 
-- Add `stripe` npm package to `apps/worker` (pure-fetch HTTP client; works
-  under Workers' `nodejs_compat`). Pin exact version; the SDK's Node-only
-  helpers (e.g. `stripe.webhooks.constructEvent`) need Node `crypto` — under
-  Workers use the **manual verification path** (§6.3) with Web Crypto.
-- `nodejs_compat` is already enabled (wrangler.jsonc) — no wrangler config
-  change for the SDK itself.
-- `wrangler.jsonc` vars: nothing new required; `BASE_URL` already exists for
-  success/cancel URLs.
-
-### 5.4 Developer tooling
-
-- Stripe CLI (`stripe listen --forward-to localhost:8787/api/stripe/webhook`)
-  for local webhook replay and `stripe trigger` fixtures.
-- Test-mode API keys in `.dev.vars` (never committed; `.gitignore` already
-  excludes it).
-- CI: add a `STRIPE_WEBHOOK_SECRET`-derived fixture so webhook signature
-  tests run in Vitest without network (see §9).
-
-### 5.5 Email (needed for receipts & dunning — SPEC roadmap item)
-
-`SPEC.md` lists "Stripe, email, and a documented grace/export policy" as the
-roadmap. Options:
-
-1. **Cloudflare Email Service (Email Routing + Workers binding)** — stays on
-   the platform, no new vendor. Recommended: transactional sends from the
-   Worker (receipts, dunning warnings, export-window notices).
-2. Resend/Postmark via `fetch`.
-
-v1 minimal: Stripe **hosted invoices** already email receipts *when Stripe
-customer email + receipt settings are enabled* — the app can ship without its
-own email and add it in the dunning phase.
+Manual operator entitlements need an explicit source and optional expiry. They
+must not be fabricated as Stripe subscriptions or overwritten by Stripe sync.
 
 ---
 
-## 6. Stripe onboarding — implementation plan (phases)
+## 11. UI and support requirements
 
-### Phase 0 — Refactor & readiness (1–2 weeks, no Stripe dependency)
+### 11.1 Account and dashboard
 
-1. Land R1–R6, B1–B5, migration `0017` (§3–§5).
-2. Freeze `subscription_status` enum semantics; add `billing_mode`/`billing_status` projection.
-3. Add daemon `suspend`/`resume` ops (B4) with tests; deploy daemons fleet-wide first.
-4. Define and document the grace/export policy constants in `packages/contract`:
+Show:
 
-   ```ts
-   export const BILLING_POLICY = {
-     dunningRetries: 3,            // Stripe Smart Retries (default)
-     gracePeriodDays: 7,           // keep service after final failure
-     exportWindowDays: 30,         // suspended, data retrievable
-     destroyAfterDays: 30,         // after export window closes
-   } as const;
-   ```
+- current effective plan;
+- actual container tier and pending desired tier;
+- price and currency from server configuration;
+- next renewal date or “Paid until” date;
+- past-due, grace, and expired notices;
+- Upgrade, Manage billing, and Undo cancellation actions; and
+- upgrade capacity progress without promising an unsafe completion time.
 
-   **Gate:** typecheck + lint + full Vitest suite green; `deploy:dry-run` passes.
+Never show “Paid” based only on a Checkout redirect query parameter.
 
-### Phase 1 — Stripe account & catalog (1–2 days, operator task)
+### 11.2 Required notifications
 
-1. Create Stripe account; enable **Billing**, **Customer Portal**, **Stripe Tax**, **Smart Retries** (dashboard: Settings → Billing → automatic collection / revenue recovery).
-2. Create products/prices in **test mode** first:
-   - `prod_pro` — recurring monthly price (e.g. $12.00); metadata `plan=paid`.
-   - `prod_dedicated` — recurring monthly price (e.g. $49.00); metadata `plan=dedicated`.
-3. Add head-office address + tax registrations for Stripe Tax (digital services; registrations vary by jurisdiction).
-4. Register the webhook endpoint `https://usebench.dev/api/stripe/webhook` with events:
-   `checkout.session.completed`, `customer.subscription.created/updated/deleted/paused/resumed`,
-   `invoice.paid`, `invoice.payment_failed`, `invoice.finalization_failed`, `charge.dispute.created`.
-5. Record the `whsec_…` signing secret; `wrangler secret put STRIPE_WEBHOOK_SECRET`.
+Send transactional notices for:
 
-### Phase 2 — Checkout (self-service upgrade) (~1 week)
+- trial start, end date, and cancellation;
+- payment confirmation;
+- scheduled cancellation and paid-through date;
+- upcoming service expiry;
+- payment failure and required action;
+- grace start and end;
+- billing suspension;
+- export deadline; and
+- impending destruction.
 
-New module `apps/worker/src/billing.ts` (Hono router, mirroring
-`subscriptions.ts` style), mounted in `index.tsx`.
+Stripe-hosted emails can cover invoices and payment recovery at launch.
+Application-specific suspension and export notices still need a delivery path.
 
-**Endpoint: `POST /api/billing/checkout`** (session-authenticated)
+Cloudflare Email Sending is a possible Worker binding, but it is currently beta
+and requires a Workers Paid plan. Confirm availability and onboard the sending
+domain before making it a launch dependency.
 
-1. Look up/create Stripe `Customer` (`customer_creation: "always"`, `email`,
-   `metadata: { userId }`, `client_reference_id: userId`).
-2. Create `Checkout Session`:
-   ```ts
-   stripe.checkout.sessions.create({
-     mode: "subscription",
-     customer: customer.id,
-     client_reference_id: user.id,
-     line_items: [{ price: PRICE_ID, quantity: 1 }],
-     subscription_data: { metadata: { userId: user.id } },
-     automatic_tax: { enabled: true },
-     allow_promotion_codes: true,
-     success_url: `${BASE_URL}/account?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-     cancel_url: `${BASE_URL}/account?checkout=cancelled`,
-   });
-   ```
-3. Store nothing yet — the webhook is the write path. Return `{ url }`; the
-   client redirects (dashboard "Upgrade" button → this endpoint).
+Every critical notice must also appear in the authenticated UI. Email delivery
+alone is not proof that the user was informed.
 
-**Guard rails:** refuse checkout for already-active Stripe subscriptions
-(redirect to portal instead); require `verified_at` (World ID/invite) so
-billing can't attach to unverified accounts; never accept a plan argument from
-the client — the server derives `price_id` from a server-side map.
+### 11.3 Support visibility
 
-**Endpoint: `GET /api/billing/portal`** → create
-`billing_portal.sessions.create({ customer, return_url: BASE_URL + "/account" })`
-and redirect. This gives self-service card updates, plan switch (if
-configured), and cancellation — zero custom UI for payment methods.
+Operators need a view containing:
 
-### Phase 3 — Webhooks & entitlement sync (~1 week, the critical path)
+- internal user ID and non-secret Stripe object IDs;
+- effective plan and entitlement source;
+- Stripe status, Price, service deadline, and cancel deadline;
+- latest billing event and sync time;
+- container actual and desired tier;
+- transition state and safe retry action; and
+- alerts for duplicate subscriptions or unsupported Prices.
 
-**Endpoint: `POST /api/stripe/webhook`** (no session auth, public)
-
-1. **Read the raw body first** (`await c.req.text()`). Verify the
-   `stripe-signature` header against the **exact raw bytes** with the
-   `whsec_` secret — never `JSON.stringify`/re-serialize before verifying
-   (Stripe signs the raw payload; this is the #1 Workers integration bug).
-   Workers have no Node `crypto` in the Stripe SDK path, so implement HMAC
-   verification with Web Crypto:
-   - parse `t=<ts>,v1=<sig>` from the header;
-   - reject if `|now − t| > 300s` (tolerance per Stripe docs);
-   - `HMAC-SHA256(whsec, `${t}.${rawBody}`)` via `crypto.subtle.importKey` +
-     `crypto.subtle.sign`; constant-time compare of hex digests.
-2. Return `200` fast; enqueue/process the event. Because D1 writes are
-   cheap and Workers have no queue binding today, process inline but **make
-   every handler idempotent** via the `stripe_billing_events` ledger
-   (INSERT OR IGNORE by `event.id`; skip if already processed).
-3. Event handling table (from Stripe's "Using webhooks with subscriptions"
-   guide):
-
-   | Event | Handler action |
-   |---|---|
-   | `checkout.session.completed` | Insert/update `stripe_customers`; create `stripe_subscriptions`; project entitlement; set `billing_mode='stripe'`; if account has no container, leave onboarding to resume; if container exists at `free`, **enqueue upgrade** (`upgrade_pending` → resize/re-provision per plan) |
-   | `customer.subscription.created` | Same as above (idempotent; covers async creation) |
-   | `customer.subscription.updated` | Sync status/period/price; **plan change** → enqueue resize/rehome to new `placement_class`; `cancel_at_period_end` → leave entitlement until period end |
-   | `customer.subscription.deleted` | End of service: begin **grace → export window** (§8.4) |
-   | `customer.subscription.paused` / `.resumed` | Mirror status; pause entitlement only after grace policy |
-   | `invoice.paid` | Clear `billing_status`; confirm entitlement stays active |
-   | `invoice.payment_failed` | Set `billing_status='past_due'`; email warning (Phase 5); Stripe Smart Retries continues automatically |
-   | `invoice.finalization_failed` | Log + alert operator (usually Stripe Tax location issue: `automatic_tax[status]=requires_location_inputs` → ask customer for location) |
-   | `charge.dispute.created` | Alert operator; suspend entitlement pending resolution (fraud policy) |
-
-4. **Cron reconciliation** (extend the existing `*/5 * * * *` handler in
-   `reconciler.ts`): for `billing_mode='stripe'` users, refresh
-   `customer.subscriptions.list({ customer })` when `last_synced_at` is stale
-   (> 15 min) or on webhook-verify failures; apply the same projection. This
-   makes webhook delivery failure self-healing.
-
-### Phase 4 — Lifecycle: dunning, downgrade, export (1 week)
-
-Implementation of the policy from §8.4:
-
-1. `invoice.payment_failed` → `billing_status='past_due'`; UI banner + email;
-   Stripe Smart Retries runs (typically 4 attempts over ~2 weeks).
-2. After final failure / `subscription.deleted` → **grace period**
-   (`BILLING_POLICY.gracePeriodDays`, entitlement retained, `billing_status='grace'`).
-3. Grace expiry → **suspend container** (new daemon `suspend` op, B4);
-   status `suspended` (finally driven by billing!); `billing_status='export_window'`.
-4. Export window: dashboard shows read-only data-access instructions (SSH
-   key access to `suspended` instance is not possible — provide documented
-   export path: operator-assisted snapshot or resume-then-export; simplest v1:
-   allow the user to re-subscribe → auto-resume, or request a 48h export
-   resume via support).
-5. `destroyAfterDays` → `destroy` job; container + host accounting released.
-6. **Re-subscribe path**: new Checkout Session for an existing customer
-   resumes/creates a subscription; webhook `checkout.session.completed` →
-   `resume` container if it still exists.
-
-### Phase 5 — UI, tax, email, observability (1 week)
-
-1. **Landing/account UI** (`apps/worker/src/pages/views.tsx`, `account.ts`):
-   - Account page "Plan" card: current plan, price, renews-on date,
-     `past_due` warning, buttons: Upgrade (checkout), Manage (portal).
-   - Dashboard banner when `billing_status` is `past_due`/`grace`/`export_window`.
-2. **Stripe Tax**: verify `automatic_tax` on Checkout; handle
-   `requires_location_inputs` (`invoice.finalization_failed` handler asks the
-   customer for a billing address via portal).
-3. **Email** (Cloudflare Email Service): receipt fallback, dunning warnings,
-   export-window expiry notice, dispute notice.
-4. **Observability**: log webhook event counts, sync lag, entitlement
-   projection failures; alert on `invoice.finalization_failed` and
-   `charge.dispute.created`; add billing section to the existing
-   fleet-admin dashboard for operator visibility of Stripe-managed users.
-5. **Fleet capacity planning**: track paid-host occupancy; since placement is
-   class-segregated, growth of paid users consumes regular-host capacity —
-   add a capacity forecast note to `infra/` ops docs.
-
-### Phase 6 — Launch checklist
-
-- [ ] Test-mode end-to-end: signup → upgrade → provision on regular host → invoice.paid → portal card update → cancel → grace → suspend → destroy.
-- [ ] `stripe listen` replay of every subscribed event against local Worker; idempotency verified by double-replay.
-- [ ] Stripe CLI `stripe trigger customer.subscription.updated` etc. against Vitest + local.
-- [ ] Migrate existing operator-entitled paid/dedicated users: set `billing_mode='manual'` (grandfathered, no forced re-buy) — decision documented in §10.2.
-- [ ] Switch secrets to live keys; register live webhook endpoint; run with `billing_mode` default `manual` so **nothing changes for existing users**.
-- [ ] Flip onboarding/dashboard to expose Upgrade only after smoke tests pass.
-- [ ] Update `SPEC.md` "Explicitly not in the current release" and README feature list; note the grace/export policy publicly (SPEC requires "a documented grace/export policy").
+Logs must not contain customer email, addresses, card data, webhook bodies, or
+secret values.
 
 ---
 
-## 7. Security & compliance requirements
+## 12. Security, tax, and compliance
 
-1. **PCI**: no card data in code, D1, or logs. Stripe.js/Checkout is fully
-   hosted; we only ever handle `customer_id`/`subscription_id`.
-2. **Webhook authn**: signature verification is mandatory and is the *only*
-   authn on the endpoint. Replay protection = timestamp tolerance + event
-   ledger. Do not accept unverified events from any other source.
-3. **Secrets**: `sk_live`/`whsec` only as Worker secrets; test keys only in
-   `.dev.vars`; never in `wrangler.jsonc` vars (the current file documents
-   every var in plaintext — price IDs may live there, keys must not).
-4. **Idempotency**: every webhook handler is INSERT-OR-IGNORE by event ID;
-   every Stripe API mutation from the Worker uses Stripe idempotency keys
-   (`Idempotency-Key: op:userId:nonce`) because Workers can retry.
-5. **Least privilege**: Stripe secret key should be restricted via Stripe
-   API-key restrictions (IP allowlist to Cloudflare egress, restricted keys
-   scoped to billing resources) where the plan allows.
-6. **PII/GDPR**: account deletion already exists; extend it to delete
-   `stripe_customers`/`stripe_subscriptions` rows and (asynchronously)
-   `customer.delete` + subscription cancel in Stripe.
-7. **Abuse**: free tier is human-verified (World ID/invite) and one
-   container/account; paid signup adds a billing identity — keep the World ID
-   gate for all signups (SPEC §4.1) to avoid paid-churn abuse.
+1. Use Stripe-hosted Checkout and Portal. Card data must never enter the Worker,
+   D1, logs, or support tools.
+2. Bind Checkout to the authenticated internal user and stored Customer.
+3. Verify webhook signatures over the exact raw body.
+4. Keep secret keys in Worker secrets and rotate webhook secrets safely.
+5. Use idempotency keys for Stripe mutations and event IDs for webhook dedupe.
+6. Treat all client plan, Price, Customer, and subscription IDs as untrusted.
+7. Rate-limit Checkout creation and prevent concurrent attempts.
+8. Enable Stripe Tax only after registrations and product tax codes are set.
+9. Define retention and deletion rules with legal review before deleting Stripe
+   Customers or billing records.
+10. Account deletion must handle active subscriptions and statutory billing
+    retention; it cannot simply erase all billing evidence.
+
+Paid bypass and free trials raise abuse risks because a card is not proof of
+unique humanity. Mitigate with payment risk controls, account limits, velocity
+checks, and no free fallback unless permanent free eligibility was completed.
 
 ---
 
-## 8. Key product decisions to make (with recommendations)
+## 13. Delivery sequence
 
-1. **Price points** — recommend $12 Pro / $49 Dedicated monthly; validate
-   against host cost per slot before locking.
-2. **Free-tier future** — current free tier (1 vCPU/1.5 GiB/5+5 GiB) is
-   generous vs paid; consider tightening free or adding a timeout so paid
-   conversion has headroom. **Not required for v1** (SPEC freezes free tier).
-3. **Trials** — recommend a 7-day paid trial (Stripe `trial_period_days`)
-   after checkout v1 ships; `customer.subscription.updated` handles
-   `trialing→active`.
-4. **Plan switching** — v1: upgrade Pro↔Dedicated via portal/checkout; the
-   placement classes already make this a rehome (`fleet-admin.ts` rehome
-   path is the template). Downgrades take effect at period end (Stripe
-   proration off by default, on if desired).
-5. **Refunds/disputes** — standard Stripe dispute flow; suspend entitlement
-   on `charge.dispute.created` pending resolution.
-6. **Grandfathering** — existing operator-entitled paid/dedicated users keep
-   service with `billing_mode='manual'`; migration script sets this
-   explicitly so Stripe never sees them (no double-charging).
+### Phase A — Mixed-host foundation
 
----
+1. Add tenancy-mode and placement-mode columns.
+2. Refactor capacity accounting for mixed resource requests.
+3. Update daemon validation and stats capability.
+4. Deploy daemon support fleet-wide.
+5. Dual-read and dual-write from the Worker.
+6. Prove mixed free/paid placement, waitlist fairness, and rollback.
 
-## 9. Testing strategy
+### Phase B — Entitlement foundation
 
-Follow repo conventions (Vitest, in-memory D1, `stubFetch` — no real
-network/Stripe):
+1. Add billing and plan-transition tables.
+2. Extract pure entitlement projection.
+3. Add paid-bypass authorization middleware.
+4. Separate permanent free verification from paid eligibility.
+5. Add time-based expiry and manual entitlement source.
 
-| Test area | Approach |
-|---|---|
-| Checkout endpoint | `stubFetch` a fake Stripe API (`api.stripe.com` routes): assert session creation payload, customer metadata, auth requirement, unverified-user rejection |
-| Webhook signature | Fixture: known `whsec_`, `t=`, `v1=` generated locally with the same HMAC (test-only helper); assert accept/400 on tampered body, stale timestamp (>300s), wrong key |
-| Event handlers | Replay captured event JSON per event type; assert D1 rows + `users.subscription_status` projection; **double-replay asserts no-op** (idempotency ledger) |
-| Entitlement projection | Table-driven: every Stripe status × plan → expected `subscription_status`/`billing_status` (B1 table) |
-| Lifecycle | `invoice.payment_failed` → grace → suspend op enqueued (daemon op asserted via `jobs`), export window, destroy |
-| Reconciler sweep | Missed-webhook simulation: stale `last_synced_at` → refresh from stub API → projection applied |
-| Daemon ops | `suspend`/`resume` handlers with injected Incus command execution (existing daemon test pattern) |
-| Migration | `migrations.test.ts` pattern: `0017` applies cleanly on a fresh + populated DB |
-| CI | Same pipeline (build client → typecheck → lint → test); add a billing test file `apps/worker/test/billing.test.ts` |
+### Phase C — Stripe sandbox
 
----
+1. Create the Paid Product and Price in a Stripe sandbox.
+2. Pin the API and webhook versions.
+3. Add Checkout, Portal, webhook, Queue, and consumer paths.
+4. Configure the fixed seven-day trial and period-end Portal cancellation.
+5. Test trial cancellation, first-charge failure, tax, and supported payment methods.
 
-## 10. Risks & mitigations
+### Phase D — Existing-container upgrades
 
-| Risk | Mitigation |
-|---|---|
-| Webhook mis-verification (raw body re-serialization) | Read `c.req.text()` once; verify HMAC over exact bytes; integration test with tampered payloads |
-| Missed/delayed webhooks → wrong entitlement | Cron sweep every 5 min; `last_synced_at` staleness check; projection is pure so replay is safe |
-| Double-charge grandfathered users | `billing_mode='manual'` default; explicit migration; fleet-admin untouched |
-| Daemon op mismatch during rollout | Ship daemon `suspend`/`resume` first; `JobRequestSchema` strict rejection makes older daemons fail loudly, not silently |
-| Paid-host capacity exhaustion | Class-segregated placement means paid growth only fills regular pool; monitor occupancy in fleet-admin; price per slot covers acquisition (runbook note) |
-| Tax finalization failures | Stripe Tax from day one; `invoice.finalization_failed` handler prompts for location; operator alert |
-| Chargebacks/fraud | World ID gate retained; dispute webhook → entitlement hold + alert |
-| Scope creep (metered billing, annual plans) | Explicitly deferred; document as follow-ups (§11) |
+1. Add delta reservation and transition state.
+2. Make resize preserve prior running or stopped state.
+3. Retry in-place upgrades without destructive rehome.
+4. Add downgrade and grandfathered-storage behavior.
+5. Add operator recovery tooling.
+
+### Phase E — Lifecycle, support, and launch
+
+1. Add billing UI and notifications.
+2. Add support visibility and alerts.
+3. Exercise failed renewal, cancellation, expiry, and resubscription.
+4. Update `SPEC.md`, `README.md`, and `infra/RUNBOOK.md`.
+5. Launch behind an operator-controlled feature flag and capacity gate.
 
 ---
 
-## 11. Follow-ups (explicitly out of v1)
+## 14. Test and acceptance strategy
 
-- Usage-based pricing via **Stripe Billing Meters** (the daemon already
-  reports `uptimeSec` per container in `StatsResponseSchema` — metering data
-  exists; only the billing model is missing).
-- Annual/prepaid plans, coupons in the portal, referral credits.
-- Automatic invoice email branding (Stripe hosted invoices suffice first).
-- Multi-environment (multi-container) paid plans — would break the
-  one-container-per-account invariant and the `UNIQUE user_id` container
-  constraint; needs a contract change.
+### 14.1 Entitlement and eligibility
+
+- Every Stripe status and deadline combination is table-tested.
+- Paid users can bypass World ID/invite only while paid access is valid.
+- Trial access ends at `trial_end`, on cancellation, or on first-charge failure.
+- Paid-bypass users do not become free-eligible after expiry.
+- Verified users fall back to Free after paid expiry.
+- Manual entitlements are not overwritten by Stripe reconciliation.
+
+### 14.2 Checkout and Portal
+
+- Checkout requires authentication but not free verification.
+- Customer creation is idempotent under concurrent requests.
+- An existing active subscription redirects to Portal.
+- Client-supplied Price and Customer IDs are ignored or rejected.
+- Checkout success without a webhook grants no access.
+- Checkout creates a seven-day trial and collects a payment method for the first post-trial charge.
+- Portal cancellation is configured for period end.
+
+### 14.3 Webhooks
+
+- Valid raw-body signatures pass; tampered, stale, or wrong-secret payloads fail.
+- Queue failure returns non-2xx so Stripe retries.
+- Duplicate events are no-ops after the first successful commit.
+- Out-of-order events cannot regress service deadlines or state.
+- Unsupported Prices and duplicate subscriptions alert and fail closed.
+- Dead-letter replay is safe.
+
+### 14.4 Paid-through service
+
+- Scheduling cancellation changes the label, not resources or controls.
+- Service remains Paid immediately before `service_until`.
+- Expiry occurs at or after the deadline without requiring a deletion webhook.
+- Undoing cancellation before expiry retains uninterrupted service.
+- Payment failure never extends `service_until`.
+- A zero-value trial invoice never establishes `service_until`.
+
+### 14.5 Mixed placement
+
+- One shared host can admit free and paid containers concurrently.
+- CPU, RAM, disk, tenant, health, and port checks are transactional.
+- Selection remains deterministic under fragmented capacity.
+- Bounded backfill cannot starve the oldest request.
+- Dedicated account isolation remains unchanged.
+- Old and new daemon versions fail safely during rollout.
+
+### 14.6 Existing container upgrade
+
+- Free-to-paid resize reserves only the delta.
+- Running containers return to running; stopped containers remain stopped.
+- No-capacity upgrades preserve the usable free container.
+- Duplicate upgrade events create one transition and one active resize.
+- Partial daemon failure converges by idempotent retry.
+- No automated paid upgrade invokes destructive rehome.
+- Cancellation during a pending upgrade follows a deterministic policy.
+
+### 14.7 Release gates
+
+Run focused Worker, daemon, and contract tests, then:
+
+```text
+npm run build:client -w apps/worker
+npm run typecheck
+npm run lint
+npm test
+npm run deploy:dry-run
+```
+
+Sandbox acceptance must cover signup, paid bypass, verified-user upgrade,
+in-place resize, trial activation, zero-value opening invoice, trial
+cancellation, first-charge failure, renewal failure, paid-period cancellation,
+undo, expiry, free fallback, suspension, and resubscription.
 
 ---
 
-## 12. Source references
+## 15. Operational metrics and alerts
 
-- Stripe — Receive events in your webhook endpoint: raw-body verification,
-  `whsec_` signing secret, `stripe listen` local forwarding:
-  https://docs.stripe.com/webhooks
-- Stripe — Using webhooks with subscriptions (event table, payment-failure
-  handling, Smart Retries, `invoice.finalization_failed` tax behavior):
-  https://docs.stripe.com/billing/subscriptions/webhooks
-- Stripe — Checkout Sessions API (`mode=subscription`, `automatic_tax`,
-  `client_reference_id`): https://docs.stripe.com/api/checkout/sessions
-- Stripe — Customer Portal integration:
-  https://docs.stripe.com/customer-management/integrate-customer-portal
-- Stripe — Usage-based billing / Billing Meters (future metered model):
-  https://docs.stripe.com/billing/subscriptions/usage-based
-- Stripe — Tax setup (head office, registrations, automatic tax):
-  https://docs.stripe.com/tax/set-up
-- Cloudflare — Workers runtime: `nodejs_compat` is not full Node; use Web
-  Crypto (`crypto.subtle`) for HMAC in Workers:
-  https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
-- Cloudflare — Workers best practices (floating promises, fetch-based
-  external calls): https://developers.cloudflare.com/workers/best-practices/workers-best-practices/
-- Market pricing context — GitHub Codespaces (usage-based) vs flat monthly
-  models: https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces
+Track:
+
+- Checkout attempts, completions, and abandoned attempts;
+- trialing, active, scheduled-cancel, past-due, grace, and expired subscriptions;
+- webhook verification failures, Queue lag, retries, and dead letters;
+- billing reconciliation age and drift repairs;
+- pending upgrade age and reason;
+- free and paid reservations per shared host;
+- capacity fragmentation and paid headroom; and
+- suspension and destruction deadlines.
+
+Alert on unsupported Prices, multiple live subscriptions per user, negative or
+inconsistent host accounting, stale billing sync, dead letters, and upgrades
+blocked beyond the support target.
+
+---
+
+## 16. Source references
+
+- [Stripe Checkout subscriptions](https://docs.stripe.com/payments/checkout/build-subscriptions)
+- [Stripe subscription webhooks and statuses](https://docs.stripe.com/billing/subscriptions/webhooks)
+- [Stripe cancellation and period-end service](https://docs.stripe.com/billing/subscriptions/cancel)
+- [Stripe webhook security and delivery](https://docs.stripe.com/webhooks)
+- [Stripe item-level billing periods](https://docs.stripe.com/changelog/basil/2025-03-31/deprecate-subscription-current-period-start-and-end)
+- [Stripe Customer Portal](https://docs.stripe.com/customer-management/integrate-customer-portal)
+- [Cloudflare Queues](https://developers.cloudflare.com/queues/)
+- [Cloudflare Email Service](https://developers.cloudflare.com/email-service/)
+- [Cloudflare Web Crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/)

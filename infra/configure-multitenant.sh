@@ -17,9 +17,11 @@ fi
 NETWORK_NAME="${NETWORK_NAME:-incusbr0}"
 ZFS_LOOP_GB="${ZFS_LOOP_GB:-0}"
 ALLOW_DIR_STORAGE="${ALLOW_DIR_STORAGE:-0}"
-PROJECT_QUERY=$(jq -rn --arg project "$PROJECT_NAME" '$project | @uri')
 if [[ -z "${HOST_TYPE:-}" && -f "$DAEMON_CONFIG" ]]; then
   HOST_TYPE=$(jq -er '.hostType // "budget"' "$DAEMON_CONFIG")
+fi
+if [[ -z "${TENANCY_MODE:-}" && -f "$DAEMON_CONFIG" ]]; then
+  TENANCY_MODE=$(jq -er '.tenancyMode // (if (.hostType // "budget") == "dedicated" then "dedicated" else "shared" end)' "$DAEMON_CONFIG")
 fi
 : "${HOST_TYPE:?HOST_TYPE is required when daemon.json is unavailable}"
 # shellcheck source=infra/host-policy.sh
@@ -92,8 +94,9 @@ if ! incus project show "$PROJECT_NAME" >/dev/null 2>&1; then
     --config features.storage.volumes=true
 fi
 
-# Refuse unknown, mixed-class, or over-capacity contents before changing
-# aggregate or per-instance limits.
+# Refuse unknown, tenancy-incompatible, or over-capacity contents before
+# changing aggregate or per-instance limits. Shared hosts intentionally accept
+# both resource tiers after the mixed-tier daemon rollout.
 EXISTING_TENANTS=0
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
@@ -106,8 +109,15 @@ while IFS= read -r name; do
   fi
   CURRENT_TIER=$(incus --project "$PROJECT_NAME" config get \
     "$name" user.workbench.tier 2>/dev/null || true)
-  if [[ -n "$CURRENT_TIER" && "$CURRENT_TIER" != "$TENANT_TIER" ]]; then
-    echo "!! $name belongs to tier $CURRENT_TIER, not $TENANT_TIER; host classes cannot be mixed"
+  if [[ -z "$CURRENT_TIER" ]]; then
+    CURRENT_TIER=$TENANT_TIER
+  fi
+  if [[ "$CURRENT_TIER" != "free" && "$CURRENT_TIER" != "paid" ]]; then
+    echo "!! $name has unsupported tier metadata: $CURRENT_TIER"
+    exit 1
+  fi
+  if [[ "$TENANCY_MODE" == "dedicated" && "$CURRENT_TIER" != "paid" ]]; then
+    echo "!! dedicated host contains a non-paid tenant: $name"
     exit 1
   fi
 done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
@@ -166,20 +176,43 @@ incus --project "$PROJECT_NAME" profile device set default eth0 security.ipv6_fi
 incus --project "$PROJECT_NAME" profile device set default eth0 security.port_isolation=true
 incus --project "$PROJECT_NAME" profile device set default eth0 limits.max="$TENANT_NETWORK_LIMIT"
 
-# Reconcile existing instances while the host is drained. Host classes never
-# mix service tiers, so the class policy is the source of truth for every
-# instance in this project.
+# Reconcile existing instances while the host is drained. Tier metadata is the
+# source of truth on shared hosts. Disk quotas are intentionally left alone:
+# plan transitions own growth, and Paid-to-Free storage is grandfathered.
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
-  incus --project "$PROJECT_NAME" config set "$name" limits.cpu="$TENANT_CPU"
-  incus --project "$PROJECT_NAME" config set "$name" limits.cpu.allowance="$(( TENANT_CPU * 100 ))%"
-  # Add swap before a RAM downgrade; raise RAM before removing swap.
-  if (( TENANT_SWAP_MB > 0 )); then
-    incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap="${TENANT_SWAP_MB}MiB"
+  INSTANCE_TIER=$(incus --project "$PROJECT_NAME" config get \
+    "$name" user.workbench.tier 2>/dev/null || true)
+  [[ -n "$INSTANCE_TIER" ]] || INSTANCE_TIER=$TENANT_TIER
+  case "$INSTANCE_TIER" in
+    free)
+      INSTANCE_CPU=1
+      INSTANCE_RAM_MB=1536
+      INSTANCE_SWAP_MB=1024
+      ;;
+    paid)
+      INSTANCE_CPU=3
+      INSTANCE_RAM_MB=4096
+      INSTANCE_SWAP_MB=0
+      ;;
+    *)
+      echo "!! $name has unsupported tier metadata: $INSTANCE_TIER"
+      exit 1
+      ;;
+  esac
+  if [[ "$TENANCY_MODE" == "dedicated" && "$INSTANCE_TIER" != "paid" ]]; then
+    echo "!! dedicated host contains a non-paid tenant: $name"
+    exit 1
   fi
-  incus --project "$PROJECT_NAME" config set "$name" limits.memory="${TENANT_RAM_MB}MiB"
+  incus --project "$PROJECT_NAME" config set "$name" limits.cpu="$INSTANCE_CPU"
+  incus --project "$PROJECT_NAME" config set "$name" limits.cpu.allowance="$(( INSTANCE_CPU * 100 ))%"
+  # Add swap before a RAM downgrade; raise RAM before removing swap.
+  if (( INSTANCE_SWAP_MB > 0 )); then
+    incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap="${INSTANCE_SWAP_MB}MiB"
+  fi
+  incus --project "$PROJECT_NAME" config set "$name" limits.memory="${INSTANCE_RAM_MB}MiB"
   incus --project "$PROJECT_NAME" config set "$name" limits.memory.enforce=hard
-  if (( TENANT_SWAP_MB == 0 )); then
+  if (( INSTANCE_SWAP_MB == 0 )); then
     incus --project "$PROJECT_NAME" config set "$name" limits.memory.swap=false
   fi
   incus --project "$PROJECT_NAME" config set "$name" limits.processes="$TENANT_PROCESS_LIMIT"
@@ -188,22 +221,14 @@ while IFS= read -r name; do
   incus --project "$PROJECT_NAME" config set "$name" security.privileged=false
   incus --project "$PROJECT_NAME" config set "$name" security.idmap.isolated=true
   incus --project "$PROJECT_NAME" config set "$name" security.nesting=false
-  incus --project "$PROJECT_NAME" config set "$name" user.workbench.tier="$TENANT_TIER"
+  incus --project "$PROJECT_NAME" config set "$name" user.workbench.tier="$INSTANCE_TIER"
 
-  if incus query "/1.0/instances/${name}?project=${PROJECT_QUERY}" | \
-    jq -e '(.metadata.devices.root // .devices.root) != null' >/dev/null; then
-    incus --project "$PROJECT_NAME" config device set "$name" root size="${TENANT_DISK_GB}GiB"
-  else
-    incus --project "$PROJECT_NAME" config device override "$name" root size="${TENANT_DISK_GB}GiB"
-  fi
   HOME_POOL=$(incus --project "$PROJECT_NAME" config device get "$name" home pool 2>/dev/null || true)
   HOME_SOURCE=$(incus --project "$PROJECT_NAME" config device get "$name" home source 2>/dev/null || true)
   if [[ "$HOME_POOL" != "$POOL_NAME" || -z "$HOME_SOURCE" ]]; then
     echo "!! $name has no managed home volume in pool $POOL_NAME"
     exit 1
   fi
-  incus --project "$PROJECT_NAME" storage volume set \
-    "$POOL_NAME" "$HOME_SOURCE" size="${TENANT_DISK_GB}GiB"
 done < <(incus --project "$PROJECT_NAME" list --format csv -c n)
 
 # Prevent unprivileged tenants from enumerating host scheduler/cgroup names or
@@ -216,4 +241,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: type=$HOST_TYPE tier=$TENANT_TIER project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$CPU_LIMIT ram=${RAM_LIMIT_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"
+echo "Incus tenant policy: type=$HOST_TYPE tenancy=$TENANCY_MODE project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$CPU_LIMIT ram=${RAM_LIMIT_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"

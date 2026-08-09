@@ -10,6 +10,11 @@ export interface ContainerView {
   cpu: number;
   ramMb: number;
   diskGb: number;
+  planTransition: {
+    desiredTier: string;
+    state: string;
+    requestedAt: number;
+  } | null;
   sshCommand: string | null;
   hostKeyFingerprints: string[];
   job: { id: string; op: JobOp; status: JobStatus; error: string | null } | null;
@@ -26,6 +31,39 @@ export interface SshKey {
 export interface DashboardSnapshot {
   container: ContainerView | null;
   keys: SshKey[];
+  billing: {
+    configured: boolean;
+    paidPlan: {
+      price: string;
+      currency: string;
+      interval: "month";
+      trialDays: number;
+      display: string;
+    } | null;
+    entitlement: {
+      eligible: boolean;
+      plan: string | null;
+      source: string | null;
+      state: string;
+      accessUntil: number | null;
+    };
+    billing: {
+      source: string;
+      state: string;
+      trialUntil: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+    subscription: {
+      status: string;
+      cancelAtPeriodEnd: boolean;
+      cancelAt: number | null;
+      trialStart: number | null;
+      trialEnd: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+  };
 }
 
 export type ContainerAction = JobOp | "retry";

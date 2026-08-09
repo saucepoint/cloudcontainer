@@ -215,7 +215,11 @@ describe("enqueueJob", () => {
   it("rejects spec-bearing placement drift before dispatch but always permits destroy", async () => {
     const { env } = makeEnv();
     await seedUser(env);
-    const host = await seedHost(env, { host_type: "regular" });
+    const host = await seedHost(env, {
+      host_type: "dedicated",
+      tenancy_mode: "dedicated",
+      dedicated_user_id: "user-1",
+    });
     const container = await seedContainer(env, {
       tier: "free",
       placement_class: "budget",
@@ -675,13 +679,13 @@ describe("pickHost (scheduler §10)", () => {
     expect(await pickHost(missingHardware.env, request())).toBeNull();
   });
 
-  it("keeps free and paid placement pools isolated", async () => {
+  it("admits free and paid requests to the same mixed shared pool", async () => {
     const { env } = makeEnv();
     await seedHost(env, { id: "budget", host_type: "budget" });
     await seedHost(env, { id: "regular", host_type: "regular" });
 
     expect((await pickHost(env, request({ hostType: "budget" })))?.id).toBe("budget");
-    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("regular");
+    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("budget");
   });
 
   it("scores heterogeneous capacity independently even within the same host class", async () => {
@@ -714,7 +718,7 @@ describe("pickHost (scheduler §10)", () => {
     const { env } = makeEnv();
     await seedHost(env, {
       host_type: "regular",
-      vcpu_capacity: 8,
+      vcpu_capacity: 9,
       ram_total_mb: 16384,
       ram_reserve_mb: 3072,
       max_tenants: 2,
@@ -778,7 +782,7 @@ describe("startProvision", () => {
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
   });
 
-  it("maps paid and dedicated subscriptions to their isolated host classes", async () => {
+  it("maps paid subscriptions to shared hosts and dedicated subscriptions to assigned hosts", async () => {
     const regularEnv = makeEnv();
     const paidUser = await seedUser(regularEnv.env, "paid-user", "paid");
     await seedHost(regularEnv.env, {
@@ -795,7 +799,7 @@ describe("startProvision", () => {
 
     const paid = await startProvision(regularEnv.env, paidUser, { agents: ["claude"] });
     expect(paid).toMatchObject({
-      host_id: "regular-host",
+      host_id: "budget-host",
       tier: "paid",
       placement_class: "regular",
       cpu: 2,

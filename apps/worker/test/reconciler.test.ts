@@ -339,7 +339,7 @@ describe("waitlist admission", () => {
     expect(daemon.submitted).toHaveLength(1);
   });
 
-  it("does not let a full budget pool block the independent paid FIFO", async () => {
+  it("backfills a later paid request when the oldest shared request cannot fit", async () => {
     const { env } = makeEnv();
     const freeUser = await seedUser(env, "free-user", "free");
     const paidUser = await seedUser(env, "paid-user", "paid");
@@ -403,7 +403,7 @@ describe("waitlist admission", () => {
     expect(daemon.submitted).toMatchObject([{ containerId: "paid-container", op: "provision" }]);
   });
 
-  it("checks paid capacity even when more than one batch of free users is older", async () => {
+  it("does not bypass the bounded shared FIFO scan for a much later paid request", async () => {
     const { env } = makeEnv();
     for (let index = 0; index < 21; index += 1) {
       const userId = `free-${index}`;
@@ -462,9 +462,12 @@ describe("waitlist admission", () => {
     await reconcile(env, () => 10_000);
 
     expect(await env.DB.prepare(
+      "SELECT host_id, status FROM containers WHERE id = 'free-container-0'",
+    ).first()).toEqual({ host_id: null, status: "waitlisted" });
+    expect(await env.DB.prepare(
       "SELECT host_id, status FROM containers WHERE id = 'paid-container'",
-    ).first()).toEqual({ host_id: "regular-host", status: "provisioning" });
-    expect(daemon.submitted).toMatchObject([{ containerId: "paid-container", op: "provision" }]);
+    ).first()).toEqual({ host_id: null, status: "waitlisted" });
+    expect(daemon.submitted).toEqual([]);
   });
 
   it("marks an admitted container as error when its provision job cannot be queued", async () => {
