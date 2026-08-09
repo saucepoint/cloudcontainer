@@ -30,9 +30,12 @@ PASS
 - `npm test` — pass (491 tests at the full-suite checkpoint)
 - Focused post-review tests — pass (19 tests)
 - staging D1 migrations — current through `0018_setup_drafts.sql`
-- staging Worker version — deployed; public-DNS-resolved HTTPS request returns 200
+- staging Worker — deployed; public-DNS-resolved HTTPS request returns 200
+- staging fleet — one active budget daemon with a one-tenant cap; signed probe and 52-control host audit pass
+- production fleet — active after rollout; 38-tenant project cap plus staging's one-tenant cap is below the physical 49-slot ceiling
+- host isolation — both daemon services and listeners are active on 8443/9443, with distinct production/staging Incus projects
 
 ## Red flags / skipped items
 
 - Dual independent reviewer agents were unavailable in this harness, so no external-review pass is claimed.
-- Real shared-host daemon installation remains gated on a clean committed release, as required by `hostctl`; no dirty checkout was copied to production hardware.
+- The first production rollout exposed empty SSH positional-argument loss; the first two staging bootstrap attempts exposed Incus stdin consumption and an unscoped audit config. Each host remained draining or unregistered, a focused regression was added, and the final production/staging probes and audits passed.
