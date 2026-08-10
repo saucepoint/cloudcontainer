@@ -441,6 +441,10 @@ describe("subscription sign-in wiring", () => {
     expect(dashboardClient).not.toContain("Set up your workbench");
     expect(dashboardClient).not.toContain("Set up workbench →");
     expect(dashboardClient).toContain("Machine");
+    expect(dashboardClient).toContain("Model Provider");
+    expect(dashboardClient).toContain('providers.add("ChatGPT")');
+    expect(dashboardClient).toContain('providers.add("Claude")');
+    expect(dashboardClient).toContain("providers.add(label)");
     expect(dashboardClient).toContain("1 vCPU · 1.5 GB RAM");
     expect(dashboardClient).toContain("2 vCPU · 4.0 GB RAM");
     expect(dashboardClient).toContain('type="radio"');

@@ -136,10 +136,40 @@ const MACHINE_SPECS: Record<Tier, string> = {
   paid: "2 vCPU · 4.0 GB RAM",
 };
 
+const CHATGPT_SUBSCRIPTION_PROVIDERS = new Set([
+  "codex_subscription_token",
+  "pi_codex_subscription_token",
+  "opencode_codex_subscription_token",
+]);
+const CLAUDE_SUBSCRIPTION_PROVIDERS = new Set([
+  "claude_subscription_token",
+  "pi_claude_subscription_token",
+  "opencode_claude_subscription_token",
+]);
+
+function configuredModelProviders(credentials: DashboardSnapshot["credentials"]): string[] {
+  const providers = new Set<string>();
+  const configured = Object.keys(credentials.llm).filter((provider) => credentials.llm[provider]);
+  if (configured.some((provider) => CHATGPT_SUBSCRIPTION_PROVIDERS.has(provider))) {
+    providers.add("ChatGPT");
+  }
+  if (configured.some((provider) => CLAUDE_SUBSCRIPTION_PROVIDERS.has(provider))) {
+    providers.add("Claude");
+  }
+  for (const provider of configured) {
+    if (CHATGPT_SUBSCRIPTION_PROVIDERS.has(provider) || CLAUDE_SUBSCRIPTION_PROVIDERS.has(provider)) continue;
+    if (provider === "github_copilot") {
+      providers.add("GitHub Copilot");
+      continue;
+    }
+    const label = LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider;
+    providers.add(label);
+  }
+  return [...providers];
+}
+
 function configuredIntegrations(credentials: DashboardSnapshot["credentials"]): string[] {
-  const integrations = Object.keys(credentials.llm)
-    .filter((provider) => credentials.llm[provider])
-    .map((provider) => LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider);
+  const integrations: string[] = [];
   if (credentials.github) integrations.push(`GitHub (${credentials.github})`);
   if (credentials.cloudflare) integrations.push("Cloudflare API");
   if (credentials.wrangler) integrations.push("Cloudflare Wrangler");
@@ -161,12 +191,14 @@ function ConfigurationSummary({
   selectedTier: Tier;
   editable: boolean;
 }) {
+  const modelProviders = configuredModelProviders(credentials);
   const integrations = configuredIntegrations(credentials);
   return (
     <details className="card configuration-summary" open={editable}>
       <summary><strong>Workbench configuration</strong><span className="muted">View setup</span></summary>
       <dl className="configuration-facts">
         <div><dt>Agents</dt><dd>{configuration.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}</dd></div>
+        <div><dt>Model Provider</dt><dd>{modelProviders.length ? modelProviders.join(", ") : "None"}</dd></div>
         <div><dt>Integrations</dt><dd>{integrations.length ? integrations.join(", ") : "None"}</dd></div>
         <div><dt>Repositories</dt><dd>{configuration.githubRepos.length ? configuration.githubRepos.join(", ") : "None"}</dd></div>
         <div><dt>Machine</dt><dd>{MACHINE_SPECS[selectedTier]}</dd></div>
@@ -352,11 +384,6 @@ function DashboardApp() {
           Your payment needs attention. Premium service remains available only through the displayed billing deadline.
         </div>
       ) : null}
-      {billing?.billing?.state === "trialing" && billing.billing.trialUntil ? (
-        <div className="notice" role="status">
-          Your Premium trial ends on {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}. Stripe will charge your payment method after the trial.
-        </div>
-      ) : null}
       {billing?.billing?.state === "cancel_scheduled" && billing.billing.serviceUntil ? (
         <div className="notice warning" role="status">
           Premium service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}.
@@ -413,7 +440,7 @@ function DashboardApp() {
                 />
                 <span>
                   <strong>Premium</strong>
-                  <small>{MACHINE_SPECS.paid} · $6/mo</small>
+                  <small>{MACHINE_SPECS.paid}{account.premium ? "" : " · $6/mo"}</small>
                 </span>
               </label>
             </div>
