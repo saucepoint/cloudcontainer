@@ -14,6 +14,7 @@ import {
   VerificationPage,
 } from "../src/pages/views.js";
 import { PAGE_STYLES } from "../src/pages/styles.js";
+import { putWorkbenchConfiguration } from "../src/workbench-configuration.js";
 import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
 function inlineScriptsOf(html: string): string[] {
@@ -432,6 +433,8 @@ describe("subscription sign-in wiring", () => {
   it("separates configuration from Free and Premium instance creation", () => {
     expect(dashboardClient).toContain('href="/configure"');
     expect(dashboardClient).toContain("Workbench configuration");
+    expect(dashboardClient).not.toContain("Set up your workbench");
+    expect(dashboardClient).not.toContain("Set up workbench →");
     expect(dashboardClient).toContain("1 vCPU 1.5GB RAM");
     expect(dashboardClient).toContain("2 vCPU 4GB RAM");
     expect(dashboardClient).toContain('href="/verify"');
@@ -588,6 +591,20 @@ describe("GitHub repository onboarding", () => {
     );
     expect(legacy.status).toBe(308);
     expect(legacy.headers.get("location")).toBe("/configure");
+  });
+
+  it("redirects direct dashboard access until configuration exists", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const cookie = await createTestSession(env, user.id);
+
+    const setup = await workerApp.request("/dashboard", { headers: { cookie } }, env);
+    expect(setup.status).toBe(302);
+    expect(setup.headers.get("location")).toBe("/configure");
+
+    await putWorkbenchConfiguration(env, user.id, { agents: ["claude"], githubRepos: [] });
+    const dashboard = await workerApp.request("/dashboard", { headers: { cookie } }, env);
+    expect(dashboard.status).toBe(200);
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {

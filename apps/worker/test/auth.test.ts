@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { authRoutes, postLoginPath, requireAccount } from "../src/auth.js";
 import { createAuth } from "../src/better-auth.js";
+import { putWorkbenchConfiguration } from "../src/workbench-configuration.js";
 import type { AppContext } from "../src/types.js";
 import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
@@ -17,7 +18,7 @@ describe("Better Auth account sessions", () => {
     const { env } = makeEnv({ DEV_AUTH: "1" });
     const response = await app().request("/auth/dev?sub=x", {}, env);
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/dashboard");
+    expect(response.headers.get("location")).toBe("/configure");
     expect(response.headers.get("set-cookie")).toContain("usebench.session_token=");
     expect((await env.DB.prepare("SELECT * FROM auth_sessions").all()).results).toHaveLength(1);
   });
@@ -61,8 +62,13 @@ describe("Better Auth account sessions", () => {
     expect(user).toEqual({ status: "active", subscription_status: "free" });
   });
 
-  it("always routes authenticated accounts to the dashboard", () => {
-    expect(postLoginPath()).toBe("/dashboard");
+  it("routes accounts to configuration until a workbench configuration is saved", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    expect(await postLoginPath(env, user.id)).toBe("/configure");
+
+    await putWorkbenchConfiguration(env, user.id, { agents: ["claude"], githubRepos: [] });
+    expect(await postLoginPath(env, user.id)).toBe("/dashboard");
   });
 
   it("loads a database-backed session for an unverified account", async () => {
@@ -95,7 +101,7 @@ describe("Better Auth account sessions", () => {
       body: new URLSearchParams({ secret, subject: "qa", state: "verified_premium" }),
     }, env);
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/dashboard");
+    expect(response.headers.get("location")).toBe("/configure");
     expect(response.headers.get("set-cookie")).toContain("usebench.session_token=");
     expect(await env.DB.prepare(
       "SELECT verified_at, subscription_status FROM users WHERE name = 'Staging QA account'",

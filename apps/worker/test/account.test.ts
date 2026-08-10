@@ -4,6 +4,7 @@ import { hashSignal } from "@worldcoin/idkit-core/hashing";
 import { accountRoutes } from "../src/account.js";
 import { adminRoutes } from "../src/admin.js";
 import { hashInviteCode } from "../src/invites.js";
+import { putWorkbenchConfiguration } from "../src/workbench-configuration.js";
 import type { AppContext, Bindings } from "../src/types.js";
 import { createTestSession, makeEnv, seedUser, stubFetch } from "./helpers/env.js";
 
@@ -64,6 +65,21 @@ afterEach(() => {
 });
 
 describe("account verification", () => {
+  it("continues new sessions to configuration and configured sessions to the dashboard", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const cookie = await createTestSession(env, user.id);
+
+    const setup = await app().request("/account/continue", { headers: { cookie } }, env);
+    expect(setup.status).toBe(302);
+    expect(setup.headers.get("location")).toBe("/configure");
+
+    await putWorkbenchConfiguration(env, user.id, { agents: ["claude"], githubRepos: [] });
+    const dashboard = await app().request("/account/continue", { headers: { cookie } }, env);
+    expect(dashboard.status).toBe(302);
+    expect(dashboard.headers.get("location")).toBe("/dashboard");
+  });
+
   it("issues only signed, short-lived passkey registration contexts", async () => {
     const { env } = makeEnv();
     const response = await app().request("/account/passkey/context", {}, env);

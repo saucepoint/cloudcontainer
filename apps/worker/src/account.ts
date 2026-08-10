@@ -18,7 +18,7 @@ export const accountRoutes = new Hono<AppContext>()
     return c.json({ context: await issuePasskeyRegistrationContext(c.env) });
   })
   .get("/account/continue", requireAccount, async (c) =>
-    c.redirect(postLoginPath()))
+    c.redirect(await postLoginPath(c.env, c.get("user").id)))
   .get("/verify", requireAccount, async (c) => {
     if (c.get("user").verified_at) return c.redirect("/dashboard");
     return c.html(String(VerificationPage({
@@ -27,7 +27,7 @@ export const accountRoutes = new Hono<AppContext>()
   })
   .post("/api/account/invite/verify", requireAccount, async (c) => {
     const user = c.get("user");
-    if (user.verified_at) return c.json({ redirect: postLoginPath() });
+    if (user.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
     const body = await readJsonBody<{ code?: unknown }>(c);
     const code = typeof body?.code === "string" ? normalizeInviteCode(body.code) : null;
     if (!code) return c.json({ error: "Enter your eight-character invite code." }, 400);
@@ -53,12 +53,12 @@ export const accountRoutes = new Hono<AppContext>()
         ).bind(now, now, user.id),
       ]) as Array<{ meta: { changes?: number } }>;
       if (!results[0]?.meta.changes) {
-        return c.json({ redirect: postLoginPath() });
+        return c.json({ redirect: await postLoginPath(c.env, user.id) });
       }
     } catch {
       return c.json({ error: "That invite code is invalid or has already been used." }, 409);
     }
-    return c.json({ redirect: "/dashboard" });
+    return c.json({ redirect: await postLoginPath(c.env, user.id) });
   })
   .post("/api/account/world-id/request", requireAccount, async (c) => {
     const request = createWorldIdRequest(c.env, c.get("user").id);
@@ -68,7 +68,7 @@ export const accountRoutes = new Hono<AppContext>()
   })
   .post("/api/account/world-id/verify", requireAccount, async (c) => {
     const user = c.get("user");
-    if (user.verified_at) return c.json({ redirect: postLoginPath() });
+    if (user.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
     const rawProof = await c.req.text();
     let nullifier: string;
     try {
@@ -100,11 +100,11 @@ export const accountRoutes = new Hono<AppContext>()
            )`,
       ).bind(now, now, user.id, c.env.WORLD_ID_ACTION, nullifier, user.id),
     ]) as Array<{ meta: { changes?: number } }>;
-    if (results[1]?.meta.changes) return c.json({ redirect: "/dashboard" });
+    if (results[1]?.meta.changes) return c.json({ redirect: await postLoginPath(c.env, user.id) });
 
     const refreshed = await c.env.DB.prepare("SELECT verified_at FROM users WHERE id = ?")
       .bind(user.id)
       .first<{ verified_at: number | null }>();
-    if (refreshed?.verified_at) return c.json({ redirect: "/dashboard" });
+    if (refreshed?.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
     return c.json({ error: "This World ID has already verified an account." }, 409);
   });

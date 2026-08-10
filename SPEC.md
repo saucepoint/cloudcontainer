@@ -158,11 +158,11 @@ sessions. Passkey-first registration uses a server-signed, ten-minute opaque
 context; it never accepts a caller-chosen user ID. Passkeys are discoverable and
 require both a resident key and user verification.
 
-After authentication, every account goes to `/dashboard`. The dashboard links
-to `/configure` when no saved workbench configuration exists, summarizes an
-existing configuration, and offers the Free and Premium instance choices only
-after setup has been saved. `/onboarding` is a compatibility redirect to
-`/configure` and is not part of the active user flow.
+After authentication, an account without a saved workbench configuration goes
+to `/configure`; an account with a saved configuration goes to `/dashboard`.
+The dashboard summarizes an existing configuration and offers the Free and
+Premium instance choices only after setup has been saved. `/onboarding` is a
+compatibility redirect to `/configure` and is not part of the active user flow.
 
 The verification screen offers World ID Proof of Human and a single-use
 administrator invite. World ID 4.0-only requests are signed by the Worker, bind
@@ -170,8 +170,9 @@ the proof signal to the authenticated internal user ID, and are verified
 through the Developer Portal. The verified nullifier is stored permanently so the same
 person cannot verify another account. An invite is also verification evidence,
 not an authentication credential: the account must already have a valid Better
-Auth session before redeeming it. Every valid session continues to the
-dashboard and may save a workbench configuration. Tier-specific authorization
+Auth session before redeeming it. Every valid session continues to `/configure`
+until it saves a workbench configuration, then returns to the dashboard.
+Tier-specific authorization
 is enforced only when the account creates an instance: Free requires permanent
 verification and Premium requires a current paid/manual Premium entitlement.
 An ineligible session may also access account security, billing status, hosted
@@ -191,9 +192,8 @@ add backup passkeys at any time.
 
 ### 4.2 Configure and launch
 
-Authentication always continues to `/dashboard`. With no completed
-configuration, the dashboard offers a setup action at `/configure`. The
-configuration screen has one required field: at least one agent from Pi,
+Authentication continues to `/configure` until configuration is complete.
+The configuration screen has one required field: at least one agent from Pi,
 Claude Code, Codex, and OpenCode. All other fields are visibly optional:
 
 - SSH public key;
@@ -1025,8 +1025,9 @@ manual checks above have been completed for affected areas.
 
 1. **Identity:** every landing option authenticates through Better Auth; an
    unverified account reaches only the World ID/invite gate; each invite or
-   World ID nullifier verifies at most one account; verified accounts route to
-   onboarding or dashboard according to workbench existence; logout revokes the
+   World ID nullifier verifies at most one account; accounts route to
+   configuration or dashboard according to saved workbench configuration;
+   logout revokes the
    D1-backed application session.
 2. **Terminal parity:** `npx usebench` can complete the same verification,
    agent, integration, provisioning, and readiness flow as the web app from a

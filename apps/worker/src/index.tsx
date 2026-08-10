@@ -18,6 +18,7 @@ import { requestBodyLimit } from "./http.js";
 import { getContainerForUser } from "./jobs.js";
 import { credentialsView } from "./container-view.js";
 import { notificationsForUser, unreadNotificationCount } from "./notifications.js";
+import { getWorkbenchConfiguration } from "./workbench-configuration.js";
 import { DashboardPage } from "./pages/dashboard.js";
 import { AccountPage, ConfigurePage, LandingPage, NotFoundPage, TermsPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
@@ -72,7 +73,11 @@ app.get("/configure", requireAccount, async (c) => {
 });
 
 app.get("/dashboard", requireAccount, async (c) => {
-  const notificationCount = await unreadNotificationCount(c.env, c.get("user").id);
+  const userId = c.get("user").id;
+  if (!(await getWorkbenchConfiguration(c.env, userId))) {
+    return c.redirect("/configure");
+  }
+  const notificationCount = await unreadNotificationCount(c.env, userId);
   return c.html(<DashboardPage notificationCount={notificationCount} />);
 });
 

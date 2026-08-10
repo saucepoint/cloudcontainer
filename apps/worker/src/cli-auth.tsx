@@ -192,7 +192,7 @@ export const cliAuthRoutes = new Hono<AppContext>()
     const [container, entitlement, redirect] = await Promise.all([
       getContainerForUser(c.env, user.id),
       effectiveEntitlementForUser(c.env, user),
-      postLoginPath(),
+      postLoginPath(c.env, user.id),
     ]);
     return c.json({
       verified: Boolean(user.verified_at),

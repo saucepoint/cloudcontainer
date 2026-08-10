@@ -36,9 +36,9 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    new passkey-first account through Better Auth. The same flow is available
    from a terminal with `npx usebench`: the CLI opens Google or GitHub in the
    browser, receives a one-time loopback callback, and resumes onboarding in
-   the terminal. Browser authentication always continues to `/dashboard`.
-2. The dashboard sends an account without a saved setup to `/configure`.
-   Configuration requires only one choice: one or more coding agents. SSH and all
+   the terminal. Browser authentication continues to `/configure` until a
+   workbench configuration is saved, then returns to `/dashboard`.
+2. Configuration requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
    credentials must be selected before creating the instance. Saving returns
    to the dashboard without allocating capacity. Later credential

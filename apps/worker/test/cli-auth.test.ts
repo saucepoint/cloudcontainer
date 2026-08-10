@@ -97,7 +97,7 @@ describe("CLI browser authentication bridge", () => {
       worldIdAvailable: true,
       githubAvailable: false,
       hasWorkbench: false,
-      redirect: "/dashboard",
+      redirect: "/configure",
     });
   });
 });

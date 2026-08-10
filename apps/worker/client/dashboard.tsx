@@ -367,13 +367,6 @@ function DashboardApp() {
           editable={!container}
         />
       ) : null}
-      {!pageError && !configuration ? (
-        <section className="card" aria-labelledby="configure-workbench-heading">
-          <h2 id="configure-workbench-heading">Set up your workbench</h2>
-          <p>Choose your coding agents, connect integrations, and add SSH access before creating an instance.</p>
-          <a className="btn primary" href="/configure">Set up workbench →</a>
-        </section>
-      ) : null}
       {!pageError && container ? (
         <ContainerCard
           container={container}

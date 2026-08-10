@@ -1,6 +1,7 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { secretMatches } from "./admin-auth.js";
 import { createAuth, signedSessionCookie } from "./better-auth.js";
+import { getWorkbenchConfiguration } from "./workbench-configuration.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -17,8 +18,8 @@ async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 
-export function postLoginPath(): string {
-  return "/dashboard";
+export async function postLoginPath(env: Bindings, userId: string): Promise<"/configure" | "/dashboard"> {
+  return (await getWorkbenchConfiguration(env, userId)) ? "/dashboard" : "/configure";
 }
 
 async function loadAccount(c: Parameters<MiddlewareHandler<AppContext>>[0]) {
@@ -115,7 +116,7 @@ async function sessionRedirect(env: Bindings, requestUrl: string, user: UserRow)
   return new Response(null, {
     status: 302,
     headers: {
-      location: postLoginPath(),
+      location: await postLoginPath(env, user.id),
       "set-cookie": await signedSessionCookie(env, session.token, requestUrl),
       "cache-control": "no-store",
     },

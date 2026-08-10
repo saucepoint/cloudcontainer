@@ -18,6 +18,7 @@
     "deploy": "bash ./deploy.sh",
     "deploy:staging": "bash ./deploy.sh --environment staging",
     "deploy:worker": "npm run deploy -w apps/worker",
+    "deploy:worker:staging": "npm run deploy:staging -w apps/worker",
     "deploy:dry-run": "bash ./deploy.sh --dry-run"
   },
   "devDependencies": {
