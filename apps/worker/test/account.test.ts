@@ -14,6 +14,12 @@ const WORLD_ID_CONFIG = {
   WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
 } satisfies Partial<Bindings>;
 
+const STAGING_WORLD_ID_CONFIG = {
+  ...WORLD_ID_CONFIG,
+  WORLD_ID_ACTION: "verify-account-staging",
+  WORLD_ID_ENVIRONMENT: "production",
+} satisfies Partial<Bindings>;
+
 function app() {
   return new Hono<AppContext>().route("/", accountRoutes).route("/", adminRoutes);
 }
@@ -207,6 +213,25 @@ describe("account verification", () => {
     expect(await response.json()).toEqual({
       error: "World ID could not verify this proof.",
       code: "verifier_http_400",
+    });
+  });
+
+  it("supports the staging action while reusing the production World ID environment", async () => {
+    const { env } = makeEnv(STAGING_WORLD_ID_CONFIG);
+    const { user, cookie } = await unverifiedAccount(env);
+
+    const response = await app().request(
+      "/api/account/world-id/request",
+      { method: "POST", headers: { cookie } },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      app_id: "app_test",
+      action: "verify-account-staging",
+      environment: "production",
+      signal: user.id,
     });
   });
 

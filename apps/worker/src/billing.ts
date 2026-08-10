@@ -62,7 +62,6 @@ const SUPPORTED_EVENT_TYPES = new Set([
   "invoice.finalization_failed",
   "charge.dispute.created",
 ]);
-const CHECKOUT_RATE_LIMIT_MS = 60_000;
 const BILLING_EVENT_LEASE_MS = 5 * 60_000;
 const DECIMAL_PRICE_RE = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
 const ISO_CURRENCY_RE = /^[A-Z]{3}$/;
@@ -120,11 +119,6 @@ function configuredGraceMs(env: Bindings): number {
   return Number.isFinite(days) && days >= 0 ? Math.floor(days * 86_400_000) : 0;
 }
 
-function checkoutSessionMinutes(env: Bindings): number | null {
-  const value = Number(env.BILLING_CHECKOUT_SESSION_MINUTES?.trim());
-  return Number.isInteger(value) && value >= 30 && value <= 1_440 ? value : null;
-}
-
 export function billingConfigured(env: Bindings): boolean {
   const price = env.PAID_PLAN_MONTHLY_PRICE?.trim();
   const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase();
@@ -135,7 +129,6 @@ export function billingConfigured(env: Bindings): boolean {
     env.STRIPE_PRICE_PAID_MONTHLY?.trim() &&
     price && DECIMAL_PRICE_RE.test(price) &&
     currency && ISO_CURRENCY_RE.test(currency) &&
-    checkoutSessionMinutes(env) !== null &&
     env.BILLING_EVENTS,
   );
 }
@@ -292,14 +285,6 @@ export const billingRoutes = new Hono<AppContext>()
     const user = c.get("user");
     try {
       paidPriceId(c.env);
-      const now = Date.now();
-      const sessionMinutes = checkoutSessionMinutes(c.env);
-      if (sessionMinutes === null) throw new StripeConfigurationError();
-      const expiresAt = now + sessionMinutes * 60_000;
-      await c.env.DB.prepare(
-        `UPDATE stripe_checkout_attempts SET status = 'expired', updated_at = ?
-         WHERE user_id = ? AND status IN ('creating','open') AND expires_at <= ?`,
-      ).bind(now, user.id, now).run();
       const live = await c.env.DB.prepare(
         `SELECT stripe_subscription_id FROM stripe_subscriptions
          WHERE user_id = ? AND stripe_status NOT IN ('canceled','incomplete_expired')
@@ -314,51 +299,17 @@ export const billingRoutes = new Hono<AppContext>()
         if (!portal.url) throw new BillingEventError("invalid_portal_response");
         return c.json({ url: portal.url }, 200);
       }
-      const openAttempt = await c.env.DB.prepare(
-        `SELECT id FROM stripe_checkout_attempts
-         WHERE user_id = ? AND status IN ('creating','open') LIMIT 1`,
-      ).bind(user.id).first();
-      if (openAttempt) return c.json({ error: "A checkout is already in progress." }, 409);
-      const recentAttempt = await c.env.DB.prepare(
-        `SELECT id FROM stripe_checkout_attempts
-         WHERE user_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1`,
-      ).bind(user.id, now - CHECKOUT_RATE_LIMIT_MS).first();
-      if (recentAttempt) {
-        return c.json({ error: "Wait a minute before starting another checkout." }, 429);
-      }
-
       const customer = await stripeCustomerForUser(c.env, user);
-      const attemptId = crypto.randomUUID();
-      try {
-        await c.env.DB.prepare(
-          `INSERT INTO stripe_checkout_attempts
-             (id, user_id, status, expires_at, created_at, updated_at)
-           VALUES (?, ?, 'creating', ?, ?, ?)`,
-        ).bind(attemptId, user.id, expiresAt, now, now).run();
-      } catch {
-        return c.json({ error: "A checkout is already in progress." }, 409);
-      }
-
       try {
         const session = await createStripeCheckoutSession(c.env, {
-          attemptId,
           userId: user.id,
           customerId: customer.stripe_customer_id,
-          expiresAt: Math.floor(expiresAt / 1000),
         });
         if (!session.id || !session.url || customerId(session.customer) !== customer.stripe_customer_id) {
           throw new BillingEventError("invalid_checkout_response");
         }
-        await c.env.DB.prepare(
-          `UPDATE stripe_checkout_attempts
-           SET stripe_checkout_session_id = ?, status = 'open', updated_at = ?
-           WHERE id = ? AND status = 'creating'`,
-        ).bind(session.id, Date.now(), attemptId).run();
         return c.json({ url: session.url }, 201);
       } catch (error) {
-        await c.env.DB.prepare(
-          "UPDATE stripe_checkout_attempts SET status = 'failed', updated_at = ? WHERE id = ?",
-        ).bind(Date.now(), attemptId).run();
         return routeError(c, error);
       }
     } catch (error) {
@@ -764,13 +715,6 @@ async function applyCanonicalSubscription(
     if (customerId(session.customer) !== stripeCustomerId) {
       throw new BillingEventError("checkout_customer_mismatch");
     }
-    statements.push(
-      env.DB.prepare(
-        `UPDATE stripe_checkout_attempts
-         SET status = 'complete', updated_at = ?
-         WHERE stripe_checkout_session_id = ? AND user_id = ?`,
-      ).bind(now, session.id, customer.user_id),
-    );
   }
   const noticeId = `billing:${input.eventId ?? `${input.eventType}:${input.subscription.id}:${input.eventCreated}`}`;
   if (

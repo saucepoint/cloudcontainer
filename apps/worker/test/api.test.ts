@@ -712,6 +712,43 @@ describe("POST /api/container/:op", () => {
   });
 });
 
+describe("POST /api/container/cancel", () => {
+  it("withdraws a hostless waitlisted placement and removes its queue entry", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    await env.DB.prepare("INSERT INTO waitlist (user_id, requested_at) VALUES (?, ?)")
+      .bind(user.id, Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/container/cancel", { method: "POST", headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?").bind(user.id).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT user_id FROM waitlist WHERE user_id = ?").bind(user.id).first()).toBeNull();
+  });
+
+  it("does not withdraw a placement after admission starts", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "provisioning", host_id: null, ssh_port: null });
+    await env.DB.prepare("INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, ?)")
+      .bind(user.id, Date.now(), Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/container/cancel", { method: "POST", headers }, env);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Placement has already started; it cannot be withdrawn now.",
+    });
+    expect(await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?").bind(user.id).first()).not.toBeNull();
+  });
+});
+
 describe("SSH key management", () => {
   it("shows previously stored keys before a workbench exists", async () => {
     const { env } = makeEnv();

@@ -33,7 +33,6 @@ const BILLING_CONFIG = {
   STRIPE_PRICE_PAID_MONTHLY: "price_paid_monthly",
   PAID_PLAN_MONTHLY_PRICE: "20.00",
   PAID_PLAN_CURRENCY: "USD",
-  BILLING_CHECKOUT_SESSION_MINUTES: "60",
   STRIPE_TAX_ENABLED: "0",
   BILLING_EVENTS: { send: async () => {} },
 } satisfies Partial<Bindings>;
@@ -363,17 +362,17 @@ describe("billing routes", () => {
       "subscription_data[trial_settings][end_behavior][missing_payment_method]",
     )).toBe("cancel");
     expect(requests[1]?.body.get("automatic_tax[enabled]")).toBe("false");
-    expect(Number(requests[1]?.body.get("expires_at"))).toBeGreaterThan(
-      Math.floor(Date.now() / 1000) + 59 * 60,
-    );
+    expect(requests[1]?.body.has("expires_at")).toBe(false);
     expect(await env.DB.prepare("SELECT * FROM account_entitlements").all())
       .toMatchObject({ results: [] });
 
-    const duplicate = await app().request("/api/billing/checkout", {
+    const secondCheckout = await app().request("/api/billing/checkout", {
       method: "POST",
       headers: { cookie },
     }, env);
-    expect(duplicate.status).toBe(409);
+    expect(secondCheckout.status).toBe(201);
+    expect(await secondCheckout.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/test" });
+    expect(requests.filter((request) => request.path === "/v1/checkout/sessions")).toHaveLength(2);
   });
 
   it("verifies the exact raw webhook before publishing only event metadata", async () => {
@@ -404,56 +403,6 @@ describe("billing routes", () => {
       body: `${raw} `,
     }, env);
     expect(tampered.status).toBe(400);
-  });
-
-  it("rate-limits a new Checkout after a failed session attempt", async () => {
-    const { env } = makeEnv(BILLING_CONFIG);
-    const { cookie } = await unverifiedUser(env);
-    stubFetch((url) => {
-      if (url.pathname === "/v1/customers") {
-        return Response.json({ id: "cus_user", metadata: { userId: "user-1" } });
-      }
-      if (url.pathname === "/v1/checkout/sessions") {
-        return Response.json({ error: { message: "sandbox failure" } }, { status: 500 });
-      }
-      return null;
-    });
-
-    expect((await app().request("/api/billing/checkout", {
-      method: "POST",
-      headers: { cookie },
-    }, env)).status).toBe(502);
-    expect((await app().request("/api/billing/checkout", {
-      method: "POST",
-      headers: { cookie },
-    }, env)).status).toBe(429);
-  });
-
-  it("expires an abandoned Checkout attempt before creating another", async () => {
-    const { env } = makeEnv(BILLING_CONFIG);
-    const { cookie } = await unverifiedUser(env);
-    await seedStripeCustomer(env);
-    await env.DB.prepare(
-      `INSERT INTO stripe_checkout_attempts
-         (id, user_id, status, expires_at, created_at, updated_at)
-       VALUES ('attempt-old', 'user-1', 'open', 1, 1, 1)`,
-    ).run();
-    stubFetch((url) => url.pathname === "/v1/checkout/sessions"
-      ? Response.json({
-          id: "cs_replacement",
-          url: "https://checkout.stripe.com/c/pay/replacement",
-          customer: "cus_user",
-        })
-      : null);
-
-    const response = await app().request("/api/billing/checkout", {
-      method: "POST",
-      headers: { cookie },
-    }, env);
-    expect(response.status).toBe(201);
-    expect(await env.DB.prepare(
-      "SELECT status FROM stripe_checkout_attempts WHERE id = 'attempt-old'",
-    ).first()).toEqual({ status: "expired" });
   });
 
   it("provides a secret-authenticated, non-PII billing support view", async () => {

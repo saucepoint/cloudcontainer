@@ -290,6 +290,10 @@ details { margin-top: 0.8rem; padding: 0.2rem 0; }
 summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .onboarding-api-keys { margin-top: 1.35rem; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
+.workbench-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
+.workbench-choice-grid > div { padding-top: 0.85rem; border-top: 1px solid var(--line); }
+.workbench-choice-grid h3 { margin: 0; }
+.workbench-choice-grid p { min-height: 2.5rem; }
 .row.flush, form.flush { margin: 0; }
 .github-connected { display: inline-flex; align-items: center; gap: 0.45rem; align-self: center;
   color: var(--muted); font-size: 0.86rem; }
@@ -451,7 +455,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .ssh-key-actions { justify-content: flex-start; }
   .ssh-key-toolbar { align-items: flex-start; flex-direction: column; }
   .ssh-key-toolbar-actions { width: 100%; justify-content: flex-start; }
-  .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
+  .auth-code-row, .verification-grid, .workbench-choice-grid { grid-template-columns: 1fr; gap: 0.35rem; }
   .auth-code-row .btn { justify-self: start; }
   .terminal-titlebar { grid-template-columns: 4rem minmax(0, 1fr) 4rem; padding: 0 0.65rem; }
   .terminal-screen { min-height: 19.44rem; padding: 0.95rem 0.85rem 0.9rem; font-size: 0.64rem; }

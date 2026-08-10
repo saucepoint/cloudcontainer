@@ -351,6 +351,23 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ actions
+  .post("/api/container/cancel", requireAccount, async (c) => {
+    const userId = c.get("user").id;
+    const results = (await c.env.DB.batch([
+      c.env.DB.prepare(
+        `DELETE FROM containers
+         WHERE user_id = ? AND status = 'waitlisted' AND host_id IS NULL`,
+      ).bind(userId),
+      c.env.DB.prepare(
+        "DELETE FROM waitlist WHERE user_id = ? AND changes() = 1",
+      ).bind(userId),
+    ])) as Array<{ meta: { changes?: number } }>;
+    if (results[0]?.meta.changes) return c.json({ ok: true });
+
+    const container = await getContainerForUser(c.env, userId);
+    if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
+    return c.json({ error: "Placement has already started; it cannot be withdrawn now." }, 409);
+  })
   .post("/api/container/:op", requireUser, async (c) => {
     const user = c.get("user");
     const op = c.req.param("op");

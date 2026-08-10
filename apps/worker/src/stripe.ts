@@ -156,7 +156,7 @@ export async function createStripeCustomer(
 
 export async function createStripeCheckoutSession(
   env: Bindings,
-  input: { attemptId: string; userId: string; customerId: string; expiresAt: number },
+  input: { userId: string; customerId: string },
 ): Promise<StripeCheckoutSession> {
   const form = new URLSearchParams({
     mode: "subscription",
@@ -172,7 +172,6 @@ export async function createStripeCheckoutSession(
     "subscription_data[trial_period_days]": String(PAID_TRIAL_DAYS),
     "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
     "automatic_tax[enabled]": env.STRIPE_TAX_ENABLED === "1" ? "true" : "false",
-    expires_at: String(input.expiresAt),
     success_url: `${env.BASE_URL}/account?checkout=success`,
     cancel_url: `${env.BASE_URL}/account?checkout=cancelled`,
   });
@@ -181,7 +180,7 @@ export async function createStripeCheckoutSession(
     "POST",
     "/v1/checkout/sessions",
     form,
-    `checkout:${input.attemptId}`,
+    `checkout:${crypto.randomUUID()}`,
   );
 }
 

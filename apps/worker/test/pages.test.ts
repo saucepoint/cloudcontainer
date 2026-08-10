@@ -278,6 +278,34 @@ describe("account page", () => {
     expect(account).toContain('disabled=""');
   });
 
+  it("places the Plan section below Notifications", () => {
+    const account = String(AccountPage({
+      passkeyCount: 0,
+      continueHref: "/dashboard",
+      welcome: false,
+      billing: {
+        configured: true,
+        paidPlan: {
+          price: "5.99",
+          currency: "USD",
+          interval: "month",
+          trialDays: 7,
+          display: "$5.99/month",
+        },
+        entitlement: {
+          eligible: false,
+          plan: null,
+          source: null,
+          state: "inactive",
+          accessUntil: null,
+        },
+        billing: null,
+        subscription: null,
+      },
+    }));
+    expect(account.indexOf('id="notifications"')).toBeLessThan(account.indexOf('id="billing"'));
+  });
+
   it("wires destructive actions to authenticated endpoints", () => {
     expect(securityClient).toContain('requestJson("/api/credentials", { method: "DELETE" })');
     expect(securityClient).toContain('requestJson("/api/account/delete", { method: "POST" })');
@@ -394,6 +422,17 @@ describe("subscription sign-in wiring", () => {
     expect(dashboardClient).not.toContain("CredentialsCard");
     expect(dashboardClient).not.toContain("/api/credentials");
     expect(html).not.toContain("Changes apply without a restart");
+  });
+
+  it("offers free verification and premium setup choices without a dashboard Plan section", () => {
+    expect(dashboardClient).toContain('billing?.entitlement.plan === "free"');
+    expect(dashboardClient).toContain("Create a free workbench");
+    expect(dashboardClient).toContain("Create a premium workbench");
+    expect(dashboardClient).toContain('href="/onboarding"');
+    expect(dashboardClient).not.toContain('id="dashboard-plan-heading"');
+    expect(dashboardClient).not.toContain(">Plan</h2>");
+    expect(dashboardClient).not.toContain("Continue checkout");
+    expect(accountClient).not.toContain("Continue checkout");
   });
 });
 
@@ -573,6 +612,8 @@ describe("beginner-friendly provisioning UI", () => {
     expect(dashboardClient).toContain("ssh-keygen -t ed25519");
     expect(dashboardClient).toContain("Never paste your private key");
     expect(dashboardClient).toContain('id="enroll"');
+    expect(dashboardClient).toContain("Withdraw placement");
+    expect(dashboardClient).toContain('api("/api/container/cancel"');
     expect(dashboardClient).toContain('waitlisted: "Waiting for capacity"');
     expect(dashboardClient).toContain('running: "Ready"');
     expect(dashboardClient).toContain("refreshNeeded");

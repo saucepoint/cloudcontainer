@@ -26,16 +26,14 @@ function redirectIfSignedOut(error: unknown): boolean {
 function ContainerCard({
   container,
   action,
+  cancelPlacement,
   actionBusy,
 }: {
-  container: ContainerView | null;
+  container: ContainerView;
   action: (operation: ContainerAction) => void;
+  cancelPlacement: () => void;
   actionBusy: boolean;
 }) {
-  if (!container) {
-    return <div className="card"><h2>No workbench yet</h2><a className="btn primary" href="/onboarding">Set up a workbench →</a></div>;
-  }
-
   const busy = isBusy(container);
   const runAction = (operation: ContainerAction) => {
     if (operation === "destroy" || operation === "rebuild") {
@@ -66,7 +64,25 @@ function ContainerCard({
         {container.planTransition ? ` · desired plan ${container.planTransition.desiredTier}` : ""}
       </p>
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
-      {container.status === "waitlisted" ? <p>All hosts are full. Your place is saved.</p> : null}
+      {container.status === "waitlisted" ? (
+        <>
+          <p>All hosts are full. Your place is saved.</p>
+          <button
+            type="button"
+            className="btn secondary"
+            disabled={actionBusy}
+            onClick={() => askConfirmation(
+              "Withdraw placement?",
+              "Remove this workbench from the capacity queue? You can start a new placement later.",
+              "Withdraw placement",
+              cancelPlacement,
+              true,
+            )}
+          >
+            Withdraw placement
+          </button>
+        </>
+      ) : null}
       {container.status === "stopped" ? <p>Files are safe. Start the workbench to use SSH.</p> : null}
       {container.status === "suspended" ? (
         <p className="notice error">
@@ -201,6 +217,24 @@ function DashboardApp() {
     }
   };
 
+  const cancelPlacement = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      await api("/api/container/cancel", { method: "POST" });
+      refreshNeeded.current = false;
+      applyContainer(null);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(error, "The placement could not be withdrawn. Please try again."));
+      }
+      setPollVersion((version) => version + 1);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const refreshKeysAndConnection = async () => {
     const [keyResult, containerResult] = await Promise.all([
       api<{ keys: SshKey[] }>("/api/keys"),
@@ -221,11 +255,6 @@ function DashboardApp() {
       setActionBusy(false);
     }
   };
-
-  const liveStripeSubscription = Boolean(
-    billing?.subscription &&
-    !["canceled", "incomplete_expired"].includes(billing.subscription.status),
-  );
 
   if (!loaded) {
     return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><span className="sr-only">Loading your workbench…</span><div className="skel skel-title" /><div className="skel skel-line" /><div className="skel skel-line short" /></div></>;
@@ -254,42 +283,42 @@ function DashboardApp() {
           Paid access ended. Resubscribe or complete Free verification to restore eligibility.
         </div>
       ) : null}
-      {billing && (billing.configured || billing.billing?.source === "stripe") &&
-        billing.entitlement.source !== "manual" ? (
-        <section className="card" aria-labelledby="dashboard-plan-heading">
-          <div className="card-head">
-            <h2 id="dashboard-plan-heading">Plan</h2>
-            <span className={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
-              {billing.entitlement.plan ?? "expired"}
-            </span>
-          </div>
-          {billing.billing?.state === "trialing" && billing.billing.trialUntil ? (
-            <p>
-              Free trial ends {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)} · then {billing.paidPlan?.display.replace(/^7-day free trial, then /, "") ?? "monthly billing"}
-            </p>
-          ) : billing.subscription?.serviceUntil ? (
-            <p>
-              {billing.subscription.cancelAtPeriodEnd ? "Paid until" : "Current paid period ends"}{" "}
-              {new Date(billing.subscription.serviceUntil).toISOString().slice(0, 10)}
-              {billing.billing ? ` · ${billing.billing.state.replaceAll("_", " ")}` : ""}
-            </p>
-          ) : null}
-          {billing.billing?.source === "stripe" && liveStripeSubscription ? (
-            <button className="btn secondary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/portal")}>
-              {billing.subscription?.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
-            </button>
-          ) : (
-            <>
-              {billing.paidPlan ? <p>{billing.paidPlan.display}</p> : null}
-              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
-                {billing.entitlement.plan === "free" ? "Start 7-day Paid trial" : "Resubscribe with trial"} →
-              </button>
-            </>
-          )}
-        </section>
-      ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
-      {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
+      {pageError ? null : container ? (
+        <ContainerCard
+          container={container}
+          action={(operation) => void act(operation)}
+          cancelPlacement={() => void cancelPlacement()}
+          actionBusy={actionBusy}
+        />
+      ) : (
+        <section className="card" aria-labelledby="create-workbench-heading">
+          <h2 id="create-workbench-heading">Create your workbench</h2>
+          <p className="muted">Choose the setup that fits how you want to use usebench.</p>
+          <div className="workbench-choice-grid">
+            {billing?.entitlement.plan === "free" ? (
+              <div>
+                <h3>Free workbench</h3>
+                <p className="muted">A verified account gets the free workbench tier.</p>
+                <a className="btn secondary" href="/onboarding">Create a free workbench →</a>
+              </div>
+            ) : null}
+            <div>
+              <h3>Premium workbench</h3>
+              <p className="muted">
+                {billing?.paidPlan?.display ?? "More resources and persistent storage."}
+              </p>
+              {billing?.entitlement.plan === "paid" ? (
+                <a className="btn primary" href="/onboarding">Create a premium workbench →</a>
+              ) : billing?.configured ? (
+                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
+                  Create a premium workbench →
+                </button>
+              ) : <p className="muted">Premium workbenches are not available yet.</p>}
+            </div>
+          </div>
+        </section>
+      )}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
       <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
     </>

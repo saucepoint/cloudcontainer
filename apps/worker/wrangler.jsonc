@@ -56,7 +56,7 @@
     "SSH_PORT_RANGE_END": "39999"
     // Intentionally omitted launch-time billing vars:
     // BILLING_ENABLED, STRIPE_PRICE_PAID_MONTHLY, PAID_PLAN_MONTHLY_PRICE,
-    // PAID_PLAN_CURRENCY, BILLING_CHECKOUT_SESSION_MINUTES,
+    // PAID_PLAN_CURRENCY,
     // STRIPE_TAX_ENABLED, BILLING_GRACE_DAYS,
     // BILLING_EXPORT_WINDOW_DAYS.
   },
@@ -96,14 +96,39 @@
         "GITHUB_APP_SLUG": "",
         "AUTH_GOOGLE_CLIENT_ID": "",
         "AUTH_GITHUB_CLIENT_ID": "",
-        "WORLD_ID_APP_ID": "",
-        "WORLD_ID_RP_ID": "",
-        "WORLD_ID_ACTION": "verify-account-staging-1",
-        "WORLD_ID_ENVIRONMENT": "staging",
+        // Staging reuses the production World ID application and relying
+        // party. Only the action is separated between deployments.
+        "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
+        "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
+        "WORLD_ID_ACTION": "verify-account-staging",
+        "WORLD_ID_ENVIRONMENT": "production",
         "SSH_PORT_RANGE_START": "40000",
-        "SSH_PORT_RANGE_END": "49999"
-        // Billing remains disabled in staging until its isolated Queue,
-        // Stripe sandbox vars, and secrets are configured.
+        "SSH_PORT_RANGE_END": "49999",
+        // Billing is enabled once STRIPE_PRICE_PAID_MONTHLY is set to the
+        // matching Stripe sandbox recurring Price ID.
+        "BILLING_ENABLED": "1",
+        "STRIPE_PRICE_PAID_MONTHLY": "price_1TzTMOGR5QgQQ8Vf600SJC7k",
+        "PAID_PLAN_MONTHLY_PRICE": "5.99",
+        "PAID_PLAN_CURRENCY": "USD",
+        "STRIPE_TAX_ENABLED": "0",
+        "BILLING_GRACE_DAYS": "0"
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "BILLING_EVENTS",
+            "queue": "usebench-staging-billing-events"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "usebench-staging-billing-events",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 10,
+            "dead_letter_queue": "usebench-staging-billing-events-dlq"
+          }
+        ]
       }
     }
   }

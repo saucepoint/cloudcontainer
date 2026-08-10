@@ -168,8 +168,8 @@ Optional secrets:
 - WORLD_ID_SIGNING_KEY, paired with `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
   `WORLD_ID_ACTION`. Invite verification remains available without World ID.
 - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. These have no effect on new
-  sales until the Price, display amount/currency, Checkout lifetime, Queue, and
-  `BILLING_ENABLED=1` are also configured.
+  sales until the Price, display amount/currency, Queue, and `BILLING_ENABLED=1`
+  are also configured.
 
 ### Paid billing setup
 
@@ -181,8 +181,6 @@ Billing is fail-closed and remains hidden unless all of these are present:
 - `PAID_PLAN_MONTHLY_PRICE` (a decimal such as `20.00`) and
   `PAID_PLAN_CURRENCY` (an uppercase ISO code such as `USD`), matching that
   Stripe Price and supplying the server-rendered price disclosure;
-- `BILLING_CHECKOUT_SESSION_MINUTES`, an integer from 30 through 1440 that
-  bounds abandoned Checkout attempts and is also sent to Stripe;
 - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as Worker secrets; and
 - a `BILLING_EVENTS` Cloudflare Queue bound as both producer and consumer.
 
@@ -278,9 +276,15 @@ keys. Deploy and migrate it without touching production:
 Wrangler secrets are not inherited. Configure them with `--env staging`; never
 reuse `BETTER_AUTH_SECRET`, `CREDENTIAL_MASTER_KEY`, `WORKER_RPC_PRIVATE_KEY`,
 `INVITE_ADMIN_SECRET`, or `FLEET_ADMIN_SECRET` from production. Provider IDs
-are intentionally empty in the checked-in staging configuration. Before
-enabling a provider, register the staging callback URLs and then set both its
-public ID and its staging secret.
+are intentionally empty in the checked-in staging configuration, except for
+World ID. Staging reuses the production World ID app and relying party in the
+production environment, with the separate `verify-account-staging` action.
+Store the same RP signing key in the staging Worker separately:
+
+    npx wrangler secret put WORLD_ID_SIGNING_KEY --env staging
+
+Before enabling another provider, register the staging callback URLs and then
+set both its public ID and its staging secret.
 
 Fleet commands are also environment-scoped:
 
@@ -341,6 +345,8 @@ For World ID, create or migrate an application in the World Developer Portal,
 register its relying party, and set `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
 `WORLD_ID_ACTION`. Store the RP signing key only as `WORLD_ID_SIGNING_KEY`.
 Production accepts only signed World ID 4 Proof of Human uniqueness requests.
+Staging uses the same app, relying party, environment, and signing key, but
+must use the separate `verify-account-staging` action.
 The Worker binds each proof signal to the authenticated account,
 forwards the unchanged result to the Developer Portal, and persists the
 returned nullifier so one person cannot verify multiple accounts.
@@ -364,6 +370,14 @@ shell history:
 
 The script targets `https://usebench.dev` by default. Pass `-- --url
 https://YOUR_BASE_URL` after the command to target another deployment.
+For staging, use the dedicated command so the target cannot be mistyped:
+
+    read -rs INVITE_ADMIN_SECRET && export INVITE_ADMIN_SECRET
+    npm run create:invite:staging
+    unset INVITE_ADMIN_SECRET
+
+This command targets `https://staging.usebench.dev` and must use the staging
+Worker's `INVITE_ADMIN_SECRET`, never the production secret.
 
 The script prints one eight-character uppercase alphanumeric code. Send it to
 its intended recipient through a private channel. The recipient first signs in

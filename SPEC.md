@@ -740,13 +740,12 @@ source and are never fabricated as, or overwritten by, Stripe state.
 New Paid sales are exposed only when `BILLING_ENABLED=1`, the single supported
 monthly Price is configured server-side, its matching
 `PAID_PLAN_MONTHLY_PRICE` and `PAID_PLAN_CURRENCY` disclosure values exist,
-`BILLING_CHECKOUT_SESSION_MINUTES` is an integer from 30 through 1440, both
-Stripe secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
+both Stripe secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
 requires an authenticated owner but not Free verification, stores one Customer
-mapping, permits one open attempt and one non-terminal subscription, and never
-accepts a client Price or plan. The account and dashboard render the configured
-amount and currency. The success redirect is display-only. Portal sessions
-require the stored Customer mapping.
+mapping, creates a fresh Stripe Checkout Session for each start, and permits
+one non-terminal subscription. It never accepts a client Price or plan. The
+account and dashboard render the configured amount and currency. The success
+redirect is display-only. Portal sessions require the stored Customer mapping.
 
 The public webhook verifies Stripe's signature over the exact raw body within
 a five-minute tolerance and publishes only event ID, type, and creation time.
@@ -830,7 +829,7 @@ operations synchronize keys and credentials.
 | account_entitlements | One effective paid/dedicated entitlement source with trial, paid-through, and grace projections per user |
 | stripe_customers | One internal user to Stripe Customer mapping; account deletion is restricted while present |
 | stripe_subscriptions | Canonical non-card subscription facts, trial bounds, monotonic event/sync markers, and paid-through deadlines |
-| stripe_checkout_attempts | One open Checkout attempt per user through a partial unique index |
+| stripe_checkout_attempts | Legacy abandoned-Checkout bookkeeping retained only for migration compatibility; no runtime code reads or writes it |
 | stripe_billing_events | Event-ID dedupe, processing attempts, sanitized error codes, and no webhook bodies |
 | container_plan_transitions | One idempotent in-place transition per container with exact claimed deltas and prior runtime state |
 

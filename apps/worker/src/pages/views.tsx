@@ -226,47 +226,6 @@ export const AccountPage: FC<{
     <Layout title="Account" loggedIn notificationCount={unreadNotificationCount}>
       <h1>{welcome ? "Your account is ready." : "Account."}</h1>
       <p class="lead">Manage your plan, passkeys, credentials, and notifications.</p>
-      {billing ? (
-        <section id="billing" class="card" aria-labelledby="billing-heading">
-          <div class="card-head">
-            <h2 id="billing-heading">Plan</h2>
-            <span class={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
-              {billing.entitlement.plan ?? "No active plan"}
-            </span>
-          </div>
-          {billing.billing?.source === "stripe" && billing.subscription &&
-          !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
-            <>
-              <p>
-                Paid · {billing.billing.state.replaceAll("_", " ")}
-                {billing.billing.state === "trialing" && billing.billing.trialUntil
-                  ? ` · trial ends ${new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}`
-                  : billing.billing.state === "expired" && billing.subscription.trialEnd
-                  ? " · trial access ended"
-                  : billing.billing.serviceUntil
-                  ? ` · ${billing.subscription.cancelAtPeriodEnd ? "paid until" : "current paid period ends"} ${new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}`
-                  : " · confirming payment"}
-              </p>
-              <button id="billing-portal-btn" class="btn secondary" type="button">
-                {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
-              </button>
-            </>
-          ) : billing.billing?.source === "manual" ? (
-            <p>Operator-managed {billing.billing.plan} entitlement.</p>
-          ) : billing.configured ? (
-            <>
-              <p>
-                Upgrade to 2 vCPU, 4 GB RAM, and 8 GB persistent home storage
-                {billing.paidPlan ? ` with a ${billing.paidPlan.display}` : ""}.
-              </p>
-              <button id="billing-checkout-btn" class="btn primary" type="button">
-                Start 7-day Paid trial →
-              </button>
-            </>
-          ) : <p class="muted">Paid subscriptions are not available yet.</p>}
-          <p id="billing-status" class="muted" role="status" aria-live="polite"></p>
-        </section>
-      ) : null}
       <section id="notifications" class="card" aria-labelledby="notifications-heading" data-unread-count={unreadNotificationCount}>
         <div class="card-head">
           <h2 id="notifications-heading">Notifications</h2>
@@ -316,6 +275,47 @@ export const AccountPage: FC<{
         ) : null}
         <p id="notifications-status" class="muted" role="status" aria-live="polite"></p>
       </section>
+      {billing ? (
+        <section id="billing" class="card" aria-labelledby="billing-heading">
+          <div class="card-head">
+            <h2 id="billing-heading">Plan</h2>
+            <span class={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
+              {billing.entitlement.plan ?? "No active plan"}
+            </span>
+          </div>
+          {billing.billing?.source === "stripe" && billing.subscription &&
+          !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
+            <>
+              <p>
+                Paid · {billing.billing.state.replaceAll("_", " ")}
+                {billing.billing.state === "trialing" && billing.billing.trialUntil
+                  ? ` · trial ends ${new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}`
+                  : billing.billing.state === "expired" && billing.subscription.trialEnd
+                  ? " · trial access ended"
+                  : billing.billing.serviceUntil
+                  ? ` · ${billing.subscription.cancelAtPeriodEnd ? "paid until" : "current paid period ends"} ${new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}`
+                  : " · confirming payment"}
+              </p>
+              <button id="billing-portal-btn" class="btn secondary" type="button">
+                {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
+              </button>
+            </>
+          ) : billing.billing?.source === "manual" ? (
+            <p>Operator-managed {billing.billing.plan} entitlement.</p>
+          ) : billing.configured ? (
+            <>
+              <p>
+                Upgrade to 2 vCPU, 4 GB RAM, and 8 GB persistent home storage
+                {billing.paidPlan ? ` with a ${billing.paidPlan.display}` : ""}.
+              </p>
+              <button id="billing-checkout-btn" class="btn primary" type="button">
+                Start 7-day Paid trial →
+              </button>
+            </>
+          ) : <p class="muted">Paid subscriptions are not available yet.</p>}
+          <p id="billing-status" class="muted" role="status" aria-live="polite"></p>
+        </section>
+      ) : null}
       <section class="card" aria-labelledby="passkeys-heading">
         <div class="card-head">
           <h2 id="passkeys-heading">Passkeys</h2>
