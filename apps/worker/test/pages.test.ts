@@ -117,7 +117,7 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("presents the free capacity first and labels the larger tier as Premium", () => {
+  it("presents the free capacity first and shows the paid price", () => {
     const html = String(LandingPage({ devAuth: false }));
     const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
@@ -131,9 +131,9 @@ describe("landing page call to action", () => {
       '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
     );
     expect(html).toContain(
-      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">premium</span>'
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">$6/mo</span>'
     );
-    expect(html).toContain('<span class="tier-label">premium</span>');
+    expect(html).toContain('<span class="tier-label">$6/mo</span>');
     expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
     expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");
     expect(html.indexOf(freeTier)).toBeLessThan(html.indexOf(premiumTier));
@@ -204,8 +204,12 @@ describe("account eligibility verification", () => {
     expect(html).toContain('id="account-verification-root"');
     expect(html).toContain('data-world-id-available="true"');
     expect(html).toContain('src="/account.js"');
-    expect(html).toContain("World ID");
-    expect(html).toContain("invite");
+    expect(accountClient).toContain("Verify with World ID");
+    expect(html).toContain("The free tier is limited to one account per person and requires account verification.");
+    expect(accountClient).toContain("Have an invite code?");
+    expect(accountClient).toContain('from "@base-ui/react/otp-field"');
+    expect(accountClient).toContain("length={8}");
+    expect(accountClient).toContain('validationType="alphanumeric"');
     expect(html).toContain('href="http://x.com/messages/compose?recipient_id=1488260920564490242"');
     expect(html).toContain(">Request Invite</a>");
     expect(html).toContain('target="_blank"');
@@ -310,6 +314,7 @@ describe("account page", () => {
       },
     }));
     expect(account.indexOf('id="notifications"')).toBeLessThan(account.indexOf('id="billing"'));
+    expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 5.99/month.");
   });
 
   it("wires destructive actions to authenticated endpoints", () => {
@@ -435,8 +440,16 @@ describe("subscription sign-in wiring", () => {
     expect(dashboardClient).toContain("Workbench configuration");
     expect(dashboardClient).not.toContain("Set up your workbench");
     expect(dashboardClient).not.toContain("Set up workbench →");
-    expect(dashboardClient).toContain("1 vCPU 1.5GB RAM");
-    expect(dashboardClient).toContain("2 vCPU 4GB RAM");
+    expect(dashboardClient).toContain("Machine");
+    expect(dashboardClient).toContain("1 vCPU · 1.5 GB RAM");
+    expect(dashboardClient).toContain("2 vCPU · 4.0 GB RAM");
+    expect(dashboardClient).toContain('type="radio"');
+    expect(dashboardClient).toContain("Create");
+    expect(dashboardClient).toContain("Continue");
+    expect(dashboardClient).toContain("Verify to create a Free instance");
+    expect(dashboardClient).toContain("Upgrade to Premium");
+    expect(dashboardClient).not.toContain("Create an instance");
+    expect(dashboardClient).not.toContain("Your saved configuration will be installed on the instance you choose.");
     expect(dashboardClient).toContain('href="/verify"');
     expect(dashboardClient).toContain('void deploy("free")');
     expect(dashboardClient).toContain('void deploy("paid")');

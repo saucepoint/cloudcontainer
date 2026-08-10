@@ -131,6 +131,11 @@ const ACCOUNT_STATE_LABELS: Record<DashboardSnapshot["account"]["state"], string
   verified_premium: "Verified premium",
 };
 
+const MACHINE_SPECS: Record<Tier, string> = {
+  free: "1 vCPU · 1.5 GB RAM",
+  paid: "2 vCPU · 4.0 GB RAM",
+};
+
 function configuredIntegrations(credentials: DashboardSnapshot["credentials"]): string[] {
   const integrations = Object.keys(credentials.llm)
     .filter((provider) => credentials.llm[provider])
@@ -147,11 +152,13 @@ function ConfigurationSummary({
   configuration,
   credentials,
   sshKeyCount,
+  selectedTier,
   editable,
 }: {
   configuration: NonNullable<DashboardSnapshot["configuration"]>;
   credentials: DashboardSnapshot["credentials"];
   sshKeyCount: number;
+  selectedTier: Tier;
   editable: boolean;
 }) {
   const integrations = configuredIntegrations(credentials);
@@ -162,6 +169,7 @@ function ConfigurationSummary({
         <div><dt>Agents</dt><dd>{configuration.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}</dd></div>
         <div><dt>Integrations</dt><dd>{integrations.length ? integrations.join(", ") : "None"}</dd></div>
         <div><dt>Repositories</dt><dd>{configuration.githubRepos.length ? configuration.githubRepos.join(", ") : "None"}</dd></div>
+        <div><dt>Machine</dt><dd>{MACHINE_SPECS[selectedTier]}</dd></div>
         <div><dt>SSH keys</dt><dd>{sshKeyCount}</dd></div>
       </dl>
       {editable ? <a className="btn secondary" href="/configure">Edit configuration</a> : null}
@@ -177,6 +185,7 @@ function DashboardApp() {
   const [credentials, setCredentials] = React.useState<DashboardSnapshot["credentials"] | null>(null);
   const [billing, setBilling] = React.useState<DashboardSnapshot["billing"] | null>(null);
   const [account, setAccount] = React.useState<DashboardSnapshot["account"] | null>(null);
+  const [selectedTier, setSelectedTier] = React.useState<Tier>("free");
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [actionBusy, setActionBusy] = React.useState(false);
@@ -364,6 +373,7 @@ function DashboardApp() {
           configuration={configuration}
           credentials={credentials}
           sshKeyCount={keys.length}
+          selectedTier={container?.tier ?? selectedTier}
           editable={!container}
         />
       ) : null}
@@ -376,38 +386,64 @@ function DashboardApp() {
         />
       ) : null}
       {!pageError && configuration && !container && account ? (
-        <section className="card" aria-labelledby="create-instance-heading">
-          <h2 id="create-instance-heading">Create an instance</h2>
-          <p className="muted">Your saved configuration will be installed on the instance you choose.</p>
-          <div className="workbench-choice-grid">
-            <div>
-              <h3>Free</h3>
-              <p className="muted">Available after one-person verification.</p>
-              {account.verified ? (
-                <button className="btn secondary" type="button" disabled={actionBusy} onClick={() => void deploy("free")}>
-                  1 vCPU 1.5GB RAM
+        <section className="instance-creation">
+          <fieldset className="instance-tier-picker">
+            <legend>Choose a tier</legend>
+            <div className="instance-tier-options">
+              <label className={`instance-tier-option${selectedTier === "free" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="instance-tier"
+                  value="free"
+                  checked={selectedTier === "free"}
+                  onChange={() => setSelectedTier("free")}
+                />
+                <span>
+                  <strong>Free</strong>
+                  <small>{MACHINE_SPECS.free}</small>
+                </span>
+              </label>
+              <label className={`instance-tier-option${selectedTier === "paid" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="instance-tier"
+                  value="paid"
+                  checked={selectedTier === "paid"}
+                  onChange={() => setSelectedTier("paid")}
+                />
+                <span>
+                  <strong>Premium</strong>
+                  <small>{MACHINE_SPECS.paid} · $6/mo</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <div className="instance-cta">
+            {selectedTier === "free" ? (
+              account.verified ? (
+                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("free")}>
+                  Create
                 </button>
               ) : (
-                <a className="btn secondary" href="/verify">1 vCPU 1.5GB RAM</a>
-              )}
-              {!account.verified ? <p className="choice-hint">Verify to create the Free instance.</p> : null}
-            </div>
-            <div>
-              <h3>Premium</h3>
-              <p className="muted">{billing?.paidPlan?.display ?? "More resources and persistent storage."}</p>
-              {account.premium ? (
-                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("paid")}>
-                  2 vCPU 4GB RAM
-                </button>
-              ) : billing?.configured ? (
-                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
-                  2 vCPU 4GB RAM
-                </button>
-              ) : (
-                <button className="btn primary" type="button" disabled>2 vCPU 4GB RAM</button>
-              )}
-              {!account.premium ? <p className="choice-hint">Upgrade to Premium to create this instance.</p> : null}
-            </div>
+                <a className="btn primary" href="/verify">Continue</a>
+              )
+            ) : account.premium ? (
+              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("paid")}>
+                Create
+              </button>
+            ) : billing?.configured ? (
+              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
+                Continue
+              </button>
+            ) : (
+              <button className="btn primary" type="button" disabled>Continue</button>
+            )}
+            {selectedTier === "free" && !account.verified ? (
+              <p className="choice-hint">Verify to create a Free instance</p>
+            ) : null}
+            {selectedTier === "paid" && !account.premium ? (
+              <p className="choice-hint">Upgrade to Premium</p>
+            ) : null}
           </div>
         </section>
       ) : null}

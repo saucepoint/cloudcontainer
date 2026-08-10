@@ -85,7 +85,7 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
         </li>
         <li>
           <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
-          <span class="tier-label">premium</span>
+          <span class="tier-label">$6/mo</span>
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -130,9 +130,7 @@ export const VerificationPage: FC<{
   >
     <h1>Verify your account.</h1>
     <p class="lead">
-      The free tier is limited to one account per person. {worldIdAvailable
-        ? "Verify with World ID or redeem a single-use invite"
-        : "Redeem a single-use invite"} before creating a free workbench.
+      The free tier is limited to one account per person and requires account verification.
     </p>
     <div
       id="account-verification-root"
@@ -301,10 +299,7 @@ export const AccountPage: FC<{
             <p>Operator-managed {billing.billing.plan} entitlement.</p>
           ) : billing.configured ? (
             <>
-              <p>
-                Upgrade to 2 vCPU, 4 GB RAM, and 8 GB persistent home storage
-                {billing.paidPlan ? ` with a ${billing.paidPlan.display}` : ""}.
-              </p>
+              <p>Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 5.99/month.</p>
               <button id="billing-checkout-btn" class="btn primary" type="button">
                 Start 7-day Premium trial →
               </button>

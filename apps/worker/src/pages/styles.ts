@@ -140,7 +140,8 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .agent-choice { grid-column: 1; grid-row: 1; display: flex; min-height: 6.2rem; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.85rem 1rem;
   color: var(--ink); background: transparent; border: 0; border-radius: 0; cursor: pointer; font-size: 0.94rem; }
-.agent-choice:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
+.agent-choice:focus-within { outline: none; }
+.agent:has(.agent-choice:focus-within) { outline: 2px solid var(--focus); outline-offset: -2px; }
 .agent-checkbox { display: inline-flex; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; align-items: center; justify-content: center;
   margin-top: 0.12rem; border: 1px solid var(--line-strong); color: transparent; font-family: var(--mono); font-size: 0.8rem; line-height: 1; }
 .agent-choice input:checked + .agent-checkbox { border-color: var(--accent); background: var(--accent); color: #fff; }
@@ -151,8 +152,6 @@ legend { width: 100%; margin: 0 0 1rem; color: var(--ink); }
 .agent-logo svg { display: block; width: 100%; height: 100%; }
 .agent-logo-claude { color: #d97757; }
 .agent small { display: block; color: var(--muted); font-weight: 400; line-height: 1.35; margin-top: 0.25rem; }
-.agent:has(input:checked), .agent:has(input:checked):hover { background: var(--accent-soft); }
-.agent:has(input:checked) .agent-choice { color: var(--accent); background: var(--accent-soft); }
 .agent-signins { display: grid; gap: 0.5rem; padding: 0 1rem 0.85rem; }
 .agent-auth { min-width: 0; }
 .agent-signin { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
@@ -306,12 +305,21 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .configuration-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .configuration-api-keys { margin-top: 1.35rem; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
-.workbench-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
-.workbench-choice-grid > div { padding-top: 0.85rem; border-top: 1px solid var(--line); }
-.workbench-choice-grid h3 { margin: 0; }
-.workbench-choice-grid p { min-height: 2.5rem; }
-.workbench-choice-grid .choice-hint { min-height: 0; margin: 0.4rem 0 0; color: var(--muted);
-  font-size: 0.76rem; }
+.instance-creation { margin-top: 1.5rem; }
+.instance-tier-picker { margin-top: 0; }
+.instance-tier-picker legend { margin-bottom: 0.55rem; }
+.instance-tier-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+.instance-tier-option { display: flex; gap: 0.65rem; align-items: flex-start; margin: 0; padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+.instance-tier-option:hover, .instance-tier-option.selected { border-color: var(--accent); background: var(--accent-soft); }
+.instance-tier-option input { appearance: none; position: relative; width: 1rem; height: 1rem; flex: 0 0 auto; margin: 0.22rem 0 0; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--field); }
+.instance-tier-option input:checked { border-color: var(--accent); }
+.instance-tier-option input:checked::after { content: ""; position: absolute; inset: 0.22rem; border-radius: 50%; background: var(--accent); }
+.instance-tier-option input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.instance-tier-option span { display: grid; gap: 0.2rem; min-width: 0; }
+.instance-tier-option small { color: var(--muted); font-size: 0.78rem; }
+.instance-cta { display: grid; justify-items: start; gap: 0.35rem; margin-top: 1.1rem; }
+.instance-cta .choice-hint { margin: 0; color: var(--muted); font-size: 0.76rem; }
 .row.flush, form.flush { margin: 0; }
 .github-connected { display: inline-flex; align-items: center; gap: 0.45rem; align-self: center;
   color: var(--muted); font-size: 0.86rem; }
@@ -417,8 +425,14 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .auth-status { min-height: 1.3em; margin: 0; }
 .auth-status:empty { display: none; }
 .auth-dev-option { margin-top: 1rem; }
-.auth-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
+.auth-code-row { display: grid; gap: 0.7rem; align-items: start; }
+.auth-code-row .btn { justify-self: start; }
 .auth-code-row input { letter-spacing: 0.18em; text-transform: uppercase; }
+.otp-field { display: flex; gap: 0.45rem; min-height: 2.75rem; }
+.otp-field input { width: 2.45rem; height: 2.75rem; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--field); color: var(--ink); font-family: var(--mono); font-size: 1.05rem; text-align: center; text-transform: uppercase; }
+.otp-field input:hover { border-color: var(--line-strong); }
+.otp-field input:focus { background: #fff; border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
 .verification-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .verification-option { margin: 0; }
 .verification-option h2 { margin-top: 0; }
@@ -473,8 +487,11 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .ssh-key-actions { justify-content: flex-start; }
   .ssh-key-toolbar { align-items: flex-start; flex-direction: column; }
   .ssh-key-toolbar-actions { width: 100%; justify-content: flex-start; }
-  .auth-code-row, .verification-grid, .workbench-choice-grid { grid-template-columns: 1fr; gap: 0.35rem; }
+  .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
+  .instance-tier-options { grid-template-columns: 1fr; gap: 0.35rem; }
   .auth-code-row .btn { justify-self: start; }
+  .otp-field { gap: 0.35rem; }
+  .otp-field input { width: 2.35rem; }
   .terminal-titlebar { grid-template-columns: 4rem minmax(0, 1fr) 4rem; padding: 0 0.65rem; }
   .terminal-screen { min-height: 19.44rem; padding: 0.95rem 0.85rem 0.9rem; font-size: 0.64rem; }
   .terminal-codex-input { min-height: 9.9rem; }
