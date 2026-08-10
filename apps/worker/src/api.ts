@@ -5,12 +5,12 @@ import {
   INPUT_LIMITS,
   toHex,
   type JobOp,
+  type Tier,
 } from "@workbench/contract";
 import { billingStatusForUser } from "./billing.js";
 import {
   requireAccount,
   requireCredentialSetup,
-  requireUser,
 } from "./auth.js";
 import {
   CREDENTIAL_CATEGORIES,
@@ -42,6 +42,7 @@ import {
   LifecycleJobConflictError,
 } from "./jobs.js";
 import { ProvisioningNotAllowedError, startProvision } from "./placement.js";
+import { accountAccessForUser } from "./entitlements.js";
 import { cancelUnreservedPlanTransition } from "./plan-transitions.js";
 import { readJsonBody } from "./http.js";
 import {
@@ -69,6 +70,10 @@ import {
   validPubkey,
 } from "./ssh.js";
 import type { AppContext, ContainerRow } from "./types.js";
+import {
+  getWorkbenchConfiguration,
+  putWorkbenchConfiguration,
+} from "./workbench-configuration.js";
 
 const ENROLLMENT_TOKEN_TTL_SEC = 3600;
 const SSH_SETUP_NOT_READY_ERROR =
@@ -116,7 +121,7 @@ async function validateDeveloperTokens(
   return results.find((result) => result !== null) ?? null;
 }
 
-const deleteCredentials = async (c: Parameters<typeof requireUser>[0]) => {
+const deleteCredentials = async (c: Parameters<typeof requireAccount>[0]) => {
   const userId = c.get("user").id;
   await deleteStoredCredentials(c.env, userId);
   // Send an empty snapshot to a running workbench so the host does not retain
@@ -135,11 +140,11 @@ export const apiRoutes = new Hono<AppContext>()
   // ------------------------------------------------------------ setup draft
   // Drafts contain only non-secret selections and expire after one day. The
   // credential flows continue to persist their encrypted values separately.
-  .get("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+  .get("/api/setup-draft", requireAccount, requireCredentialSetup, async (c) => {
     c.header("cache-control", "no-store");
     return c.json({ draft: await getSetupDraft(c.env, c.get("user").id) });
   })
-  .put("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+  .put("/api/setup-draft", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<unknown>(c);
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return c.json({ error: "bad request" }, 400);
@@ -151,19 +156,23 @@ export const apiRoutes = new Hono<AppContext>()
       draft: await putSetupDraft(c.env, c.get("user").id, normalized.value),
     });
   })
-  .delete("/api/setup-draft", requireUser, requireCredentialSetup, async (c) => {
+  .delete("/api/setup-draft", requireAccount, requireCredentialSetup, async (c) => {
     await deleteSetupDraft(c.env, c.get("user").id);
     return c.json({ ok: true });
   })
-  .delete("/api/setup-draft/:category", requireUser, requireCredentialSetup, async (c) => {
+  .delete("/api/setup-draft/:category", requireAccount, requireCredentialSetup, async (c) => {
     const category = c.req.param("category");
     if (!isSetupDraftCategory(category)) return c.json({ error: "unknown setup draft category" }, 400);
     const draft = await clearSetupDraftCategory(c.env, c.get("user").id, category);
     return c.json({ ok: true, draft });
   })
 
-  // ------------------------------------------------------------------ provision
-  .post("/api/provision", requireUser, async (c) => {
+  // ------------------------------------------------------- saved configuration
+  .get("/api/configuration", requireAccount, requireCredentialSetup, async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json({ configuration: await getWorkbenchConfiguration(c.env, c.get("user").id) });
+  })
+  .put("/api/configuration", requireAccount, requireCredentialSetup, async (c) => {
     const user = c.get("user");
     const body = await readJsonBody<{
       agents?: string[];
@@ -182,9 +191,6 @@ export const apiRoutes = new Hono<AppContext>()
     if (!body || agents.length === 0 || agents.length !== requested.size) {
       return c.json({ error: `pick at least one agent: ${AGENTS.join(", ")}` }, 400);
     }
-    const existing = await getContainerForUser(c.env, user.id);
-    if (existing) return c.json({ error: "A workbench already exists for this account." }, 409);
-
     if (body.sshPubkey !== undefined && typeof body.sshPubkey !== "string") {
       return c.json({ error: "SSH public key must be text" }, 400);
     }
@@ -203,7 +209,7 @@ export const apiRoutes = new Hono<AppContext>()
     }
     const normalized = normalizeCredentialInput(body);
     if ("error" in normalized) return c.json({ error: normalized.error }, 400);
-    const validationIssue = await validateDeveloperTokens(normalized.value, true);
+    const validationIssue = await validateDeveloperTokens(normalized.value, false);
     if (validationIssue) return c.json({ error: validationIssue.error }, validationIssue.status);
 
     if (body.githubRepos !== undefined && !Array.isArray(body.githubRepos)) {
@@ -297,20 +303,51 @@ export const apiRoutes = new Hono<AppContext>()
       });
     }
 
+    const configuration = await putWorkbenchConfiguration(c.env, user.id, { agents, githubRepos });
+    await deleteSetupDraft(c.env, user.id);
+    return c.json({ configuration });
+  })
+
+  // -------------------------------------------------------------- deployment
+  .post("/api/deploy", requireAccount, async (c) => {
+    const user = c.get("user");
+    const body = await readJsonBody<{ tier?: unknown }>(c);
+    if (!body || (body.tier !== "free" && body.tier !== "paid")) {
+      return c.json({ error: "Choose the Free or Premium instance." }, 400);
+    }
+    const tier = body.tier as Tier;
+    const existing = await getContainerForUser(c.env, user.id);
+    if (existing) return c.json({ error: "A workbench already exists for this account." }, 409);
+    const configuration = await getWorkbenchConfiguration(c.env, user.id);
+    if (!configuration) {
+      return c.json({
+        error: "Save your workbench configuration before creating an instance.",
+        redirect: "/configure",
+      }, 409);
+    }
+    const access = await accountAccessForUser(c.env, user);
+    if (tier === "free" && !access.verified) {
+      return c.json({
+        error: "Verify your account before creating a Free instance.",
+        redirect: "/verify",
+      }, 403);
+    }
+    if (tier === "paid" && !access.premium) {
+      return c.json({
+        error: "Start a Premium subscription before creating a Premium instance.",
+        redirect: "/account#billing",
+      }, 403);
+    }
     let container: ContainerRow;
     try {
-      container = await startProvision(c.env, user, {
-        agents,
-        githubRepos,
-      });
+      container = await startProvision(c.env, user, configuration, tier);
     } catch (error) {
       if (error instanceof ProvisioningNotAllowedError) {
-        return c.json({ error: "This account is not currently eligible to provision a workbench." }, 409);
+        return c.json({ error: "Your account state changed. Refresh the dashboard and try again." }, 409);
       }
       throw error;
     }
     const job = await latestJob(c.env, container.id);
-    await deleteSetupDraft(c.env, user.id);
     return c.json({ container: await containerView(c.env, container, job) }, 202);
   })
 
@@ -323,12 +360,15 @@ export const apiRoutes = new Hono<AppContext>()
   .get("/api/dashboard", requireAccount, async (c) => {
     const user = c.get("user");
     const userId = user.id;
-    const [container, keys, billing] = await Promise.all([
+    const [container, configuration, keys, credentials, billing, account] = await Promise.all([
       currentContainerView(c.env, userId),
+      getWorkbenchConfiguration(c.env, userId),
       sshKeysView(c.env, userId),
+      credentialsView(c.env, userId),
       billingStatusForUser(c.env, user),
+      accountAccessForUser(c.env, user),
     ]);
-    return c.json({ container, keys, billing });
+    return c.json({ container, configuration, keys, credentials, billing, account });
   })
 
   // ---------------------------------------------------------- notifications
@@ -341,11 +381,11 @@ export const apiRoutes = new Hono<AppContext>()
     c.header("cache-control", "no-store");
     return c.json({ notifications, unreadCount });
   })
-  .post("/api/notifications/:id/read", requireUser, async (c) => {
+  .post("/api/notifications/:id/read", requireAccount, async (c) => {
     await markNotificationRead(c.env, c.get("user").id, c.req.param("id"));
     return c.json({ ok: true });
   })
-  .post("/api/notifications/read-all", requireUser, async (c) => {
+  .post("/api/notifications/read-all", requireAccount, async (c) => {
     await markAllNotificationsRead(c.env, c.get("user").id);
     return c.json({ ok: true });
   })
@@ -368,7 +408,7 @@ export const apiRoutes = new Hono<AppContext>()
     if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
     return c.json({ error: "Placement has already started; it cannot be withdrawn now." }, 409);
   })
-  .post("/api/container/:op", requireUser, async (c) => {
+  .post("/api/container/:op", requireAccount, async (c) => {
     const user = c.get("user");
     const op = c.req.param("op");
     let container = await getContainerForUser(c.env, user.id);
@@ -432,11 +472,11 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ ssh keys
-  .get("/api/keys", requireUser, async (c) => {
+  .get("/api/keys", requireAccount, async (c) => {
     c.header("cache-control", "no-store");
     return c.json({ keys: await sshKeysView(c.env, c.get("user").id) });
   })
-  .get("/api/keys/github", requireUser, async (c) => {
+  .get("/api/keys/github", requireAccount, async (c) => {
     c.header("cache-control", "no-store");
     const username = c.req.query("username")?.trim() ?? "";
     if (!validGithubUsername(username)) return c.json({ error: "enter a valid GitHub username" }, 400);
@@ -447,7 +487,7 @@ export const apiRoutes = new Hono<AppContext>()
       return c.json({ error: "Could not load that GitHub user's public SSH keys" }, 502);
     }
   })
-  .post("/api/keys", requireUser, async (c) => {
+  .post("/api/keys", requireAccount, async (c) => {
     if (!(await sshSetupReady(c.env, c.get("user").id))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
     }
@@ -467,7 +507,7 @@ export const apiRoutes = new Hono<AppContext>()
     await enqueueJobForUser(c.env, c.get("user").id, "sync-keys");
     return c.json({ ok: true, duplicate: inserted === "duplicate" });
   })
-  .post("/api/keys/import/github", requireUser, async (c) => {
+  .post("/api/keys/import/github", requireAccount, async (c) => {
     const userId = c.get("user").id;
     if (!(await sshSetupReady(c.env, userId))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
@@ -518,7 +558,7 @@ export const apiRoutes = new Hono<AppContext>()
       keys: await sshKeysView(c.env, userId),
     });
   })
-  .patch("/api/keys/:id", requireUser, async (c) => {
+  .patch("/api/keys/:id", requireAccount, async (c) => {
     const userId = c.get("user").id;
     if (!(await sshSetupReady(c.env, userId))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
@@ -534,7 +574,7 @@ export const apiRoutes = new Hono<AppContext>()
     if (!updated.meta.changes) return c.json({ error: "SSH key not found" }, 404);
     return c.json({ ok: true, keys: await sshKeysView(c.env, userId) });
   })
-  .delete("/api/keys/:id", requireUser, async (c) => {
+  .delete("/api/keys/:id", requireAccount, async (c) => {
     if (!(await sshSetupReady(c.env, c.get("user").id))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);
     }
@@ -546,19 +586,19 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ credentials
-  .get("/api/credentials", requireUser, async (c) => {
+  .get("/api/credentials", requireAccount, async (c) => {
     return c.json(await credentialsView(c.env, c.get("user").id));
   })
-  .delete("/api/credentials", requireUser, deleteCredentials)
-  .delete("/api/credentials/:category", requireUser, requireCredentialSetup, async (c) => {
+  .delete("/api/credentials", requireAccount, deleteCredentials)
+  .delete("/api/credentials/:category", requireAccount, requireCredentialSetup, async (c) => {
     const category = c.req.param("category");
     if (!isCredentialCategory(category)) return c.json({ error: "unknown credential category" }, 400);
     await deleteStoredCredentialCategory(c.env, c.get("user").id, category);
     return c.json({ ok: true });
   })
   // Keep a POST form for clients that do not issue DELETE requests.
-  .post("/api/credentials/delete", requireUser, deleteCredentials)
-  .post("/api/credentials", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/credentials/delete", requireAccount, deleteCredentials)
+  .post("/api/credentials", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<CredentialInput>(c);
     if (!body) return c.json({ error: "bad request" }, 400);
     const normalized = normalizeCredentialInput(body);
@@ -587,7 +627,7 @@ export const apiRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ enrollment (no-key path, U4)
-  .post("/api/enrollment", requireUser, async (c) => {
+  .post("/api/enrollment", requireAccount, async (c) => {
     const user = c.get("user");
     if (!(await sshSetupReady(c.env, user.id))) {
       return c.json({ error: SSH_SETUP_NOT_READY_ERROR }, 409);

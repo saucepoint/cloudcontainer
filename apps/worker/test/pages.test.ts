@@ -8,7 +8,7 @@ import {
   CliAuthPage,
   LandingPage,
   NotFoundPage,
-  OnboardingPage,
+  ConfigurePage,
   SecurityPage,
   TermsPage,
   VerificationPage,
@@ -25,7 +25,7 @@ function inlineScriptsOf(html: string): string[] {
 const landingClient = readFileSync(new URL("../client/landing.tsx", import.meta.url), "utf8");
 const accountClient = readFileSync(new URL("../client/account.tsx", import.meta.url), "utf8");
 const securityClient = readFileSync(new URL("../client/security.ts", import.meta.url), "utf8");
-const onboardingClient = readFileSync(new URL("../client/onboarding.ts", import.meta.url), "utf8");
+const configureClient = readFileSync(new URL("../client/configure.ts", import.meta.url), "utf8");
 const authFlowsClient = readFileSync(new URL("../client/auth-flows.tsx", import.meta.url), "utf8");
 const dashboardClient = [
   "dashboard.tsx",
@@ -39,10 +39,10 @@ const pages: Array<[string, () => unknown]> = [
   ["landing", () => LandingPage({ devAuth: false })],
   ["security", () => SecurityPage({
     passkeyCount: 0,
-    continueHref: "/onboarding",
+    continueHref: "/dashboard",
     welcome: true,
   })],
-  ["onboarding", () => OnboardingPage({})],
+  ["configure", () => ConfigurePage({})],
   ["dashboard", () => DashboardPage({})],
   ["cli-auth", () => CliAuthPage({ attempt: "a".repeat(64), provider: "google" })],
 ];
@@ -116,7 +116,7 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("presents the free capacity first and labels the larger tier as upcoming", () => {
+  it("presents the free capacity first and labels the larger tier as Premium", () => {
     const html = String(LandingPage({ devAuth: false }));
     const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
@@ -130,9 +130,9 @@ describe("landing page call to action", () => {
       '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
     );
     expect(html).toContain(
-      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="muted tier-label">coming soon</span>'
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">premium</span>'
     );
-    expect(html).toContain('<span class="muted tier-label">coming soon</span>');
+    expect(html).toContain('<span class="tier-label">premium</span>');
     expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
     expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");
     expect(html.indexOf(freeTier)).toBeLessThan(html.indexOf(premiumTier));
@@ -177,7 +177,7 @@ describe("sign-in button icons", () => {
   });
 
   it("inlines Radix icons into the GitHub onboarding actions", () => {
-    const html = String(OnboardingPage({ githubAvailable: true }));
+    const html = String(ConfigurePage({ githubAvailable: true }));
     const copilot = html.slice(
       html.indexOf('id="copilot-signin"'),
       html.indexOf('id="copilot-signin"') + 2000,
@@ -198,7 +198,7 @@ describe("sign-in button icons", () => {
 });
 
 describe("account eligibility verification", () => {
-  it("offers World ID and invite verification before onboarding", () => {
+  it("offers only World ID and invite verification", () => {
     const html = String(VerificationPage({ worldIdAvailable: true }));
     expect(html).toContain('id="account-verification-root"');
     expect(html).toContain('data-world-id-available="true"');
@@ -209,6 +209,11 @@ describe("account eligibility verification", () => {
     expect(html).toContain(">Request Invite</a>");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain("Premium");
+    expect(html).not.toContain("paid-available");
+    expect(accountClient).not.toContain("Continue with Premium");
+    expect(accountClient).not.toContain("/api/billing/checkout");
+    expect(accountClient).not.toContain("usePaid");
   });
 
   it("omits the World ID action when the deployment is not configured", () => {
@@ -316,7 +321,7 @@ describe("account page", () => {
 
 describe("subscription sign-in wiring", () => {
   it("onboarding offers every subscription sign-in and no auth.json paste path", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     for (const flow of [
       "claudeOauthFlow",
       "codexDeviceFlow",
@@ -325,7 +330,7 @@ describe("subscription sign-in wiring", () => {
       "convexOauthFlow",
     ]) {
       expect(authFlowsClient).toContain(`export const ${flow}`);
-      expect(onboardingClient).toContain(flow);
+      expect(configureClient).toContain(flow);
     }
     expect(html).toContain("Sign in with Claude");
     expect(html).toContain("Sign in with ChatGPT");
@@ -339,10 +344,10 @@ describe("subscription sign-in wiring", () => {
       "opencode-claude-signin",
     ]) {
       expect(html).toContain(`id="${id}"`);
-      expect(onboardingClient).toContain(`wireSignin("${id.slice(0, -"-signin".length)}"`);
+      expect(configureClient).toContain(`wireSignin("${id.slice(0, -"-signin".length)}"`);
     }
-    expect(onboardingClient).toContain('chatgptOauthFlow("pi")');
-    expect(onboardingClient).toContain('claudeOauthFlowFor("opencode")');
+    expect(configureClient).toContain('chatgptOauthFlow("pi")');
+    expect(configureClient).toContain('claudeOauthFlowFor("opencode")');
     expect(html).not.toContain("Wrangler sign-in");
     const cloudflare = html.slice(html.indexOf("Connect Cloudflare"), html.indexOf("</details>", html.indexOf("Connect Cloudflare")));
     expect(cloudflare).toContain('<div class="provider-head">');
@@ -354,7 +359,7 @@ describe("subscription sign-in wiring", () => {
   });
 
   it("places the collapsed API-key section directly below agent selection", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     const agents = html.indexOf("1. Coding agents");
     const apiKeys = html.indexOf("Add API keys");
     const advanced = html.indexOf("2. Advanced");
@@ -397,7 +402,7 @@ describe("subscription sign-in wiring", () => {
   });
 
   it("reuses the agent marks in every setup choice", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     for (const agent of ["pi", "claude", "codex", "opencode"]) {
       expect(html).toContain(`class="agent-logo agent-logo-${agent}"`);
     }
@@ -424,11 +429,16 @@ describe("subscription sign-in wiring", () => {
     expect(html).not.toContain("Changes apply without a restart");
   });
 
-  it("offers free verification and premium setup choices without a dashboard Plan section", () => {
-    expect(dashboardClient).toContain('billing?.entitlement.plan === "free"');
-    expect(dashboardClient).toContain("Create a free workbench");
-    expect(dashboardClient).toContain("Create a premium workbench");
-    expect(dashboardClient).toContain('href="/onboarding"');
+  it("separates configuration from Free and Premium instance creation", () => {
+    expect(dashboardClient).toContain('href="/configure"');
+    expect(dashboardClient).toContain("Workbench configuration");
+    expect(dashboardClient).toContain("1 vCPU 1.5GB RAM");
+    expect(dashboardClient).toContain("2 vCPU 4GB RAM");
+    expect(dashboardClient).toContain('href="/verify"');
+    expect(dashboardClient).toContain('void deploy("free")');
+    expect(dashboardClient).toContain('void deploy("paid")');
+    expect(dashboardClient).toContain('"/api/deploy"');
+    expect(dashboardClient).not.toContain('href="/onboarding"');
     expect(dashboardClient).not.toContain('id="dashboard-plan-heading"');
     expect(dashboardClient).not.toContain(">Plan</h2>");
     expect(dashboardClient).not.toContain("Continue checkout");
@@ -438,7 +448,7 @@ describe("subscription sign-in wiring", () => {
 
 describe("onboarding wizard order", () => {
   it("keeps API keys below agents and SSH keys inside Advanced", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     const agents = html.indexOf("1. Coding agents");
     const apiKeys = html.indexOf("Add API keys");
     const advanced = html.indexOf("2. Advanced");
@@ -452,12 +462,12 @@ describe("onboarding wizard order", () => {
     expect(html).toContain('id="stored-ssh-keys"');
     expect(html).toContain('id="show-github-ssh-import"');
     expect(html).toContain('id="github-ssh-keys"');
-    expect(onboardingClient).toContain("/api/keys/github?username=");
-    expect(onboardingClient).toContain("sshKeyLabel");
+    expect(configureClient).toContain("/api/keys/github?username=");
+    expect(configureClient).toContain("sshKeyLabel");
   });
 
   it("places collapsed Supabase and Convex connections under Cloudflare in Advanced", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     const advanced = html.indexOf("2. Advanced");
     const cloudflare = html.indexOf("Connect Cloudflare");
     const supabase = html.indexOf("Connect Supabase");
@@ -473,12 +483,12 @@ describe("onboarding wizard order", () => {
       expect(html).toContain(
         `<input id="${id}" type="password" name="${name}" autocomplete="off"`,
       );
-      expect(onboardingClient).toContain(`data.get("${name}")`);
+      expect(configureClient).toContain(`data.get("${name}")`);
     }
   });
 
   it("places provider access between agent selection and optional GitHub setup", () => {
-    const html = String(OnboardingPage({ githubAvailable: true }));
+    const html = String(ConfigurePage({ githubAvailable: true }));
     const agents = html.indexOf("1. Coding agents");
     const apiKeys = html.indexOf("Add API keys");
     const github = html.indexOf("2. GitHub");
@@ -488,9 +498,14 @@ describe("onboarding wizard order", () => {
   });
 
   it("uses workbench terminology for the immutable setup warning", () => {
-    const html = String(OnboardingPage({ githubAvailable: true }));
+    const html = String(ConfigurePage({ githubAvailable: true }));
     expect(html).toContain("Set up a workbench.");
     expect(html).toContain("After it is provisioned, changes require manual terminal commands.");
+    expect(html).toContain('id="review-confirm" class="btn primary" type="button">Save</button>');
+    expect(html).toContain('id="go" class="btn primary create-workbench-btn" type="submit">Save</button>');
+    expect(html).not.toContain("Create workbench");
+    expect(configureClient).toContain('requestJson("/api/configuration"');
+    expect(configureClient).toContain('method: "PUT"');
     for (const button of [
       "clear-agent-credentials",
       "clear-github-credentials",
@@ -501,26 +516,26 @@ describe("onboarding wizard order", () => {
     expect(html).not.toContain("clear-agent-draft");
     expect(html).not.toContain("clear-github-draft");
     expect(html).not.toContain("clear-ssh-draft");
-    expect(onboardingClient).toContain("`/api/credentials/${category}`");
-    expect(onboardingClient).toContain("`/api/setup-draft/${draftCategory}`");
+    expect(configureClient).toContain("`/api/credentials/${category}`");
+    expect(configureClient).toContain("`/api/setup-draft/${draftCategory}`");
     for (const category of ["agents", "github", "tools", "ssh"]) {
-      expect(onboardingClient).toContain(`"${category}"`);
+      expect(configureClient).toContain(`"${category}"`);
     }
   });
 });
 
 describe("GitHub repository onboarding", () => {
   it("offers one combined GitHub connection action and repository selection", () => {
-    const enabled = String(OnboardingPage({ githubAvailable: true }));
+    const enabled = String(ConfigurePage({ githubAvailable: true }));
     expect(enabled).toContain("Connect GitHub");
     expect(enabled).not.toContain("Connect or update GitHub");
-    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).toContain("/auth/github?return_to=/configure");
     expect(enabled).not.toContain("Reauthorize GitHub");
     expect(enabled).not.toContain("/auth/github/install");
-    expect(onboardingClient).not.toContain("/auth/github/reauth");
-    expect(onboardingClient).toContain("/api/github/repos");
-    expect(onboardingClient).toContain("githubRequired");
-    expect(onboardingClient).toContain('name="githubRepo"');
+    expect(configureClient).not.toContain("/auth/github/reauth");
+    expect(configureClient).toContain("/api/github/repos");
+    expect(configureClient).toContain("githubRequired");
+    expect(configureClient).toContain('name="githubRepo"');
     expect(enabled).toContain("~/repos");
     expect(enabled).not.toContain("Search by repository name after connecting");
     expect(enabled).not.toContain("Private repositories require a GitHub connection");
@@ -530,30 +545,33 @@ describe("GitHub repository onboarding", () => {
     expect(enabled).toContain("set git identity");
     expect(enabled).not.toContain("Connect GitHub and choose personal or organization repositories");
 
-    const disabled = String(OnboardingPage({ githubAvailable: false }));
+    const disabled = String(ConfigurePage({ githubAvailable: false }));
     expect(disabled).not.toContain("Connect GitHub");
     expect(disabled).not.toContain('id="github-repos"');
   });
 
   it("keeps repository selection visible when GitHub is configured", () => {
-    const enabled = String(OnboardingPage({ githubAvailable: true }));
+    const enabled = String(ConfigurePage({ githubAvailable: true }));
     expect(enabled).toContain("Connect GitHub");
     expect(enabled).not.toContain("Connect or update GitHub");
-    expect(enabled).toContain("/auth/github?return_to=/onboarding");
+    expect(enabled).toContain("/auth/github?return_to=/configure");
     expect(enabled).toContain('id="github-repo-search"');
     expect(enabled).toContain('id="github-repos"');
   });
 
-  it("hides GitHub setup from onboarding without an App slug", async () => {
+  it("hides GitHub setup from configuration without an App slug", async () => {
     const { env } = makeEnv({
       GITHUB_APP_CLIENT_ID: "client-id",
       GITHUB_APP_CLIENT_SECRET: "client-secret",
       GITHUB_APP_SLUG: "",
     });
     const user = await seedUser(env);
+    await env.DB.prepare(
+      "UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = ?",
+    ).bind(user.id).run();
     const sessionCookie = await createTestSession(env, user.id);
     const response = await workerApp.request(
-      "/onboarding",
+      "/configure",
       { headers: { cookie: sessionCookie } },
       env,
     );
@@ -562,13 +580,21 @@ describe("GitHub repository onboarding", () => {
     expect(response.status).toBe(200);
     expect(html).not.toContain('id="github-connect"');
     expect(html).not.toContain('id="github-repos"');
+
+    const legacy = await workerApp.request(
+      "/onboarding",
+      { headers: { cookie: sessionCookie } },
+      env,
+    );
+    expect(legacy.status).toBe(308);
+    expect(legacy.headers.get("location")).toBe("/configure");
   });
 
   it("restores agent choices after GitHub authorization without replacing the server-rendered controls", () => {
-    expect(onboardingClient).toContain('requestJson("/api/setup-draft"');
-    expect(onboardingClient).toContain("input.checked = selectedAgents.has(input.value)");
-    expect(onboardingClient).not.toContain("sessionStorage");
-    expect(String(OnboardingPage({ githubAvailable: true }))).not.toContain("data-checked");
+    expect(configureClient).toContain('requestJson("/api/setup-draft"');
+    expect(configureClient).toContain("input.checked = selectedAgents.has(input.value)");
+    expect(configureClient).not.toContain("sessionStorage");
+    expect(String(ConfigurePage({ githubAvailable: true }))).not.toContain("data-checked");
   });
 });
 
@@ -664,7 +690,7 @@ describe("beginner-friendly provisioning UI", () => {
   });
 
   it("explains agent choices without recommending one", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     expect(html).not.toContain("common choice");
     expect(html).toContain("1. Coding agents");
     expect(html).toContain("Sign in with Claude");
@@ -685,7 +711,7 @@ describe("beginner-friendly provisioning UI", () => {
     expect(authFlowsClient).toContain("const flowRoots = new WeakMap<HTMLElement, Root>();");
     expect(authFlowsClient).not.toContain("let active = false;");
     expect(authFlowsClient).not.toContain("let activeRoot: Root | null = null;");
-    expect(onboardingClient).toContain("isAuthFlowActive(target)");
+    expect(configureClient).toContain("isAuthFlowActive(target)");
   });
 });
 
@@ -727,7 +753,7 @@ describe("terms page", () => {
     expect(html).toContain("Terms of Service.");
     expect(html).toContain('property="og:url" content="https://usebench.dev/terms"');
     expect(html).toContain('rel="canonical" href="https://usebench.dev/terms"');
-    expect(html).toContain("no self-service paid subscription");
+    expect(html).toContain("self-service Premium subscriptions");
     expect(html).toContain("force closure");
     expect(html).toContain("cancel a subscription");
     expect(html).toContain("New York");
@@ -753,7 +779,7 @@ describe("page accessibility and recovery affordances", () => {
   });
 
   it("groups onboarding choices, associates the SSH field, and announces errors", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     expect(html).toContain("<fieldset");
     expect(html).toContain("<legend>1. Coding agents");
     for (const agent of ["pi", "claude", "codex", "opencode"]) {
@@ -881,7 +907,7 @@ describe("interface foundation", () => {
   });
 
   it("stacks each agent's independent sign-ins below its selection copy", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     expect(html).toContain(".agent-signins { display: grid; gap: 0.5rem;");
     expect(html).toContain(".agent-auth > [id$=\"-flow\"] { min-width: 0; }");
     expect(html).not.toContain(".agent:has(.agent-signin) .agent-choice");
@@ -899,7 +925,7 @@ describe("interface foundation", () => {
   });
 
   it("visually separates text fields from structural dividers", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     expect(html).toContain(
       "background: var(--field); color: var(--ink); border: 1px solid var(--line-strong);",
     );
@@ -920,10 +946,10 @@ describe("interface foundation", () => {
   });
 
   it("uses spacing, bullets, and grouped surfaces instead of row dividers", () => {
-    const html = String(OnboardingPage({ githubAvailable: true }));
+    const html = String(ConfigurePage({ githubAvailable: true }));
     expect(html).toContain('.check li::before { content: "";');
     expect(html).toContain('.provider::before { content: "";');
-    expect(html).toContain(".onboarding-api-keys .provider::before { content: none; }");
+    expect(html).toContain(".configuration-api-keys .provider::before { content: none; }");
     expect(html).toContain("grid-template-columns: 0.34rem minmax(0, 1fr) auto;");
     expect(html).toContain(".provider > * { grid-column: 2; }");
     expect(html).toContain(".repo-choice input { flex: 0 0 auto; margin: 0.2rem 0 0;");
@@ -933,7 +959,7 @@ describe("interface foundation", () => {
   });
 
   it("keeps iOS Safari from zooming when mobile text fields receive focus", () => {
-    const html = String(OnboardingPage({}));
+    const html = String(ConfigurePage({}));
     expect(html).toContain("@media (max-width: 600px)");
     expect(html).toContain(
       "input[type=text], input[type=password], input[type=search], textarea, select { font-size: 16px; }",

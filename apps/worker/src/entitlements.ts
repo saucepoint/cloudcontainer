@@ -15,6 +15,14 @@ export interface EffectiveEntitlement {
   accessUntil: number | null;
 }
 
+export type AccountState = "unverified" | "verified" | "premium" | "verified_premium";
+
+export interface AccountAccess {
+  state: AccountState;
+  verified: boolean;
+  premium: boolean;
+}
+
 export interface StripeEntitlementFacts {
   stripeStatus: string;
   cancelAtPeriodEnd: boolean;
@@ -30,6 +38,30 @@ export function hasPermanentFreeEligibility(user: UserRow): boolean {
   return user.verified_at !== null &&
     user.verification_method !== null &&
     FREE_VERIFICATION_METHODS.has(user.verification_method);
+}
+
+export function accountAccess(
+  user: UserRow,
+  entitlement: EffectiveEntitlement,
+): AccountAccess {
+  const verified = hasPermanentFreeEligibility(user);
+  const premium = entitlement.eligible &&
+    (entitlement.plan === "paid" || entitlement.plan === "dedicated");
+  return {
+    state: verified
+      ? premium ? "verified_premium" : "verified"
+      : premium ? "premium" : "unverified",
+    verified,
+    premium,
+  };
+}
+
+export async function accountAccessForUser(
+  env: Bindings,
+  user: UserRow,
+  now = Date.now(),
+): Promise<AccountAccess> {
+  return accountAccess(user, await effectiveEntitlementForUser(env, user, now));
 }
 
 function laterDeadline(...deadlines: Array<number | null>): number | null {

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/account.tsx client/security.ts client/onboarding.ts client/dashboard.tsx client/cli-auth.ts --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
+    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/account.tsx client/security.ts client/configure.ts client/dashboard.tsx client/cli-auth.ts --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
     "predev": "npm run build:client",
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",

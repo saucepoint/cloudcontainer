@@ -85,7 +85,7 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
         </li>
         <li>
           <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
-          <span class="muted tier-label">coming soon</span>
+          <span class="tier-label">premium</span>
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -113,9 +113,8 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
 
 export const VerificationPage: FC<{
   worldIdAvailable: boolean;
-  paidAvailable?: boolean;
   notificationCount?: number;
-}> = ({ worldIdAvailable, paidAvailable = false, notificationCount = 0 }) => (
+}> = ({ worldIdAvailable, notificationCount = 0 }) => (
   <Layout
     title="Verify your account"
     loggedIn
@@ -134,13 +133,11 @@ export const VerificationPage: FC<{
       The free tier is limited to one account per person. {worldIdAvailable
         ? "Verify with World ID or redeem a single-use invite"
         : "Redeem a single-use invite"} before creating a free workbench.
-      {paidAvailable ? " You can also continue with Paid without free-tier verification." : ""}
     </p>
     <div
       id="account-verification-root"
-      class={worldIdAvailable || paidAvailable ? "verification-grid" : undefined}
+      class={worldIdAvailable ? "verification-grid" : undefined}
       data-world-id-available={String(worldIdAvailable)}
-      data-paid-available={String(paidAvailable)}
     ></div>
     <script type="module" src="/account.js"></script>
   </Layout>
@@ -280,14 +277,14 @@ export const AccountPage: FC<{
           <div class="card-head">
             <h2 id="billing-heading">Plan</h2>
             <span class={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
-              {billing.entitlement.plan ?? "No active plan"}
+              {billing.entitlement.plan === "paid" ? "Premium" : billing.entitlement.plan ?? "No active plan"}
             </span>
           </div>
           {billing.billing?.source === "stripe" && billing.subscription &&
           !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
             <>
               <p>
-                Paid · {billing.billing.state.replaceAll("_", " ")}
+                Premium · {billing.billing.state.replaceAll("_", " ")}
                 {billing.billing.state === "trialing" && billing.billing.trialUntil
                   ? ` · trial ends ${new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}`
                   : billing.billing.state === "expired" && billing.subscription.trialEnd
@@ -309,10 +306,10 @@ export const AccountPage: FC<{
                 {billing.paidPlan ? ` with a ${billing.paidPlan.display}` : ""}.
               </p>
               <button id="billing-checkout-btn" class="btn primary" type="button">
-                Start 7-day Paid trial →
+                Start 7-day Premium trial →
               </button>
             </>
-          ) : <p class="muted">Paid subscriptions are not available yet.</p>}
+          ) : <p class="muted">Premium subscriptions are not available yet.</p>}
           <p id="billing-status" class="muted" role="status" aria-live="polite"></p>
         </section>
       ) : null}
@@ -543,10 +540,9 @@ export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
         virtual machine. We may change, suspend, or discontinue features, limits, images, or infrastructure.
       </p>
       <p>
-        As of the effective date, there is no self-service paid subscription or automatic recurring billing.
-        Free access and operator-entitled paid or dedicated access may be offered under
-        separate plan information. If self-service subscriptions are introduced, the checkout flow and the
-        subscription terms below will apply.
+        Free access, self-service Premium subscriptions, and operator-entitled service may be offered under
+        separate plan information. When Premium checkout is available, the checkout flow and the subscription
+        terms below apply.
       </p>
 
       <h2>2. Accounts</h2>
@@ -624,9 +620,9 @@ export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
         export anything you need first. Sections that should reasonably survive termination continue to apply.
       </p>
 
-      <h2>7. Future subscriptions</h2>
+      <h2>7. Subscriptions</h2>
       <p>
-        If we offer a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
+        If you start a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
         method will be shown before purchase. Unless the checkout terms say otherwise, a cancellation prevents
         the next renewal and does not automatically refund the current period.
       </p>
@@ -708,7 +704,7 @@ export const NotFoundPage: FC = () => (
   </Layout>
 );
 
-export const OnboardingPage: FC<{
+export const ConfigurePage: FC<{
   githubAvailable?: boolean;
   notificationCount?: number;
 }> = ({ githubAvailable = false, notificationCount = 0 }) => (
@@ -743,7 +739,7 @@ export const OnboardingPage: FC<{
             ))}
           </div>
         </fieldset>
-        <details class="onboarding-api-keys">
+        <details class="configuration-api-keys">
           <summary>Add API keys</summary>
           <SigninProvider
             id="copilot"
@@ -784,7 +780,7 @@ export const OnboardingPage: FC<{
             <a
               id="github-connect"
               class="btn secondary"
-              href="/auth/github?return_to=/onboarding"
+              href="/auth/github?return_to=/configure"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -928,20 +924,20 @@ export const OnboardingPage: FC<{
       <section id="setup-review" class="card" hidden aria-labelledby="setup-review-heading">
         <h2 id="setup-review-heading" tabindex={-1}>Review your setup</h2>
         <p class="muted">
-          Confirm the choices below before provisioning. Secret values are never shown here or stored in the setup draft.
+          Confirm the choices below before saving. Secret values are never shown here or stored in the setup draft.
         </p>
         <ul id="setup-review-items" class="check"></ul>
         <div class="row">
           <button id="review-back" class="btn secondary" type="button">Back to editing</button>
-          <button id="review-confirm" class="btn primary" type="button">Create workbench →</button>
+          <button id="review-confirm" class="btn primary" type="button">Save</button>
         </div>
       </section>
 
       <button id="go" class="btn primary create-workbench-btn" type="submit">
-        Create workbench →
+        Save
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>
-    <script type="module" src="/onboarding.js"></script>
+    <script type="module" src="/configure.js"></script>
   </Layout>
 );

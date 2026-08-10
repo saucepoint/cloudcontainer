@@ -15,8 +15,8 @@ import {
 import {
   CREDENTIALS_LOCKED_ERROR,
   credentialsCanBeChanged,
+  requireAccount,
   requireCredentialSetup,
-  requireUser,
 } from "./auth.js";
 import {
   buildCredentialPayload,
@@ -346,15 +346,15 @@ async function beginGithubInstallation(
 }
 
 export const githubRoutes = new Hono<AppContext>()
-  .get("/auth/github", requireUser, async (c) => {
+  .get("/auth/github", requireAccount, async (c) => {
     if (!githubConfigured(c.env)) return c.text("GitHub App not configured", 404);
     if (!(await credentialsCanBeChanged(c.env, c.get("user").id))) {
       return c.text(CREDENTIALS_LOCKED_ERROR, 409);
     }
-    const returnTo = c.req.query("return_to") === "/onboarding" ? "/onboarding" : "/dashboard";
+    const returnTo = c.req.query("return_to") === "/configure" ? "/configure" : "/dashboard";
     return c.redirect(await beginGithubInstallation(c.env, c.get("user").id, returnTo));
   })
-  .get("/auth/github/callback", requireUser, async (c) => {
+  .get("/auth/github/callback", requireAccount, async (c) => {
     const code = c.req.query("code");
     const state = c.req.query("state");
     if (!code || !state) return c.text("Invalid GitHub callback", 400);
@@ -380,9 +380,9 @@ export const githubRoutes = new Hono<AppContext>()
       console.error(JSON.stringify({ event: "github_connect_failed", error: String(err) }));
       return c.text("GitHub authorization failed. Please retry from the dashboard.", 502);
     }
-    return c.redirect(row.return_to === "/onboarding" ? "/onboarding" : "/dashboard");
+    return c.redirect(row.return_to === "/configure" ? "/configure" : "/dashboard");
   })
-  .get("/api/github/repos", requireUser, requireCredentialSetup, async (c) => {
+  .get("/api/github/repos", requireAccount, requireCredentialSetup, async (c) => {
     if (!githubConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 404);
     try {
       const query = (c.req.query("q") ?? "").trim().slice(0, 256);

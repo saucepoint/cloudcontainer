@@ -31,7 +31,7 @@ import {
   type WranglerOauth,
   WranglerOauthSchema,
 } from "@workbench/contract";
-import { requireCredentialSetup, requireUser } from "./auth.js";
+import { requireAccount, requireCredentialSetup } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
 import { readJsonBody } from "./http.js";
@@ -135,7 +135,7 @@ function claudeStateKey(agent: ClaudeOauthAgent, state: string): string {
 export const subscriptionRoutes = new Hono<AppContext>()
 
   // ---------------------------------------------------------------- Claude
-  .post("/api/claude/oauth/start", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/claude/oauth/start", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ agent?: unknown }>(c);
     const agent = claudeOauthAgent(body?.agent);
     if (!agent) return c.json({ error: "unsupported Claude sign-in target" }, 400);
@@ -157,7 +157,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/claude/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/claude/oauth/finish", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ code?: string; agent?: unknown }>(c);
     const agent = claudeOauthAgent(body?.agent);
     if (!agent) return c.json({ error: "unsupported Claude sign-in target" }, 400);
@@ -204,7 +204,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   // ---------------------------------------------------------------- Copilot
-  .post("/api/copilot/device", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/copilot/device", requireAccount, requireCredentialSetup, async (c) => {
     let start: { device_code?: string; user_code?: string; verification_uri?: string; expires_in?: number; interval?: number };
     try {
       const res = await fetch(GITHUB_DEVICE_CODE_URL, {
@@ -238,7 +238,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/copilot/device/poll", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/copilot/device/poll", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ deviceCode?: string }>(c);
     if (typeof body?.deviceCode !== "string" || !body.deviceCode || body.deviceCode.length > 256) {
       return c.json({ error: "bad request" }, 400);
@@ -284,7 +284,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   // ---------------------------------------------------------------- wrangler
-  .post("/api/wrangler/oauth/start", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/wrangler/oauth/start", requireAccount, requireCredentialSetup, async (c) => {
     const verifier = newVerifier();
     await putOauthState(c.env, `wrangler:${verifier}`, c.get("user").id, ATTEMPT_TTL_MS);
     const params = new URLSearchParams({
@@ -302,7 +302,7 @@ export const subscriptionRoutes = new Hono<AppContext>()
     });
   })
 
-  .post("/api/wrangler/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/wrangler/oauth/finish", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ callbackUrl?: string }>(c);
     const raw = typeof body?.callbackUrl === "string" ? body.callbackUrl.trim() : "";
     let code = "";
@@ -372,11 +372,11 @@ export const subscriptionRoutes = new Hono<AppContext>()
   })
 
   // ------------------------------------------------------------------ convex
-  .post("/api/convex/oauth/start", requireUser, requireCredentialSetup, (c) => {
+  .post("/api/convex/oauth/start", requireAccount, requireCredentialSetup, (c) => {
     return c.json({ authorizeUrl: CONVEX_AUTHORIZE_URL });
   })
 
-  .post("/api/convex/oauth/finish", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/convex/oauth/finish", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ authorizationToken?: unknown }>(c);
     const authorizationToken = typeof body?.authorizationToken === "string"
       ? body.authorizationToken.trim()

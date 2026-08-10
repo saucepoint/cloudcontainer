@@ -20,7 +20,7 @@ export interface SessionState {
   worldIdAvailable: boolean;
   githubAvailable: boolean;
   hasWorkbench: boolean;
-  redirect: "/verify" | "/onboarding" | "/dashboard";
+  redirect: "/dashboard";
 }
 
 export function sessionPath(): string {

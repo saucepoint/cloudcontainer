@@ -4,7 +4,7 @@ import { apiRoutes } from "./api.js";
 import { adminRoutes } from "./admin.js";
 import { cliAuthRoutes } from "./cli-auth.js";
 import { fleetAdminRoutes } from "./fleet-admin.js";
-import { authRoutes, requireAccount, requireUser } from "./auth.js";
+import { authRoutes, requireAccount } from "./auth.js";
 import { createAuth, handleAuthRequest } from "./better-auth.js";
 import {
   billingRoutes,
@@ -19,7 +19,7 @@ import { getContainerForUser } from "./jobs.js";
 import { credentialsView } from "./container-view.js";
 import { notificationsForUser, unreadNotificationCount } from "./notifications.js";
 import { DashboardPage } from "./pages/dashboard.js";
-import { AccountPage, LandingPage, NotFoundPage, OnboardingPage, TermsPage } from "./pages/views.js";
+import { AccountPage, ConfigurePage, LandingPage, NotFoundPage, TermsPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
 import type { AppContext } from "./types.js";
@@ -54,7 +54,9 @@ app.get("/", async (c) => {
   return c.html(<LandingPage devAuth={c.env.DEV_AUTH === "1"} />);
 });
 
-app.get("/onboarding", requireUser, async (c) => {
+app.get("/onboarding", requireAccount, (c) => c.redirect("/configure", 308));
+
+app.get("/configure", requireAccount, async (c) => {
   const userId = c.get("user").id;
   const [container, notificationCount] = await Promise.all([
     getContainerForUser(c.env, userId),
@@ -62,7 +64,7 @@ app.get("/onboarding", requireUser, async (c) => {
   ]);
   if (container) return c.redirect("/dashboard");
   return c.html(
-    <OnboardingPage
+    <ConfigurePage
       githubAvailable={githubConfigured(c.env)}
       notificationCount={notificationCount}
     />,
@@ -74,7 +76,7 @@ app.get("/dashboard", requireAccount, async (c) => {
   return c.html(<DashboardPage notificationCount={notificationCount} />);
 });
 
-const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
+const renderAccountPage = async (c: Parameters<typeof requireAccount>[0]) => {
   const user = c.get("user");
   const [passkeys, container, credentials, notifications, notificationCount, billing] = await Promise.all([
     c.env.DB.prepare(
@@ -91,7 +93,7 @@ const renderAccountPage = async (c: Parameters<typeof requireUser>[0]) => {
   return c.html(
     <AccountPage
       passkeyCount={passkeys?.count ?? 0}
-      continueHref={container ? "/dashboard" : "/onboarding"}
+      continueHref="/dashboard"
       welcome={c.req.query("welcome") === "1"}
       containerStatus={container?.status ?? null}
       hasCredentials={credentials.hasCredentials}

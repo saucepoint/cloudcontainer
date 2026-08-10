@@ -607,7 +607,7 @@ async function applyCanonicalSubscription(
   if (!user) throw new BillingEventError("unknown_user");
   const compatibilityPlan = projection.accessUntil !== null && projection.accessUntil > now
     ? "paid"
-    : user.verified_at !== null ? "free" : "free";
+    : "free";
 
   const statements = [
     env.DB.prepare(

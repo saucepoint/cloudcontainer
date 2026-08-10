@@ -533,6 +533,15 @@ describe("0019 monetization foundation migration", () => {
     expect((db.prepare("PRAGMA table_info(stripe_subscriptions)").all() as Array<{ name: string }>)
       .map((column) => column.name)).toEqual(expect.arrayContaining(["trial_start", "trial_end"]));
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+
+    db.exec(migration("0020_workbench_configurations.sql"));
+    expect(db.prepare(
+      "SELECT user_id, agents, github_repos FROM workbench_configurations ORDER BY user_id",
+    ).all()).toEqual([
+      { user_id: "dedicated-user", agents: '["codex"]', github_repos: "[]" },
+      { user_id: "free-user", agents: '["claude"]', github_repos: "[]" },
+    ]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
 });

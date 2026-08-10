@@ -752,7 +752,7 @@ describe("startProvision", () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
 
-    const container = await startProvision(env, user, { agents: ["claude"] });
+    const container = await startProvision(env, user, { agents: ["claude"] }, "free");
     expect(container.status).toBe("waitlisted");
     expect(container.host_id).toBeNull();
     const wl = await env.DB.prepare("SELECT * FROM waitlist WHERE user_id = 'user-1'").first();
@@ -766,7 +766,7 @@ describe("startProvision", () => {
     const daemon = fakeDaemon();
     stubFetch(daemon.route);
 
-    const container = await startProvision(env, user, { agents: ["claude", "pi"] });
+    const container = await startProvision(env, user, { agents: ["claude", "pi"] }, "free");
     expect(container.status).toBe("provisioning");
     expect(container.ssh_port).toBeGreaterThan(0);
     expect(JSON.parse(container.agents)).toEqual(["claude", "pi"]);
@@ -797,7 +797,7 @@ describe("startProvision", () => {
     });
     stubFetch(fakeDaemon().route);
 
-    const paid = await startProvision(regularEnv.env, paidUser, { agents: ["claude"] });
+    const paid = await startProvision(regularEnv.env, paidUser, { agents: ["claude"] }, "paid");
     expect(paid).toMatchObject({
       host_id: "budget-host",
       tier: "paid",
@@ -819,7 +819,7 @@ describe("startProvision", () => {
     });
     stubFetch(fakeDaemon().route);
 
-    const dedicated = await startProvision(dedicatedEnv.env, dedicatedUser, { agents: ["codex"] });
+    const dedicated = await startProvision(dedicatedEnv.env, dedicatedUser, { agents: ["codex"] }, "paid");
     expect(dedicated).toMatchObject({
       host_id: "dedicated-host",
       tier: "paid",
@@ -843,7 +843,7 @@ describe("startProvision", () => {
       },
     });
 
-    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+    await expect(startProvision(env, user, { agents: ["claude"] }, "free")).rejects.toThrow(
       "database unavailable",
     );
     expect(await env.DB.prepare("SELECT * FROM containers").all()).toMatchObject({ results: [] });
@@ -877,7 +877,7 @@ describe("startProvision", () => {
     const daemon = fakeDaemon();
     stubFetch(daemon.route);
 
-    const container = await startProvision(env, user, { agents: ["claude"] });
+    const container = await startProvision(env, user, { agents: ["claude"] }, "free");
 
     expect(container.host_id).toBe("ports-free");
     expect(daemon.submitted).toHaveLength(1);
@@ -900,7 +900,7 @@ describe("startProvision", () => {
       },
     });
 
-    await expect(startProvision(env, user, { agents: ["claude"] })).rejects.toThrow(
+    await expect(startProvision(env, user, { agents: ["claude"] }, "free")).rejects.toThrow(
       "job insert failed",
     );
     const container = await env.DB.prepare(
@@ -938,7 +938,7 @@ describe("startProvision", () => {
       },
     });
 
-    const container = await startProvision(env, user, { agents: ["claude"] });
+    const container = await startProvision(env, user, { agents: ["claude"] }, "free");
 
     expect(container).toMatchObject({
       status: "error",
@@ -964,8 +964,8 @@ describe("startProvision", () => {
     stubFetch(daemon.route);
 
     const containers = await Promise.all([
-      startProvision(env, alice, { agents: ["codex"] }),
-      startProvision(env, bob, { agents: ["claude"] }),
+      startProvision(env, alice, { agents: ["codex"] }, "free"),
+      startProvision(env, bob, { agents: ["claude"] }, "free"),
     ]);
 
     expect(containers.map((container) => container.status).sort()).toEqual([

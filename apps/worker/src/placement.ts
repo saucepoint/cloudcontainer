@@ -5,6 +5,7 @@ import {
   TIERS,
   type Agent,
   type ServicePlan,
+  type Tier,
 } from "@workbench/contract";
 import { allocatePort, NoFreePortsError } from "./ports.js";
 import {
@@ -18,7 +19,7 @@ import {
   getContainerForUser,
   HostJobAdmissionError,
 } from "./jobs.js";
-import { effectiveEntitlementForUser } from "./entitlements.js";
+import { accountAccess, effectiveEntitlementForUser } from "./entitlements.js";
 import type { Bindings, ContainerRow, UserRow } from "./types.js";
 
 interface ProvisionInput {
@@ -49,12 +50,19 @@ export async function startProvision(
   env: Bindings,
   user: UserRow,
   input: ProvisionInput,
+  requestedTier: Tier,
 ): Promise<ContainerRow> {
   const entitlement = await effectiveEntitlementForUser(env, user);
-  if (!entitlement.eligible || entitlement.plan === null) {
+  const access = accountAccess(user, entitlement);
+  if (
+    (requestedTier === "free" && !access.verified) ||
+    (requestedTier === "paid" && !access.premium)
+  ) {
     throw new ProvisioningNotAllowedError(user.subscription_status);
   }
-  const servicePlan = servicePlanForSubscription(entitlement.plan);
+  const servicePlan = requestedTier === "free"
+    ? servicePlanForSubscription("free")
+    : servicePlanForSubscription(entitlement.plan ?? "");
   const tierName = servicePlan.tier;
   const tier = TIERS[tierName];
   const placementClass = servicePlan.hostType;

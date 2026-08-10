@@ -80,6 +80,8 @@ export type Bindings = Omit<
   INVITE_ADMIN_SECRET?: string;
   /** Protects host registration, health probes, and fleet state changes. */
   FLEET_ADMIN_SECRET?: string;
+  /** Enables the secret-gated QA login only on staging.usebench.dev. */
+  STAGING_AUTH_BYPASS_SECRET?: string;
 };
 
 export interface UserRow {

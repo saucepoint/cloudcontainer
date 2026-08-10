@@ -17,7 +17,7 @@ import {
   CHATGPT_OAUTH_PROVIDERS,
   type ChatgptOauthAgent,
 } from "@workbench/contract";
-import { requireCredentialSetup, requireUser } from "./auth.js";
+import { requireAccount, requireCredentialSetup } from "./auth.js";
 import { upsertCredentials } from "./credentials.js";
 import { pushCredentialsToContainer } from "./github.js";
 import { readJsonBody } from "./http.js";
@@ -173,7 +173,7 @@ function stateKey(agent: ChatgptOauthAgent, deviceAuthId: string): string {
 
 export const codexAuthRoutes = new Hono<AppContext>()
 
-  .post("/api/codex/device", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/codex/device", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{ agent?: unknown }>(c);
     const agent = chatgptOauthAgent(body?.agent);
     if (!agent) return c.json({ error: "unsupported ChatGPT sign-in target" }, 400);
@@ -195,7 +195,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
     return c.json(start);
   })
 
-  .post("/api/codex/device/poll", requireUser, requireCredentialSetup, async (c) => {
+  .post("/api/codex/device/poll", requireAccount, requireCredentialSetup, async (c) => {
     const body = await readJsonBody<{
       deviceAuthId?: string;
       userCode?: string;
@@ -223,7 +223,7 @@ export const codexAuthRoutes = new Hono<AppContext>()
     await upsertCredentials(c.env, c.get("user").id, {
       llmKeys: { [CHATGPT_OAUTH_PROVIDERS[agent]]: result.authJson },
     });
-    // This onboarding-only credential is included in the initial provision.
+    // This pre-deployment credential is included in the initial provision.
     await pushCredentialsToContainer(c.env, c.get("user").id);
     return c.json({ status: "connected" });
   });

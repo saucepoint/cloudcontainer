@@ -350,7 +350,7 @@ async function connectedGithub(api: ApiClient): Promise<boolean> {
 
 async function connectGithub(api: ApiClient, baseUrl: string): Promise<void> {
   console.log("\nOpening GitHub repository authorization…");
-  const url = `${baseUrl}/auth/github?return_to=/onboarding`;
+  const url = `${baseUrl}/auth/github?return_to=/configure`;
   console.log(`If it does not open, visit:\n${url}`);
   openBrowser(url);
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -438,7 +438,9 @@ async function review(inputValue: ProvisionInput): Promise<void> {
   console.log(`Repositories: ${inputValue.githubRepos.length || "none"}`);
   console.log(`Model API keys: ${Object.keys(inputValue.llmKeys).length || "none"}`);
   console.log(`SSH: ${inputValue.sshPubkey ? "public key configured" : "no key (SSH disabled until later)"}`);
-  if (!(await confirm({ message: "Create this workbench?", default: true }))) throw new Error("Onboarding cancelled.");
+  if (!(await confirm({ message: "Save this workbench configuration?", default: true }))) {
+    throw new Error("Configuration cancelled.");
+  }
 }
 
 function sshKeyChoice(key: SelectedSshKey): SetupDraft["sshKeyChoice"] {
@@ -559,7 +561,8 @@ export async function runOnboarding(
     };
     try {
       await review(provisionInput);
-      await api.post("/api/provision", provisionInput);
+      await api.put("/api/configuration", provisionInput);
+      await api.post("/api/deploy", { tier: "free" });
       container = await waitForReady(api);
       break;
     } catch (error) {

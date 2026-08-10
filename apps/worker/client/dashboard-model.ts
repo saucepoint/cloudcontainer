@@ -30,7 +30,26 @@ export interface SshKey {
 
 export interface DashboardSnapshot {
   container: ContainerView | null;
+  configuration: {
+    agents: Agent[];
+    githubRepos: string[];
+    createdAt: number;
+    updatedAt: number;
+  } | null;
   keys: SshKey[];
+  credentials: {
+    llm: Record<string, boolean>;
+    cloudflare: boolean;
+    supabase: boolean;
+    convex: boolean;
+    wrangler: boolean;
+    github: string | null;
+  };
+  account: {
+    state: "unverified" | "verified" | "premium" | "verified_premium";
+    verified: boolean;
+    premium: boolean;
+  };
   billing: {
     configured: boolean;
     paidPlan: {

@@ -158,12 +158,11 @@ sessions. Passkey-first registration uses a server-signed, ten-minute opaque
 context; it never accepts a caller-chosen user ID. Passkeys are discoverable and
 require both a resident key and user verification.
 
-After authentication, the control plane applies this routing contract:
-
-- an account without permanent Free verification or current paid eligibility
-  goes to `/verify`;
-- an eligible account without a configured workbench goes to `/onboarding`; and
-- an eligible account with a configured workbench goes to `/dashboard`.
+After authentication, every account goes to `/dashboard`. The dashboard links
+to `/configure` when no saved workbench configuration exists, summarizes an
+existing configuration, and offers the Free and Premium instance choices only
+after setup has been saved. `/onboarding` is a compatibility redirect to
+`/configure` and is not part of the active user flow.
 
 The verification screen offers World ID Proof of Human and a single-use
 administrator invite. World ID 4.0-only requests are signed by the Worker, bind
@@ -171,10 +170,13 @@ the proof signal to the authenticated internal user ID, and are verified
 through the Developer Portal. The verified nullifier is stored permanently so the same
 person cannot verify another account. An invite is also verification evidence,
 not an authentication credential: the account must already have a valid Better
-Auth session before redeeming it. An ineligible session cannot provision or
-mutate a workbench. It may access account security, billing status, hosted Paid
-Checkout, and an existing workbench's read-only dashboard so an expired paid
-owner can manage billing and export data.
+Auth session before redeeming it. Every valid session continues to the
+dashboard and may save a workbench configuration. Tier-specific authorization
+is enforced only when the account creates an instance: Free requires permanent
+verification and Premium requires a current paid/manual Premium entitlement.
+An ineligible session may also access account security, billing status, hosted
+Premium Checkout, and an existing workbench's lifecycle controls so an expired
+paid owner can manage billing, export data, or destroy the workbench.
 
 Public signup offers permanently eligible Free after World ID/invite
 verification. When the billing launch gate is enabled, any authenticated owner
@@ -189,7 +191,9 @@ add backup passkeys at any time.
 
 ### 4.2 Configure and launch
 
-The onboarding screen has one required field: at least one agent from Pi,
+Authentication always continues to `/dashboard`. With no completed
+configuration, the dashboard offers a setup action at `/configure`. The
+configuration screen has one required field: at least one agent from Pi,
 Claude Code, Codex, and OpenCode. All other fields are visibly optional:
 
 - SSH public key;
@@ -216,14 +220,21 @@ the agent-assisted enrollment path when they do not have one. Secret fields use
 password inputs and are never echoed back. The browser and CLI may save a
 short-lived, account-bound setup draft containing only agent choices, selected
 repository names, the setup step, and an SSH-key choice. Drafts expire after
-24 hours, are deleted after provisioning or explicit clearing, and never
+24 hours, are deleted after configuration is saved or explicit clearing, and never
 contain API tokens, OAuth tokens, authorization codes, or SSH key material.
 Reloads and OAuth round trips restore that non-secret state. Credential
 connections already stored server-side are shown as saved, and the user gets
-a final review step before the provisioning request is submitted.
+a final review step with a **Save** action. A completed configuration persists
+independently from its draft and does not allocate an instance.
 
-Submitting valid choices returns HTTP 202 with the initial container view. It
-does not wait for Incus or package installation.
+The dashboard shows the completed configuration as an expandable summary, then
+offers `1 vCPU 1.5GB RAM` for Free and `2 vCPU 4GB RAM` for Premium. Free
+deployment requires permanent verification. Premium deployment requires a
+current Premium entitlement. Verification and Premium are independent booleans,
+yielding Unverified, Verified, Premium, and Verified premium account states.
+An action that lacks its prerequisite leads directly to verification or hosted
+Checkout. A valid deployment request returns HTTP 202 with the initial container
+view and does not wait for Incus or package installation.
 
 ### 4.2.1 Terminal onboarding
 
@@ -281,8 +292,9 @@ host with a warm base image. It is a target, not an availability guarantee.
 
 ### 4.4 Dashboard loading and polling
 
-The dashboard makes one aggregate bootstrap request for the container view,
-credential-presence summary, SSH keys, and integration availability. After
+The dashboard makes one aggregate bootstrap request for account state, saved
+configuration, the container view, credential-presence summary, SSH keys, and
+integration availability. After
 bootstrap:
 
 - only the container endpoint is polled while a container is waitlisted, a job
@@ -301,8 +313,9 @@ bootstrap:
 Poll updates render only container status, connection details, and dependent
 danger-zone state. They do not rerender the credential section, SSH-key list,
 inline forms, or an enrollment prompt, except when a successful build unlocks
-SSH-key controls. The dashboard orders the environment summary first, SSH
-Access second, and credentials after access. Credential presence is read-only:
+SSH-key controls. The dashboard orders the configuration summary before
+instance creation or the environment summary, with SSH Access after an instance
+exists. Credential presence is read-only:
 the dashboard directs users to manual terminal commands for changes. SSH Access
 offers manual-key guidance and agent-assisted enrollment only when the server
 is Ready. The SSH command and the then-available enrollment prompt have
@@ -820,6 +833,7 @@ operations synchronize keys and credentials.
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
 | setup_drafts | One expiring, non-secret onboarding draft per user; selections only, never credentials or key material |
+| workbench_configurations | One durable completed setup per user; agents and repository names only, while credentials and SSH public keys remain in their owning tables |
 | enrollment_tokens | Hash only; one-hour expiry; single use |
 | oauth_states | Short-lived, user-bound authorization attempts |
 | waitlist | One row per user; requested_at ordering, bounded-backfill skip count, and admitted_at audit |

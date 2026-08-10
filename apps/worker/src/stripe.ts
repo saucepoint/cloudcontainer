@@ -172,8 +172,8 @@ export async function createStripeCheckoutSession(
     "subscription_data[trial_period_days]": String(PAID_TRIAL_DAYS),
     "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
     "automatic_tax[enabled]": env.STRIPE_TAX_ENABLED === "1" ? "true" : "false",
-    success_url: `${env.BASE_URL}/account?checkout=success`,
-    cancel_url: `${env.BASE_URL}/account?checkout=cancelled`,
+    success_url: `${env.BASE_URL}/dashboard?checkout=success`,
+    cancel_url: `${env.BASE_URL}/dashboard?checkout=cancelled`,
   });
   return stripeRequest<StripeCheckoutSession>(
     env,

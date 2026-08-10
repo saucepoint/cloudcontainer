@@ -1,4 +1,4 @@
-import { AGENT_LABELS } from "@workbench/contract";
+import { AGENT_LABELS, LLM_PROVIDER_LABELS, type Tier } from "@workbench/contract";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { BusyLabel } from "./busy-label.js";
@@ -124,11 +124,59 @@ function ContainerCard({
   );
 }
 
+const ACCOUNT_STATE_LABELS: Record<DashboardSnapshot["account"]["state"], string> = {
+  unverified: "Unverified",
+  verified: "Verified",
+  premium: "Premium",
+  verified_premium: "Verified premium",
+};
+
+function configuredIntegrations(credentials: DashboardSnapshot["credentials"]): string[] {
+  const integrations = Object.keys(credentials.llm)
+    .filter((provider) => credentials.llm[provider])
+    .map((provider) => LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider);
+  if (credentials.github) integrations.push(`GitHub (${credentials.github})`);
+  if (credentials.cloudflare) integrations.push("Cloudflare API");
+  if (credentials.wrangler) integrations.push("Cloudflare Wrangler");
+  if (credentials.supabase) integrations.push("Supabase");
+  if (credentials.convex) integrations.push("Convex");
+  return integrations;
+}
+
+function ConfigurationSummary({
+  configuration,
+  credentials,
+  sshKeyCount,
+  editable,
+}: {
+  configuration: NonNullable<DashboardSnapshot["configuration"]>;
+  credentials: DashboardSnapshot["credentials"];
+  sshKeyCount: number;
+  editable: boolean;
+}) {
+  const integrations = configuredIntegrations(credentials);
+  return (
+    <details className="card configuration-summary" open={editable}>
+      <summary><strong>Workbench configuration</strong><span className="muted">View setup</span></summary>
+      <dl className="configuration-facts">
+        <div><dt>Agents</dt><dd>{configuration.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}</dd></div>
+        <div><dt>Integrations</dt><dd>{integrations.length ? integrations.join(", ") : "None"}</dd></div>
+        <div><dt>Repositories</dt><dd>{configuration.githubRepos.length ? configuration.githubRepos.join(", ") : "None"}</dd></div>
+        <div><dt>SSH keys</dt><dd>{sshKeyCount}</dd></div>
+      </dl>
+      {editable ? <a className="btn secondary" href="/configure">Edit configuration</a> : null}
+    </details>
+  );
+}
+
 function DashboardApp() {
   const [loaded, setLoaded] = React.useState(false);
   const [container, setContainer] = React.useState<ContainerView | null>(null);
+  const [configuration, setConfiguration] = React.useState<DashboardSnapshot["configuration"]>(null);
   const [keys, setKeys] = React.useState<SshKey[]>([]);
+  const [credentials, setCredentials] = React.useState<DashboardSnapshot["credentials"] | null>(null);
   const [billing, setBilling] = React.useState<DashboardSnapshot["billing"] | null>(null);
+  const [account, setAccount] = React.useState<DashboardSnapshot["account"] | null>(null);
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [actionBusy, setActionBusy] = React.useState(false);
@@ -149,8 +197,11 @@ function DashboardApp() {
       const snapshot = await api<DashboardSnapshot>("/api/dashboard");
       refreshNeeded.current = false;
       applyContainer(snapshot.container);
+      setConfiguration(snapshot.configuration);
       setKeys(snapshot.keys);
+      setCredentials(snapshot.credentials);
       setBilling(snapshot.billing);
+      setAccount(snapshot.account);
       setLoaded(true);
     } catch (error) {
       if (!redirectIfSignedOut(error)) {
@@ -256,71 +307,119 @@ function DashboardApp() {
     }
   };
 
+  const deploy = async (tier: Tier) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const result = await api<{ container: ContainerView }>("/api/deploy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tier }),
+      });
+      refreshNeeded.current = true;
+      applyContainer(result.container);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(error, "The instance could not be created. Please try again."));
+      }
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   if (!loaded) {
     return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><span className="sr-only">Loading your workbench…</span><div className="skel skel-title" /><div className="skel skel-line" /><div className="skel skel-line short" /></div></>;
   }
 
   return (
     <>
-      <h1>Your workbench.</h1>
+      <div className="dashboard-heading">
+        <h1>Your workbench.</h1>
+        {account ? <span className={`account-state ${account.state}`}>{ACCOUNT_STATE_LABELS[account.state]}</span> : null}
+      </div>
       {billing?.billing?.state === "past_due" || billing?.billing?.state === "grace" ? (
         <div className="notice warning" role="status">
-          Your payment needs attention. Paid service remains available only through the displayed billing deadline.
+          Your payment needs attention. Premium service remains available only through the displayed billing deadline.
         </div>
       ) : null}
       {billing?.billing?.state === "trialing" && billing.billing.trialUntil ? (
         <div className="notice" role="status">
-          Your Paid trial ends on {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}. Stripe will charge your payment method after the trial.
+          Your Premium trial ends on {new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}. Stripe will charge your payment method after the trial.
         </div>
       ) : null}
       {billing?.billing?.state === "cancel_scheduled" && billing.billing.serviceUntil ? (
         <div className="notice warning" role="status">
-          Paid service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}.
+          Premium service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}.
         </div>
       ) : null}
       {billing?.billing?.state === "expired" ? (
         <div className="notice error" role="status">
-          Paid access ended. Resubscribe or complete Free verification to restore eligibility.
+          Premium access ended. Resubscribe or complete Free verification to restore eligibility.
         </div>
       ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
-      {pageError ? null : container ? (
+      {!pageError && configuration && credentials ? (
+        <ConfigurationSummary
+          configuration={configuration}
+          credentials={credentials}
+          sshKeyCount={keys.length}
+          editable={!container}
+        />
+      ) : null}
+      {!pageError && !configuration ? (
+        <section className="card" aria-labelledby="configure-workbench-heading">
+          <h2 id="configure-workbench-heading">Set up your workbench</h2>
+          <p>Choose your coding agents, connect integrations, and add SSH access before creating an instance.</p>
+          <a className="btn primary" href="/configure">Set up workbench →</a>
+        </section>
+      ) : null}
+      {!pageError && container ? (
         <ContainerCard
           container={container}
           action={(operation) => void act(operation)}
           cancelPlacement={() => void cancelPlacement()}
           actionBusy={actionBusy}
         />
-      ) : (
-        <section className="card" aria-labelledby="create-workbench-heading">
-          <h2 id="create-workbench-heading">Create your workbench</h2>
-          <p className="muted">Choose the setup that fits how you want to use usebench.</p>
+      ) : null}
+      {!pageError && configuration && !container && account ? (
+        <section className="card" aria-labelledby="create-instance-heading">
+          <h2 id="create-instance-heading">Create an instance</h2>
+          <p className="muted">Your saved configuration will be installed on the instance you choose.</p>
           <div className="workbench-choice-grid">
-            {billing?.entitlement.plan === "free" ? (
-              <div>
-                <h3>Free workbench</h3>
-                <p className="muted">A verified account gets the free workbench tier.</p>
-                <a className="btn secondary" href="/onboarding">Create a free workbench →</a>
-              </div>
-            ) : null}
             <div>
-              <h3>Premium workbench</h3>
-              <p className="muted">
-                {billing?.paidPlan?.display ?? "More resources and persistent storage."}
-              </p>
-              {billing?.entitlement.plan === "paid" ? (
-                <a className="btn primary" href="/onboarding">Create a premium workbench →</a>
+              <h3>Free</h3>
+              <p className="muted">Available after one-person verification.</p>
+              {account.verified ? (
+                <button className="btn secondary" type="button" disabled={actionBusy} onClick={() => void deploy("free")}>
+                  1 vCPU 1.5GB RAM
+                </button>
+              ) : (
+                <a className="btn secondary" href="/verify">1 vCPU 1.5GB RAM</a>
+              )}
+              {!account.verified ? <p className="choice-hint">Verify to create the Free instance.</p> : null}
+            </div>
+            <div>
+              <h3>Premium</h3>
+              <p className="muted">{billing?.paidPlan?.display ?? "More resources and persistent storage."}</p>
+              {account.premium ? (
+                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("paid")}>
+                  2 vCPU 4GB RAM
+                </button>
               ) : billing?.configured ? (
                 <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
-                  Create a premium workbench →
+                  2 vCPU 4GB RAM
                 </button>
-              ) : <p className="muted">Premium workbenches are not available yet.</p>}
+              ) : (
+                <button className="btn primary" type="button" disabled>2 vCPU 4GB RAM</button>
+              )}
+              {!account.premium ? <p className="choice-hint">Upgrade to Premium to create this instance.</p> : null}
             </div>
           </div>
         </section>
-      )}
+      ) : null}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
-      <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
+      {container ? <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section> : null}
     </>
   );
 }

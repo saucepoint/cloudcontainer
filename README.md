@@ -36,19 +36,23 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    new passkey-first account through Better Auth. The same flow is available
    from a terminal with `npx usebench`: the CLI opens Google or GitHub in the
    browser, receives a one-time loopback callback, and resumes onboarding in
-   the terminal.
-2. A new or previously unverified account proves one-person eligibility with
-   World ID or redeems an eight-character, single-use administrator invite for
-   permanent Free eligibility. When billing is enabled, an authenticated owner
-   may instead start a seven-day Paid trial without becoming permanently
-   eligible for Free. Stripe charges the saved payment method after the trial.
-3. Onboarding requires only one choice: one or more coding agents. SSH and all
+   the terminal. Browser authentication always continues to `/dashboard`.
+2. The dashboard sends an account without a saved setup to `/configure`.
+   Configuration requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
-   credentials must be selected before creating the server. Later credential
+   credentials must be selected before creating the instance. Saving returns
+   to the dashboard without allocating capacity. Later credential
    changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
-4. The Worker maps the account to shared or dedicated tenancy, reserves the
+3. The dashboard shows an expandable configuration summary and two instance
+   choices. The `1 vCPU 1.5GB RAM` Free choice requires permanent World ID or
+   invite verification. The `2 vCPU 4GB RAM` Premium choice requires a current
+   Premium subscription; verification and Premium are independent account
+   properties, so the four displayed states are Unverified, Verified, Premium,
+   and Verified premium.
+4. The Worker validates the selected tier against current account state, maps
+   the account to shared or dedicated tenancy, reserves the
    requested container's exact CPU, RAM, disk, tenant slot, and an SSH port on
    an eligible healthy host, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
@@ -69,7 +73,7 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
 
-The CLI mirrors the web onboarding choices: it can render a World ID QR code or
+The CLI mirrors the web configuration choices: it can render a World ID QR code or
 accept an invite, select and authenticate agents, connect GitHub and choose
 repositories, configure model/developer tools, and provision the environment.
 It reuses `~/.ssh/id_ed25519.pub` when requested or can create
@@ -279,6 +283,10 @@ reuse `BETTER_AUTH_SECRET`, `CREDENTIAL_MASTER_KEY`, `WORKER_RPC_PRIVATE_KEY`,
 are intentionally empty in the checked-in staging configuration, except for
 World ID. Staging reuses the production World ID app and relying party in the
 production environment, with the separate `verify-account-staging` action.
+Browser QA may use `/auth/staging-bypass` only when the staging Worker has a
+`STAGING_AUTH_BYPASS_SECRET`. The route is additionally hard-gated to the
+staging base URL and can create isolated QA accounts in each of the four account
+states. Never configure this secret in production or pass it in a URL.
 Store the same RP signing key in the staging Worker separately:
 
     npx wrangler secret put WORLD_ID_SIGNING_KEY --env staging
@@ -479,6 +487,8 @@ material. Apply the Worker migration before publishing a client that uses it.
 dedicated tenancy, preserves existing paid/dedicated accounts as explicit
 manual entitlements, and adds trial/billing/event/transition state. Deploy the mixed
 daemon capability fleet-wide before setting `BILLING_ENABLED=1`.
+`0020_workbench_configurations.sql` separates durable, completed workbench
+configuration from expiring wizard drafts and backfills existing containers.
 
 The CLI package can be built and inspected without publishing:
 
