@@ -52,6 +52,7 @@ export interface DashboardSnapshot {
   };
   billing: {
     configured: boolean;
+    trialEligible: boolean;
     paidPlan: {
       price: string;
       currency: string;

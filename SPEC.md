@@ -91,8 +91,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
   The public 2-vCPU plan is backed by an enforced and reserved 2-vCPU allowance.
   Stripe-hosted self-service purchase and in-place upgrades are available only
   when the complete billing configuration and `BILLING_ENABLED` launch gate
-  are enabled. Every self-service Paid subscription begins with a seven-day
-  free trial before Stripe attempts the first charge. Dedicated service remains
+  are enabled. An account's first self-service Paid subscription begins with a
+  seven-day free trial before Stripe attempts the first charge. Dedicated service remains
   operator-entitled.
 - Debian 13, SSH, a standard development toolchain, and four coding agents.
 - Pi, Claude Code, Codex, and OpenCode selection.
@@ -755,20 +755,30 @@ monthly Price is configured server-side, its matching
 `PAID_PLAN_MONTHLY_PRICE` and `PAID_PLAN_CURRENCY` disclosure values exist,
 both Stripe secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
 requires an authenticated owner but not Free verification, stores one Customer
-mapping, creates a fresh Stripe Checkout Session for each start, and permits
-one non-terminal subscription. It never accepts a client Price or plan. The
-account and dashboard render the configured amount and currency. The success
-redirect is display-only. Portal sessions require the stored Customer mapping.
+mapping, permits one unexpired Checkout attempt and one non-terminal
+subscription, and reuses the attempt's stable Stripe idempotency key across
+retries. Only the account's first subscription is trial-eligible. Before
+Checkout, the Worker retrieves the configured Price and fails closed unless its
+active Product, interval, amount, currency, quantity model, and tax metadata
+match the published offer. It also lists the stored Customer's canonical Stripe
+subscriptions and refuses a new Session when an unsynced non-terminal
+subscription exists; remote terminal history suppresses repeat trials. It never
+accepts a client Price or plan. The account,
+dashboard, and landing page render the configured amount and currency. The
+success redirect is display-only. Portal sessions require the stored Customer
+mapping.
 
 The public webhook verifies Stripe's signature over the exact raw body within
 a five-minute tolerance and publishes only event ID, type, and creation time.
 It returns success only after Queue publication. The at-least-once consumer
 deduplicates by event ID, re-fetches the Event and canonical Subscription,
-validates internal user metadata, Customer, configured Price, quantity, the
+requires and validates internal user metadata, Customer, configured Price, quantity, the
 seven-day trial bound, and one-subscription invariants, and applies monotonic
 D1 facts. Canonical `trialing` state grants access only through `trial_end`;
-only a positive-value `invoice.paid` may advance `service_until`, so Stripe's
-zero-value opening trial invoice is not paid-through service. Payment failure
+only a settled `invoice.paid` with canonical `active` subscription state may
+advance `service_until`, so Stripe's zero-value opening trial invoice is not
+paid-through service while legitimate zero-value settled renewals covered by
+credits or discounts remain valid. Payment failure
 never advances a deadline. Older events cannot shorten
 a newer deadline or reverse newer canonical subscription state. The Cron
 reconciler performs bounded stale-subscription repair rather than polling every
@@ -841,9 +851,9 @@ operations synchronize keys and credentials.
 | notifications | Global in-app announcements with optional expiry; no secret payloads |
 | notification_reads | One read marker per notification and user; cascades on account deletion |
 | account_entitlements | One effective paid/dedicated entitlement source with trial, paid-through, and grace projections per user |
-| stripe_customers | One internal user to Stripe Customer mapping; account deletion is restricted while present |
+| stripe_customers | One internal user to Stripe Customer mapping plus account-level trial-consumption state; account deletion is restricted while present |
 | stripe_subscriptions | Canonical non-card subscription facts, trial bounds, monotonic event/sync markers, and paid-through deadlines |
-| stripe_checkout_attempts | Legacy abandoned-Checkout bookkeeping retained only for migration compatibility; no runtime code reads or writes it |
+| stripe_checkout_attempts | One active creating/open attempt per user, stable Stripe idempotency key, Stripe Session correlation, and explicit completion/expiry/failure state |
 | stripe_billing_events | Event-ID dedupe, processing attempts, sanitized error codes, and no webhook bodies |
 | container_plan_transitions | One idempotent in-place transition per container with exact claimed deltas and prior runtime state |
 
@@ -967,7 +977,9 @@ Current automated coverage includes:
   waitlist backfill, dedicated assignment, heterogeneous resource budgets, and
   reconciler logic;
 - raw Stripe webhook verification, metadata-only Queue publication, event
-  deduplication, monotonic paid-through projection, and the disabled sales gate;
+  deduplication, monotonic paid-through projection, single-flight Checkout,
+  Price disclosure validation, first-subscription-only trials, refund
+  correlation, and the disabled sales gate;
 - in-place upgrade delta reservation, no-capacity preservation, idempotent
   resize retry, prior-state restoration, and storage-grandfathered downgrade;
 - authenticated host registration/probe/state APIs, daemon release telemetry,
@@ -1008,8 +1020,9 @@ public release, an operator must record:
 15. keyboard-only and screen-reader status/error checks; and
 16. one fleet-controller daemon rollout and rollback using infra/RUNBOOK.md;
 17. Stripe sandbox signup, unverified paid bypass, success-redirect non-grant,
-    renewal, payment failure, scheduled cancellation and undo, expiry, and
-    resubscription; and
+    duplicate Checkout start, abandoned-Checkout expiry, first-trial-only
+    resubscription, renewal, payment failure, scheduled cancellation and undo,
+    refund/dispute correlation, and expiry; and
 18. running and stopped in-place upgrade, no-capacity retry, resize failure,
     downgrade, and grandfathered disk behavior.
 
@@ -1076,10 +1089,12 @@ manual checks above have been completed for affected areas.
     and the documented fleet rollback path has been exercised for any release
     that changes the shared contract.
 15. **Billing integrity:** Checkout uses only the configured server Price; a
-    seven-day trial delays the first charge; a redirect cannot grant service;
+    validated Product/Price must match the published offer; only the account's
+    first subscription receives a seven-day trial; one active Checkout attempt
+    supplies a stable idempotency key; a redirect cannot grant service;
     the raw webhook is verified before durable
     metadata-only Queue publication; duplicate/out-of-order events converge on
-    canonical Stripe state; zero-value trial invoices and payment failure never
+    canonical Stripe state; opening trial invoices and payment failure never
     extend paid-through service; canceled trials and failed first charges remove
     Paid access; and disabled billing cannot contact Stripe for a new sale.
 16. **Safe plan change:** Free-to-Paid claims only the resource delta and keeps

@@ -41,6 +41,7 @@ export type Bindings = Omit<
   | "BILLING_ENABLED"
   | "BILLING_GRACE_DAYS"
   | "BILLING_EXPORT_WINDOW_DAYS"
+  | "BILLING_CHECKOUT_SESSION_MINUTES"
   | "BILLING_EVENTS"
   | "SSH_PORT_RANGE_START"
   | "SSH_PORT_RANGE_END"
@@ -63,6 +64,7 @@ export type Bindings = Omit<
   BILLING_ENABLED?: string;
   BILLING_GRACE_DAYS?: string;
   BILLING_EXPORT_WINDOW_DAYS?: string;
+  BILLING_CHECKOUT_SESSION_MINUTES?: string;
   SSH_PORT_RANGE_START: string;
   SSH_PORT_RANGE_END: string;
   // secrets
@@ -187,6 +189,7 @@ export interface AccountEntitlementRow {
 export interface StripeCustomerRow {
   user_id: string;
   stripe_customer_id: string;
+  trial_used_at: number | null;
   created_at: number;
   updated_at: number;
 }

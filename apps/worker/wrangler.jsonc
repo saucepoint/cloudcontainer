@@ -57,7 +57,7 @@
     // Intentionally omitted launch-time billing vars:
     // BILLING_ENABLED, STRIPE_PRICE_PAID_MONTHLY, PAID_PLAN_MONTHLY_PRICE,
     // PAID_PLAN_CURRENCY,
-    // STRIPE_TAX_ENABLED, BILLING_GRACE_DAYS,
+    // STRIPE_TAX_ENABLED, BILLING_GRACE_DAYS, BILLING_CHECKOUT_SESSION_MINUTES,
     // BILLING_EXPORT_WINDOW_DAYS.
   },
   "env": {
@@ -111,7 +111,8 @@
         "PAID_PLAN_MONTHLY_PRICE": "5.99",
         "PAID_PLAN_CURRENCY": "USD",
         "STRIPE_TAX_ENABLED": "0",
-        "BILLING_GRACE_DAYS": "0"
+        "BILLING_GRACE_DAYS": "0",
+        "BILLING_CHECKOUT_SESSION_MINUTES": "60"
       },
       "queues": {
         "producers": [

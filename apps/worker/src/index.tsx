@@ -7,8 +7,10 @@ import { fleetAdminRoutes } from "./fleet-admin.js";
 import { authRoutes, requireAccount } from "./auth.js";
 import { createAuth, handleAuthRequest } from "./better-auth.js";
 import {
+  billingConfigured,
   billingRoutes,
   billingStatusForUser,
+  paidPlanDisplay,
   processBillingQueue,
   type BillingQueueBatch,
 } from "./billing.js";
@@ -52,7 +54,12 @@ app.get("/terms", async (c) => {
 app.get("/", async (c) => {
   const session = await createAuth(c.env, c.req.url).api.getSession({ headers: c.req.raw.headers });
   if (session) return c.redirect("/account/continue");
-  return c.html(<LandingPage devAuth={c.env.DEV_AUTH === "1"} />);
+  return c.html(
+    <LandingPage
+      devAuth={c.env.DEV_AUTH === "1"}
+      paidPlan={billingConfigured(c.env) ? paidPlanDisplay(c.env) : null}
+    />,
+  );
 });
 
 app.get("/onboarding", requireAccount, (c) => c.redirect("/configure", 308));

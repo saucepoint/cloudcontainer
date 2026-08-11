@@ -496,15 +496,16 @@ endpoint only after the certificate is trusted and installed.
 Never enable sales merely because Stripe secrets exist. The launch gate is
 open only when all of the following are complete:
 
-1. migration `0019` and the compatible Worker are deployed;
+1. migrations through `0022` and the compatible Worker are deployed;
 2. every active shared daemon reports `tenancyMode=shared` and
    `mixed-tier-shared-v1`, and a mixed placement/resize staging run passed;
 3. the monthly Paid Price, currency, tax policy, supported payment methods,
-   and Customer Portal cancellation-at-period-end behavior are approved;
+   Customer Portal cancellation-at-period-end behavior, Portal login link, and
+   Checkout redirect for Customers with an active subscription are approved;
 4. `usebench-billing-events` and its dead-letter Queue exist, with
    `BILLING_EVENTS` configured as producer and consumer per `README.md`;
 5. the Stripe event destination points to `/api/stripe/webhook`, uses API
-   version `2025-03-31.basil`, and subscribes to the event set in
+   version `2026-07-29.dahlia`, and subscribes to the event set in
    `MONETIZATION.md`;
 6. Stripe sandbox acceptance covers paid bypass, redirect non-grant, renewal,
    seven-day trial activation, zero-value opening invoice, trial cancellation,
@@ -520,9 +521,13 @@ Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` only with Wrangler secrets.
 configuration. Confirm the display amount and currency
 exactly match the configured Stripe Price before launch. Leave
 `BILLING_EXPORT_WINDOW_DAYS` absent until the export duration, notices, and
-destruction policy have been explicitly approved. Last, set
-`BILLING_ENABLED=1`, run the normal release gates, deploy, and verify an
-authenticated `/api/billing/status` plus one sandbox Checkout.
+destruction policy have been explicitly approved. Run the normal release gates
+and deploy first with `BILLING_ENABLED=0`. Verify authenticated
+`/api/billing/status`, webhook delivery, Queue consumption, and DLQ visibility
+in the target environment. For production, switch every Stripe resource and
+secret to live mode, then enable `BILLING_ENABLED=1` only for a controlled live
+canary using a real payment method. Do not use sandbox objects, test keys, or
+test payment methods in the production canary.
 
 To stop new sales, set `BILLING_ENABLED=0` and deploy. Do not disable the
 webhook, Queue consumer, scheduled canonical reconciliation, or Portal for
@@ -535,8 +540,10 @@ message. Replaying the same event ID is safe after the cause is fixed.
 For billing incidents, inspect non-secret IDs and deadlines only. Never log or
 copy webhook bodies, card/payment-method data, addresses, secret keys, or
 Customer emails. `invoice.paid` is the only event that may advance
-`service_until`, and only when Stripe reports a positive collected amount; the
-zero-value opening trial invoice must not advance it. Trial access is bounded
+`service_until`, and only when the invoice is settled and the canonical
+subscription is `active`; the zero-value opening trial invoice must not advance
+it, while a legitimate settled renewal covered by credits or discounts may.
+Trial access is bounded
 by `trial_end`. Payment failure must not be repaired by manually extending a
 deadline.
 Use `GET /api/admin/billing/USER_ID` with the fleet bearer for the redacted

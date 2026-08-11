@@ -456,11 +456,11 @@ function DashboardApp() {
       </div>
       {checkoutStatus === "confirming" ? (
         <div className="notice" role="status" aria-live="polite">
-          Checkout completed. Activating your 7-day Premium trial…
+          Checkout completed. Activating your Premium subscription…
         </div>
       ) : checkoutStatus === "confirmed" ? (
         <div className="notice" role="status" aria-live="polite">
-          Your Premium trial is active.
+          Your Premium subscription is active.
         </div>
       ) : checkoutStatus === "timed_out" ? (
         <div className="notice warning" role="status" aria-live="polite">
@@ -528,7 +528,12 @@ function DashboardApp() {
                 />
                 <span>
                   <strong>Premium</strong>
-                  <small>{MACHINE_SPECS.paid}{account.premium ? "" : " · $6/mo"}</small>
+                  <small>
+                    {MACHINE_SPECS.paid}
+                    {account.premium || !billing?.paidPlan
+                      ? ""
+                      : ` · ${billing.paidPlan.currency} ${billing.paidPlan.price}/mo`}
+                  </small>
                 </span>
               </label>
             </div>

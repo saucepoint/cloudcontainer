@@ -117,8 +117,11 @@ describe("landing page call to action", () => {
     expect(html.indexOf("free tier")).toBeLessThan(html.indexOf('id="landing-auth-root"'));
   });
 
-  it("presents the free capacity first and shows the paid price", () => {
-    const html = String(LandingPage({ devAuth: false }));
+  it("presents the free capacity first and shows only the server-configured paid price", () => {
+    const html = String(LandingPage({
+      devAuth: false,
+      paidPlan: { price: "5.99", currency: "USD", interval: "month" },
+    }));
     const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
     const premiumTier = "2 vCPU · 4.0 GB RAM · ";
@@ -131,9 +134,12 @@ describe("landing page call to action", () => {
       '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
     );
     expect(html).toContain(
-      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">$6/mo</span>'
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">USD 5.99/mo</span>'
     );
-    expect(html).toContain('<span class="tier-label">$6/mo</span>');
+    expect(html).toContain('<span class="tier-label">USD 5.99/mo</span>');
+    expect(String(LandingPage({ devAuth: false }))).toContain(
+      '<span class="tier-label">coming soon</span>',
+    );
     expect(html).toContain("Debian 13, ssh, tmux, git, bash, curl, and more");
     expect(html).not.toContain("SSH, tmux, git, bash, curl, and more");
     expect(html.indexOf(freeTier)).toBeLessThan(html.indexOf(premiumTier));
@@ -295,6 +301,7 @@ describe("account page", () => {
       welcome: false,
       billing: {
         configured: true,
+        trialEligible: false,
         paidPlan: {
           price: "5.99",
           currency: "USD",
@@ -315,6 +322,8 @@ describe("account page", () => {
     }));
     expect(account.indexOf('id="notifications"')).toBeLessThan(account.indexOf('id="billing"'));
     expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 5.99/month.");
+    expect(account).toContain("Subscribe to Premium →");
+    expect(account).not.toContain("Start 7-day Premium trial →");
   });
 
   it("wires destructive actions to authenticated endpoints", () => {

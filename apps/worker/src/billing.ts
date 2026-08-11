@@ -26,16 +26,21 @@ import {
   createStripeCheckoutSession,
   createStripeCustomer,
   createStripePortalSession,
+  listStripeSubscriptions,
   paidPriceId,
+  retrieveStripeCharge,
   retrieveStripeEvent,
   retrieveStripeInvoice,
+  retrieveStripePrice,
   retrieveStripeSubscription,
   PAID_TRIAL_DAYS,
   STRIPE_API_VERSION,
   StripeApiError,
   StripeConfigurationError,
   type StripeCheckoutSession,
+  type StripeCharge,
   type StripeInvoice,
+  type StripePrice,
   type StripeSubscription,
   verifyStripeEvent,
 } from "./stripe.js";
@@ -51,6 +56,7 @@ import type {
 
 const SUPPORTED_EVENT_TYPES = new Set([
   "checkout.session.completed",
+  "checkout.session.expired",
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
@@ -61,11 +67,25 @@ const SUPPORTED_EVENT_TYPES = new Set([
   "invoice.payment_failed",
   "invoice.payment_action_required",
   "invoice.finalization_failed",
+  "charge.refunded",
   "charge.dispute.created",
 ]);
 const BILLING_EVENT_LEASE_MS = 5 * 60_000;
-const DECIMAL_PRICE_RE = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
+const DEFAULT_CHECKOUT_SESSION_MINUTES = 60;
+const MIN_CHECKOUT_SESSION_MINUTES = 31;
+const MAX_CHECKOUT_SESSION_MINUTES = 24 * 60;
+const DECIMAL_PRICE_RE = /^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/;
 const ISO_CURRENCY_RE = /^[A-Z]{3}$/;
+
+interface StripeCheckoutAttemptRow {
+  id: string;
+  user_id: string;
+  stripe_checkout_session_id: string | null;
+  status: "creating" | "open" | "complete" | "expired" | "failed";
+  expires_at: number;
+  created_at: number;
+  updated_at: number;
+}
 
 interface BillingQueueMessage {
   body: BillingEventMessage;
@@ -120,9 +140,29 @@ function configuredGraceMs(env: Bindings): number {
   return Number.isFinite(days) && days >= 0 ? Math.floor(days * 86_400_000) : 0;
 }
 
+function configuredCheckoutSessionMinutes(env: Bindings): number {
+  const raw = env.BILLING_CHECKOUT_SESSION_MINUTES?.trim();
+  if (!raw) return DEFAULT_CHECKOUT_SESSION_MINUTES;
+  const minutes = Number(raw);
+  if (
+    !Number.isInteger(minutes) ||
+    minutes < MIN_CHECKOUT_SESSION_MINUTES || minutes > MAX_CHECKOUT_SESSION_MINUTES
+  ) {
+    throw new StripeConfigurationError("Checkout Session lifetime is invalid");
+  }
+  return minutes;
+}
+
 export function billingConfigured(env: Bindings): boolean {
   const price = env.PAID_PLAN_MONTHLY_PRICE?.trim();
   const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase();
+  let policyValid = true;
+  try {
+    configuredUnitAmount(env);
+    configuredCheckoutSessionMinutes(env);
+  } catch {
+    policyValid = false;
+  }
   return Boolean(
     env.BILLING_ENABLED === "1" &&
     env.STRIPE_SECRET_KEY?.trim() &&
@@ -130,22 +170,91 @@ export function billingConfigured(env: Bindings): boolean {
     env.STRIPE_PRICE_PAID_MONTHLY?.trim() &&
     price && DECIMAL_PRICE_RE.test(price) &&
     currency && ISO_CURRENCY_RE.test(currency) &&
+    policyValid &&
+    (!env.STRIPE_TAX_ENABLED || ["0", "1"].includes(env.STRIPE_TAX_ENABLED.trim())) &&
     env.BILLING_EVENTS,
   );
 }
 
-function paidPlanDisplay(env: Bindings) {
+export function paidPlanDisplay(env: Bindings) {
   const price = env.PAID_PLAN_MONTHLY_PRICE?.trim() ?? null;
   const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase() ?? null;
-  return price && currency && DECIMAL_PRICE_RE.test(price) && ISO_CURRENCY_RE.test(currency)
-    ? {
-        price,
-        currency,
-        interval: "month" as const,
-        trialDays: PAID_TRIAL_DAYS,
-        display: `${PAID_TRIAL_DAYS}-day free trial, then ${currency} ${price}/month`,
-      }
-    : null;
+  if (!price || !currency || !DECIMAL_PRICE_RE.test(price) || !ISO_CURRENCY_RE.test(currency)) {
+    return null;
+  }
+  try {
+    configuredUnitAmount(env);
+  } catch {
+    return null;
+  }
+  return {
+    price,
+    currency,
+    interval: "month" as const,
+    trialDays: PAID_TRIAL_DAYS,
+    display: `${PAID_TRIAL_DAYS}-day free trial, then ${currency} ${price}/month`,
+  };
+}
+
+function currencyMinorUnits(currency: string): number {
+  try {
+    const units = new Intl.NumberFormat("en", { style: "currency", currency })
+      .resolvedOptions().maximumFractionDigits;
+    if (units === undefined) throw new Error("missing currency precision");
+    return units;
+  } catch {
+    throw new StripeConfigurationError("Paid plan currency is invalid");
+  }
+}
+
+function configuredUnitAmount(env: Bindings): number {
+  const price = env.PAID_PLAN_MONTHLY_PRICE?.trim();
+  const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase();
+  if (!price || !currency || !DECIMAL_PRICE_RE.test(price) || !ISO_CURRENCY_RE.test(currency)) {
+    throw new StripeConfigurationError("Paid plan disclosure is invalid");
+  }
+  const minorUnits = currencyMinorUnits(currency);
+  const [whole, fraction = ""] = price.split(".");
+  if (fraction.length > minorUnits) {
+    throw new StripeConfigurationError("Paid plan amount has too many decimal places");
+  }
+  const amount = Number(whole) * (10 ** minorUnits) + Number(fraction.padEnd(minorUnits, "0") || "0");
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new StripeConfigurationError("Paid plan amount is invalid");
+  }
+  return amount;
+}
+
+function productTaxCode(product: StripePrice["product"]): string | null {
+  if (typeof product === "string") return null;
+  if (typeof product.tax_code === "string") return product.tax_code;
+  return product.tax_code?.id ?? null;
+}
+
+/** Fail closed before Checkout if the charged Stripe Price can differ from the UI disclosure. */
+export async function validatePaidStripePrice(env: Bindings): Promise<StripePrice> {
+  const expectedId = paidPriceId(env);
+  const expectedCurrency = env.PAID_PLAN_CURRENCY?.trim().toLowerCase();
+  const price = await retrieveStripePrice(env, expectedId);
+  const productActive = typeof price.product === "object" && price.product !== null &&
+    price.product.active === true;
+  if (
+    price.id !== expectedId || !price.active || !productActive ||
+    price.type !== "recurring" || price.billing_scheme !== "per_unit" ||
+    price.unit_amount !== configuredUnitAmount(env) ||
+    typeof price.currency !== "string" || price.currency.toLowerCase() !== expectedCurrency ||
+    price.recurring?.interval !== "month" || price.recurring.interval_count !== 1 ||
+    price.recurring.usage_type !== "licensed"
+  ) {
+    throw new StripeConfigurationError("Paid Stripe Price does not match the published plan");
+  }
+  if (env.STRIPE_TAX_ENABLED === "1" && (
+    !["exclusive", "inclusive"].includes(price.tax_behavior ?? "") ||
+    productTaxCode(price.product) === null
+  )) {
+    throw new StripeConfigurationError("Stripe Tax requires Price tax behavior and a Product tax code");
+  }
+  return price;
 }
 
 function deadlineLabel(value: number): string {
@@ -203,8 +312,58 @@ async function stripeCustomerForUser(
   return row;
 }
 
+async function claimCheckoutAttempt(
+  env: Bindings,
+  userId: string,
+  now = Date.now(),
+): Promise<{ attempt: StripeCheckoutAttemptRow; created: boolean }> {
+  const candidateId = `checkout:${crypto.randomUUID()}`;
+  const expiresAt = now + configuredCheckoutSessionMinutes(env) * 60_000;
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE stripe_checkout_attempts
+       SET status = 'expired', updated_at = ?
+       WHERE user_id = ? AND status IN ('creating','open') AND expires_at <= ?`,
+    ).bind(now, userId, now),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO stripe_checkout_attempts
+         (id, user_id, status, expires_at, created_at, updated_at)
+       VALUES (?, ?, 'creating', ?, ?, ?)`,
+    ).bind(candidateId, userId, expiresAt, now, now),
+  ]);
+  const attempt = await env.DB.prepare(
+    `SELECT * FROM stripe_checkout_attempts
+     WHERE user_id = ? AND status IN ('creating','open')
+     ORDER BY created_at DESC LIMIT 1`,
+  ).bind(userId).first<StripeCheckoutAttemptRow>();
+  if (!attempt) throw new BillingEventError("checkout_attempt_conflict");
+  return { attempt, created: attempt.id === candidateId };
+}
+
+async function markCheckoutAttemptFailed(
+  env: Bindings,
+  attemptId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE stripe_checkout_attempts SET status = 'failed', updated_at = ?
+     WHERE id = ? AND status IN ('creating','open')`,
+  ).bind(Date.now(), attemptId).run();
+}
+
+async function checkoutTrialEligible(
+  env: Bindings,
+  customer: StripeCustomerRow,
+): Promise<boolean> {
+  if (customer.trial_used_at !== null) return false;
+  const priorTrial = await env.DB.prepare(
+    `SELECT 1 FROM stripe_subscriptions
+     WHERE user_id = ? AND trial_start IS NOT NULL LIMIT 1`,
+  ).bind(customer.user_id).first();
+  return priorTrial === null;
+}
+
 export async function billingStatusForUser(env: Bindings, user: UserRow, now = Date.now()) {
-  const [entitlement, subscription] = await Promise.all([
+  const [entitlement, subscription, customer] = await Promise.all([
     accountEntitlement(env, user.id),
     env.DB.prepare(
       `SELECT * FROM stripe_subscriptions
@@ -213,8 +372,13 @@ export async function billingStatusForUser(env: Bindings, user: UserRow, now = D
          THEN 0 ELSE 1 END, updated_at DESC
        LIMIT 1`,
     ).bind(user.id).first<StripeSubscriptionRow>(),
+    env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
+      .bind(user.id).first<StripeCustomerRow>(),
   ]);
   const effective = await effectiveEntitlementForUser(env, user, now);
+  const trialEligible = customer === null
+    ? true
+    : await checkoutTrialEligible(env, customer);
   const displayedBillingState = entitlement?.source === "stripe" && subscription
     ? projectStripeEntitlement({
         stripeStatus: subscription.stripe_status,
@@ -228,6 +392,7 @@ export async function billingStatusForUser(env: Bindings, user: UserRow, now = D
   return {
     configured: billingConfigured(env),
     paidPlan: paidPlanDisplay(env),
+    trialEligible,
     entitlement: effective,
     account: accountAccess(user, effective),
     billing: entitlement
@@ -260,6 +425,11 @@ function routeError(c: Parameters<typeof requireAccount>[0], error: unknown) {
   }
   if (error instanceof StripeApiError) {
     return c.json({ error: "Stripe is temporarily unavailable. Try again shortly." }, 502);
+  }
+  if (error instanceof BillingEventError && error.code === "stripe_subscription_pending") {
+    return c.json({
+      error: "A Stripe subscription already exists and is still syncing. Try again shortly.",
+    }, 409);
   }
   throw error;
 }
@@ -301,17 +471,49 @@ export const billingRoutes = new Hono<AppContext>()
         if (!portal.url) throw new BillingEventError("invalid_portal_response");
         return c.json({ url: portal.url }, 200);
       }
+      await validatePaidStripePrice(c.env);
       const customer = await stripeCustomerForUser(c.env, user);
+      const remoteSubscriptions = await listStripeSubscriptions(
+        c.env,
+        customer.stripe_customer_id,
+      );
+      if (!Array.isArray(remoteSubscriptions.data)) {
+        throw new BillingEventError("invalid_subscription_list");
+      }
+      if (remoteSubscriptions.data.some((subscription) =>
+        !["canceled", "incomplete_expired"].includes(subscription.status)
+      )) {
+        throw new BillingEventError("stripe_subscription_pending");
+      }
+      const remoteTrialUsed = remoteSubscriptions.has_more ||
+        remoteSubscriptions.data.some((subscription) => subscription.trial_start != null);
+      const { attempt, created } = await claimCheckoutAttempt(c.env, user.id);
       try {
         const session = await createStripeCheckoutSession(c.env, {
           userId: user.id,
           customerId: customer.stripe_customer_id,
+          attemptId: attempt.id,
+          expiresAt: Math.floor(attempt.expires_at / 1000),
+          trialEligible: !remoteTrialUsed && await checkoutTrialEligible(c.env, customer),
         });
         if (!session.id || !session.url || customerId(session.customer) !== customer.stripe_customer_id) {
+          await markCheckoutAttemptFailed(c.env, attempt.id);
           throw new BillingEventError("invalid_checkout_response");
         }
-        return c.json({ url: session.url }, 201);
+        const updated = await c.env.DB.prepare(
+          `UPDATE stripe_checkout_attempts
+           SET stripe_checkout_session_id = ?, status = 'open', updated_at = ?
+           WHERE id = ? AND user_id = ? AND status IN ('creating','open')`,
+        ).bind(session.id, Date.now(), attempt.id, user.id).run();
+        if (!updated.meta.changes) throw new BillingEventError("checkout_attempt_lost");
+        return c.json({ url: session.url }, created ? 201 : 200);
       } catch (error) {
+        if (
+          error instanceof StripeConfigurationError ||
+          (error instanceof StripeApiError && error.status >= 400 && error.status < 500)
+        ) {
+          await markCheckoutAttemptFailed(c.env, attempt.id);
+        }
         return routeError(c, error);
       }
     } catch (error) {
@@ -478,6 +680,70 @@ async function markNonSubscriptionEvent(
   ).bind(objectId(object), Date.now(), eventId).run();
 }
 
+function riskEventChargeId(eventType: string, object: Record<string, unknown>): string | null {
+  if (eventType === "charge.refunded") return objectId(object);
+  if (eventType === "charge.dispute.created") {
+    const charge = object.charge;
+    return typeof charge === "string" ? charge : objectId(charge);
+  }
+  return null;
+}
+
+async function processBillingRiskEvent(
+  env: Bindings,
+  event: { id: string; type: string; data: { object: Record<string, unknown> } },
+): Promise<void> {
+  const chargeId = riskEventChargeId(event.type, event.data.object);
+  if (!chargeId) throw new BillingEventError("risk_event_missing_charge");
+  const charge: StripeCharge = await retrieveStripeCharge(env, chargeId);
+  if (charge.id !== chargeId) throw new BillingEventError("charge_id_mismatch");
+  const invoiceId = typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id ?? null;
+  if (!invoiceId) {
+    console.warn(JSON.stringify({ event: "billing_operator_alert", type: event.type, eventId: event.id }));
+    await markNonSubscriptionEvent(env, event.id, event.data.object);
+    return;
+  }
+  const invoice = await retrieveStripeInvoice(env, invoiceId);
+  const subscriptionId = relatedSubscriptionId("invoice.paid", invoice as unknown as Record<string, unknown>);
+  if (!subscriptionId) throw new BillingEventError("risk_event_missing_subscription");
+  const subscription = await retrieveStripeSubscription(env, subscriptionId);
+  const customer = await validatedSubscriptionOwner(env, subscription);
+  const stripeCustomerId = customerId(charge.customer);
+  if (
+    stripeCustomerId !== customer.stripe_customer_id ||
+    customerId(invoice.customer) !== customer.stripe_customer_id
+  ) {
+    throw new BillingEventError("risk_event_customer_mismatch");
+  }
+  const now = Date.now();
+  const title = event.type === "charge.dispute.created" ? "Payment disputed" : "Payment refunded";
+  const message = event.type === "charge.dispute.created"
+    ? "A payment dispute was opened for your Premium subscription. Contact support if you do not recognize it. Access changes require operator review."
+    : "A payment for your Premium subscription was refunded. Any access change follows the published refund policy and operator review.";
+  await env.DB.batch([
+    billingNoticeStatement(env, {
+      id: `billing:${event.id}`,
+      userId: customer.user_id,
+      title,
+      message,
+      severity: "critical",
+      createdAt: now,
+    }),
+    env.DB.prepare(
+      `UPDATE stripe_billing_events
+       SET status = 'processed', object_id = ?, subscription_id = ?, processed_at = ?
+       WHERE event_id = ? AND status = 'processing'`,
+    ).bind(objectId(event.data.object), subscriptionId, now, event.id),
+  ]);
+  console.warn(JSON.stringify({
+    event: "billing_operator_alert",
+    type: event.type,
+    eventId: event.id,
+    subscriptionId,
+    userId: customer.user_id,
+  }));
+}
+
 async function validatedSubscriptionOwner(
   env: Bindings,
   subscription: StripeSubscription,
@@ -488,16 +754,10 @@ async function validatedSubscriptionOwner(
     "SELECT * FROM stripe_customers WHERE stripe_customer_id = ?",
   ).bind(stripeCustomerId).first<StripeCustomerRow>();
   if (!customer) throw new BillingEventError("unknown_customer");
-  if (
-    subscription.metadata.userId !== undefined &&
-    subscription.metadata.userId !== customer.user_id
-  ) {
+  if (subscription.metadata.userId !== customer.user_id) {
     throw new BillingEventError("subscription_user_mismatch");
   }
-  if (
-    subscription.metadata.plan !== undefined &&
-    subscription.metadata.plan !== "paid"
-  ) {
+  if (subscription.metadata.plan !== "paid") {
     throw new BillingEventError("unsupported_plan");
   }
   if (subscription.items.has_more || subscription.items.data.length !== 1) {
@@ -671,6 +931,13 @@ async function applyCanonicalSubscription(
       now,
     ),
   ];
+  if (trialStart !== null) {
+    statements.push(env.DB.prepare(
+      `UPDATE stripe_customers
+       SET trial_used_at = COALESCE(trial_used_at, ?), updated_at = ?
+       WHERE user_id = ? AND stripe_customer_id = ?`,
+    ).bind(trialStart, now, customer.user_id, stripeCustomerId));
+  }
   if (authoritativeSubscription) {
     statements.push(env.DB.prepare(
       `INSERT INTO account_entitlements
@@ -717,6 +984,12 @@ async function applyCanonicalSubscription(
     if (customerId(session.customer) !== stripeCustomerId) {
       throw new BillingEventError("checkout_customer_mismatch");
     }
+    statements.push(env.DB.prepare(
+      `UPDATE stripe_checkout_attempts
+       SET status = 'complete', updated_at = ?
+       WHERE user_id = ? AND stripe_checkout_session_id = ?
+         AND status IN ('creating','open')`,
+    ).bind(now, customer.user_id, session.id));
   }
   const noticeId = `billing:${input.eventId ?? `${input.eventType}:${input.subscription.id}:${input.eventCreated}`}`;
   if (
@@ -874,11 +1147,31 @@ export async function processBillingEventMessage(
       await markNonSubscriptionEvent(env, event.id, event.data.object);
       return;
     }
+    if (event.type === "checkout.session.expired") {
+      const sessionId = objectId(event.data.object);
+      if (!sessionId) throw new BillingEventError("checkout_missing_id");
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE stripe_checkout_attempts SET status = 'expired', updated_at = ?
+           WHERE stripe_checkout_session_id = ? AND status IN ('creating','open')`,
+        ).bind(Date.now(), sessionId),
+        env.DB.prepare(
+          `UPDATE stripe_billing_events
+           SET status = 'processed', object_id = ?, processed_at = ?
+           WHERE event_id = ? AND status = 'processing'`,
+        ).bind(sessionId, Date.now(), event.id),
+      ]);
+      return;
+    }
+    if (event.type === "charge.dispute.created" || event.type === "charge.refunded") {
+      await processBillingRiskEvent(env, event);
+      return;
+    }
     const subscriptionId = relatedSubscriptionId(event.type, event.data.object);
     if (!subscriptionId) {
-      // Disputes and non-subscription invoice anomalies are support signals,
-      // not implicit authorization mutations.
-      if (event.type === "charge.dispute.created" || event.type === "invoice.finalization_failed") {
+      // Non-subscription invoice anomalies are support signals, not implicit
+      // authorization mutations.
+      if (event.type === "invoice.finalization_failed") {
         console.warn(JSON.stringify({ event: "billing_operator_alert", type: event.type, eventId: event.id }));
         await markNonSubscriptionEvent(env, event.id, event.data.object);
         return;

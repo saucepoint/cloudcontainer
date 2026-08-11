@@ -189,7 +189,8 @@ Billing is fail-closed and remains hidden unless all of these are present:
 - a `BILLING_EVENTS` Cloudflare Queue bound as both producer and consumer.
 
 Optional non-secret policy variables are `STRIPE_TAX_ENABLED` (`0` until tax
-readiness is approved), `BILLING_GRACE_DAYS`, and
+readiness is approved), `BILLING_GRACE_DAYS`, `BILLING_CHECKOUT_SESSION_MINUTES`
+(31–1440, default 60), and
 `BILLING_EXPORT_WINDOW_DAYS`. Omitting the export-window value disables
 automatic billing destruction; it is intentionally not given an implicit
 deadline.
@@ -216,7 +217,9 @@ Create the production Queue and dead-letter Queue, then add this shape to
 
 In Stripe, create one monthly Paid Price, enable the Customer Portal for
 payment-method and invoice management, permit cancellation at period end, and
-leave arbitrary product/quantity switching disabled. Register
+leave arbitrary product/quantity switching disabled. Keep the Portal login link
+enabled and turn on Checkout's redirect for Customers that already have an
+active subscription; the Worker always passes the stored Customer ID. Register
 `https://YOUR_BASE_URL/api/stripe/webhook` as an account event destination with
 API version `2026-07-29.dahlia` and the event set listed in
 [MONETIZATION.md](./MONETIZATION.md#97-events-to-subscribe-to). Store the
@@ -231,12 +234,18 @@ separate for Stripe sandboxes and live mode. Configure Smart Retries according
 to the approved recovery policy; the application never infers a fixed retry
 schedule from Stripe events.
 
-Checkout always selects the configured Price server-side; its success redirect
-does not grant access. Every self-service Paid Checkout starts a fixed seven-day
-trial, explicitly requires Checkout to collect a payment method, and
-asks Stripe to cancel if no payment method is present at trial end. A canceled
-trial or failed first charge removes Paid access; verified owners return to
-Free resources, while paid-bypass owners are billing-suspended.
+Checkout always selects the configured Price server-side and confirms that its
+active Product, recurring interval, amount, currency, quantity model, and tax
+metadata match the published offer; its success redirect does not grant access.
+Only an account's first self-service Paid subscription receives the fixed
+seven-day trial. Checkout explicitly collects a payment method and asks Stripe
+to cancel if none is present at trial end. One local Checkout attempt remains
+active per account and supplies a stable Stripe idempotency key until completion
+or expiry. Before starting another Session, the Worker also checks the
+Customer's canonical Stripe subscription list, preventing an unsynced webhook
+from creating a duplicate or repeating an older trial. A canceled trial or
+failed first charge removes Paid access; verified
+owners return to Free resources, while paid-bypass owners are billing-suspended.
 
 Generate service keys with:
 

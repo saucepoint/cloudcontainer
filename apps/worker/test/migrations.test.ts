@@ -598,3 +598,52 @@ describe("0021 paid-tier CPU migration", () => {
       .toEqual({ vcpu_allocated: 3 });
   });
 });
+
+describe("0022 billing Checkout hardening migration", () => {
+  it("backfills account-level trial consumption from subscription history", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 'free', 1, 1);
+      INSERT INTO stripe_customers
+        (user_id, stripe_customer_id, created_at, updated_at)
+      VALUES ('user-1', 'cus_user', 1, 1);
+      INSERT INTO stripe_subscriptions
+        (stripe_subscription_id, user_id, stripe_customer_id, price_id, plan,
+         stripe_status, trial_start, trial_end, last_synced_at, created_at, updated_at)
+      VALUES ('sub_old', 'user-1', 'cus_user', 'price_paid', 'paid',
+              'canceled', 1000, 2000, 3, 1, 3);
+    `);
+
+    db.exec(migration("0022_billing_checkout_hardening.sql"));
+
+    expect(db.prepare(
+      "SELECT stripe_customer_id, trial_used_at FROM stripe_customers WHERE user_id = 'user-1'",
+    ).get()).toEqual({ stripe_customer_id: "cus_user", trial_used_at: 1000 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});

@@ -1,12 +1,12 @@
 # Monetization and Stripe subscription plan
 
-**Status:** Planning · **Last updated:** 2026-08-07
+**Status:** Implemented behind launch gate; production configuration and acceptance pending · **Last updated:** 2026-08-11
 
 This document defines paid onboarding, billing, entitlement, container upgrades,
 and mixed-tier host placement for usebench.dev.
 
-It is an implementation plan, not the current production contract. `SPEC.md`
-must be updated when these decisions are approved and implemented.
+`SPEC.md` is the normative runtime contract. This document retains the design
+rationale and, in §17, the ordered production launch checklist.
 
 ---
 
@@ -280,7 +280,7 @@ Advance it after a paid invoice is validated against the expected customer,
 subscription, and price.
 
 ```ts
-if (event.type === "invoice.paid" && event.data.object.amount_paid > 0) {
+if (event.type === "invoice.paid" && subscription.status === "active") {
   const subscription = await fetchCanonicalSubscription(event);
   assertSupportedSinglePrice(subscription);
 
@@ -589,12 +589,15 @@ unverified account can choose the paid path.
 The endpoint must:
 
 1. Load or create exactly one Stripe Customer for the internal user.
-2. Use a stable Stripe idempotency key such as `customer:${user.id}`.
+2. Use `customer:${user.id}` as the stable Customer idempotency key.
 3. Persist the Customer mapping before creating Checkout.
 4. Reject or redirect if a non-terminal subscription already exists.
 5. Select the Price from a server-side allowlist.
-6. Create a hosted subscription Checkout Session.
-7. Return the Stripe URL.
+6. Claim one unexpired local Checkout attempt and use its ID as the stable
+   Session idempotency key across retries.
+7. Include the seven-day trial only when the Customer has no prior trial.
+8. Create a hosted subscription Checkout Session and persist its correlation.
+9. Return the Stripe URL.
 
 ```ts
 const customer = await findOrCreateStripeCustomer(user);
@@ -712,6 +715,7 @@ shorten a later paid-through deadline or reverse a newer subscription state.
 | Event | Purpose |
 |---|---|
 | `checkout.session.completed` | Correlate Checkout; do not grant access without valid billing state. |
+| `checkout.session.expired` | Expire the correlated local attempt so a new Checkout can start. |
 | `customer.subscription.created` | Sync canonical subscription and Price. |
 | `customer.subscription.updated` | Sync status, cancellation, Price, and period changes. |
 | `customer.subscription.deleted` | Revoke an unpaid trial immediately; otherwise enforce the stored paid-through deadline. |
@@ -722,6 +726,7 @@ shorten a later paid-through deadline or reverse a newer subscription state.
 | `invoice.payment_failed` | End unpaid trial access or mark a renewal past due; never extend service. |
 | `invoice.payment_action_required` | Direct the customer to resolve authentication. |
 | `invoice.finalization_failed` | Alert and request missing tax/location data when applicable. |
+| `charge.refunded` | Correlate the Charge through Invoice and Subscription, notify the owner, and alert an operator without inventing an access policy. |
 | `charge.dispute.created` | Alert and apply the approved fraud policy. |
 
 Pause-payment collection is not the same as a subscription status of `paused`.
@@ -987,7 +992,9 @@ checks, and no free fallback unless permanent free eligibility was completed.
 - An existing active subscription redirects to Portal.
 - Client-supplied Price and Customer IDs are ignored or rejected.
 - Checkout success without a webhook grants no access.
-- Checkout creates a seven-day trial and collects a payment method for the first post-trial charge.
+- The first subscription creates a seven-day trial and Checkout collects a
+  payment method for the first post-trial charge; later subscriptions do not
+  repeat the trial.
 - Portal cancellation is configured for period end.
 
 ### 14.3 Webhooks
@@ -1065,9 +1072,128 @@ blocked beyond the support target.
 
 ---
 
-## 16. Source references
+## 16. Repository readiness completed
 
+The merge candidate now resolves the application-side launch blockers that do
+not require production credentials or commercial decisions:
+
+- [x] single-flight Checkout attempts with stable Session idempotency keys and
+  Stripe-driven expiry cleanup;
+- [x] a canonical Stripe Customer-subscription preflight that blocks duplicates
+  and repeat trials even when a prior webhook has not reached D1;
+- [x] first-subscription-only trials, including migration of historical trial
+  use to Customer-level state;
+- [x] fail-closed validation of the active Stripe Product and recurring Price
+  against the server-rendered amount and currency before Checkout;
+- [x] one configured price disclosure across landing, account, and dashboard;
+- [x] automatic-tax Checkout address collection and Customer address updates;
+- [x] strict Customer, required metadata, Price, quantity, trial, and API-version
+  validation in the event consumer;
+- [x] correlated refund/dispute owner notices and operator alerts without an
+  unapproved entitlement mutation;
+- [x] event support for `checkout.session.expired` and `charge.refunded`;
+- [x] `BILLING_CHECKOUT_SESSION_MINUTES` runtime support and migration `0022`;
+  and
+- [x] focused regression coverage for these paths.
+
+## 17. Ordered production launch checklist
+
+These items intentionally remain developer/operator-owned because they mutate
+Stripe, Cloudflare, production data, or commercial policy. Keep
+`BILLING_ENABLED=0` until item 12.
+
+### P0 — required before enabling production sales
+
+- [ ] **1. Approve the offer and policies.** Record the exact monthly amount and
+  currency, countries served, supported payment methods, tax treatment,
+  failed-renewal grace, refunds/disputes, cancellation, export/retention, and
+  account-deletion support workflow. Publish effective Terms, Privacy, refund,
+  and cancellation URLs; do not invent these values in code.
+- [ ] **2. Finish Stripe account live-mode activation.** Verify the legal
+  business, bank/payout, public business details, support contact, statement
+  descriptor, branding, and required tax registrations in Stripe.
+- [ ] **3. Create and approve the live Product and Price.** Use one active,
+  per-unit, licensed, monthly recurring Price with quantity one. Its amount and
+  currency must exactly match `PAID_PLAN_MONTHLY_PRICE` and
+  `PAID_PLAN_CURRENCY`. If Tax is enabled, set explicit Price tax behavior and
+  a Product tax code.
+- [ ] **4. Create least-privilege live API credentials.** The Worker needs the
+  Stripe operations used by this code: Customers create/read, Checkout Sessions
+  create, Billing Portal Sessions create, and Events, Prices, Subscriptions,
+  Products, Invoices, and Charges read. Store the live key only as
+  `STRIPE_SECRET_KEY`; never copy sandbox keys into production.
+- [ ] **5. Create the production Queue and DLQ.** Bind `BILLING_EVENTS` as both
+  producer and consumer using the retry/DLQ shape in `README.md`. Confirm the
+  on-call team can inspect Queue lag, retries, and dead letters.
+- [ ] **6. Create the live webhook event destination.** Point it to
+  `https://usebench.dev/api/stripe/webhook`, pin API version
+  `2026-07-29.dahlia`, and subscribe to every event in §9.7. Store its live
+  signing secret as `STRIPE_WEBHOOK_SECRET`.
+- [ ] **7. Configure the live Customer Portal.** Enable payment-method and
+  invoice management plus cancellation at period end. Disable arbitrary plan
+  switching and quantity changes. Keep the Portal login link enabled and turn
+  on Checkout's redirect for Customers that already have an active
+  subscription. Verify scheduled cancellation can be reversed.
+- [ ] **8. Configure live subscription recovery and notices.** Enable the
+  approved trial-ending and failed-payment emails, customer-management link,
+  cancellation-policy URL, and Smart Retry/dunning behavior. Confirm the
+  seven-day trial wording and first-charge date are visible in Checkout and
+  receipts.
+- [ ] **9. Configure tax deliberately.** Keep `STRIPE_TAX_ENABLED=0` unless the
+  approved registrations, nexus/market scope, Product tax code, Price tax
+  behavior, and address collection have been reviewed. Test the result for each
+  supported jurisdiction before setting it to `1`.
+- [ ] **10. Install production vars and secrets with the sales gate closed.**
+  Configure `STRIPE_PRICE_PAID_MONTHLY`, display amount/currency, Checkout
+  lifetime, grace/export policy, Queue binding, and live secrets. Explicitly
+  keep `BILLING_ENABLED=0` for the migration and initial Worker deployment.
+- [ ] **11. Record sandbox acceptance evidence.** Exercise the full matrix in
+  §14.7, including double-click/concurrent Checkout, abandoned Session expiry,
+  first-trial-only resubscription, tax address behavior, zero-value renewal,
+  refund/dispute correlation, Queue retry/DLQ replay, and rollback.
+- [ ] **12. Merge and deploy the gated release.** Require a clean worktree and
+  passing client build, type-check, lint, full tests, dependency audit, deploy
+  dry-run, remote migration review, migration through `0022`, and post-deploy
+  smoke checks. Confirm existing subscribers can still reach Portal/webhooks
+  even while new sales are disabled.
+
+### P1 — required to open live sales
+
+- [ ] **13. Establish monitoring and paging.** Alert on webhook delivery
+  failures, verification failures, Queue age/retries/DLQ, failed billing events,
+  unsupported Price, duplicate live subscription, stale canonical sync,
+  transition age, and paid capacity headroom. Verify the alerts reach the
+  production on-call owner.
+- [ ] **14. Run a controlled live canary.** Confirm `/api/billing/status` first,
+  then set `BILLING_ENABLED=1` for a limited production canary. Use a real
+  payment method and live Product/Price, verify Customer/Subscription/Invoice,
+  webhook-to-Queue processing, Portal access, in-app notices, entitlement, and
+  container resize. Refund/cancel the canary according to the approved policy.
+- [ ] **15. Make the go/no-go decision.** Review canary evidence, Stripe event
+  delivery, Queue/DLQ, capacity, logs for PII/secrets, support readiness, and
+  rollback ownership before broad availability.
+
+### P2 — immediate post-launch controls
+
+- [ ] **16. Observe the first renewal and first trial conversion.** Reconcile
+  Stripe and D1 deadlines manually and verify that a settled active renewal,
+  including a legitimate zero-value credited renewal, advances service while a
+  trial-opening invoice does not.
+- [ ] **17. Exercise the kill switch.** Confirm setting `BILLING_ENABLED=0`
+  stops new Checkout without disabling Portal, webhooks, Queue consumption, or
+  reconciliation for existing subscribers.
+- [ ] **18. Schedule key/webhook rotation and evidence review.** Document
+  owners, cadence, overlapping webhook-secret rotation steps, DLQ replay
+  authority, retention, and the date for the first post-launch audit.
+
+## 18. Source references
+
+- [Stripe go-live checklist](https://docs.stripe.com/get-started/checklist/go-live)
+- [Stripe API key security](https://docs.stripe.com/keys)
 - [Stripe Checkout subscriptions](https://docs.stripe.com/payments/checkout/build-subscriptions)
+- [Limit a Customer to one subscription](https://docs.stripe.com/payments/checkout/limit-subscriptions)
+- [Stripe Tax with Checkout](https://docs.stripe.com/tax/checkout)
+- [Stripe trial and promotion requirements](https://docs.stripe.com/billing/subscriptions/trials)
 - [Stripe subscription webhooks and statuses](https://docs.stripe.com/billing/subscriptions/webhooks)
 - [Stripe cancellation and period-end service](https://docs.stripe.com/billing/subscriptions/cancel)
 - [Stripe webhook security and delivery](https://docs.stripe.com/webhooks)

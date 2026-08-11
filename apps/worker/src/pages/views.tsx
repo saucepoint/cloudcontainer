@@ -55,7 +55,10 @@ const LandingTerminalFallback: FC = () => (
   </div>
 );
 
-export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
+export const LandingPage: FC<{
+  devAuth: boolean;
+  paidPlan?: { price: string; currency: string; interval: "month" } | null;
+}> = ({ devAuth, paidPlan = null }) => (
   <Layout>
     <div class="landing-hero">
       <h1 class="landing-title">Your <i>free</i> cloud terminal</h1>
@@ -85,7 +88,9 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
         </li>
         <li>
           <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
-          <span class="tier-label">$6/mo</span>
+          <span class="tier-label">
+            {paidPlan ? `${paidPlan.currency} ${paidPlan.price}/mo` : "coming soon"}
+          </span>
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -173,6 +178,7 @@ export const AccountPage: FC<{
   unreadNotificationCount?: number;
   billing?: {
     configured: boolean;
+    trialEligible?: boolean;
     paidPlan: {
       price: string;
       currency: string;
@@ -296,11 +302,15 @@ export const AccountPage: FC<{
             </>
           ) : billing.billing?.source === "manual" ? (
             <p>Operator-managed {billing.billing.plan} entitlement.</p>
-          ) : billing.configured ? (
+          ) : billing.configured && billing.paidPlan ? (
             <>
-              <p>Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 5.99/month.</p>
+              <p>
+                Upgrade to 2 vCPU, 4 GB RAM, and more storage for {billing.paidPlan.currency} {billing.paidPlan.price}/month.
+              </p>
               <button id="billing-checkout-btn" class="btn primary" type="button">
-                Start 7-day Premium trial →
+                {billing.trialEligible === false
+                  ? "Subscribe to Premium →"
+                  : "Start 7-day Premium trial →"}
               </button>
             </>
           ) : <p class="muted">Premium subscriptions are not available yet.</p>}

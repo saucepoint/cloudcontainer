@@ -26,6 +26,7 @@ export interface StripeCheckoutSession {
   customer: string | StripeCustomer | null;
   subscription?: string | { id: string } | null;
   client_reference_id?: string | null;
+  expires_at?: number;
 }
 
 export interface StripePortalSession {
@@ -55,6 +56,11 @@ export interface StripeSubscription {
   items: { data: StripeSubscriptionItem[]; has_more?: boolean };
 }
 
+export interface StripeSubscriptionList {
+  data: StripeSubscription[];
+  has_more: boolean;
+}
+
 export interface StripeInvoice {
   id: string;
   customer: string | StripeCustomer | null;
@@ -67,6 +73,32 @@ export interface StripeInvoice {
   } | null;
   // Accepted only for old event fixtures during a webhook-version rollout.
   subscription?: string | { id: string } | null;
+}
+
+export interface StripePrice {
+  id: string;
+  active: boolean;
+  currency: string;
+  type: string;
+  unit_amount: number | null;
+  tax_behavior?: "exclusive" | "inclusive" | "unspecified";
+  billing_scheme?: string;
+  recurring?: {
+    interval: string;
+    interval_count: number;
+    usage_type: string;
+  } | null;
+  product: string | {
+    id: string;
+    active: boolean;
+    tax_code?: string | { id: string } | null;
+  };
+}
+
+export interface StripeCharge {
+  id: string;
+  customer: string | StripeCustomer | null;
+  invoice?: string | { id: string } | null;
 }
 
 export class StripeConfigurationError extends Error {
@@ -156,7 +188,13 @@ export async function createStripeCustomer(
 
 export async function createStripeCheckoutSession(
   env: Bindings,
-  input: { userId: string; customerId: string },
+  input: {
+    userId: string;
+    customerId: string;
+    attemptId: string;
+    expiresAt: number;
+    trialEligible: boolean;
+  },
 ): Promise<StripeCheckoutSession> {
   const form = new URLSearchParams({
     mode: "subscription",
@@ -169,18 +207,25 @@ export async function createStripeCheckoutSession(
     "subscription_data[metadata][plan]": "paid",
     "subscription_data[billing_mode][type]": "flexible",
     "subscription_data[billing_mode][flexible][proration_discounts]": "itemized",
-    "subscription_data[trial_period_days]": String(PAID_TRIAL_DAYS),
-    "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
     "automatic_tax[enabled]": env.STRIPE_TAX_ENABLED === "1" ? "true" : "false",
+    expires_at: String(input.expiresAt),
     success_url: `${env.BASE_URL}/dashboard?checkout=success`,
     cancel_url: `${env.BASE_URL}/dashboard?checkout=cancelled`,
   });
+  if (input.trialEligible) {
+    form.set("subscription_data[trial_period_days]", String(PAID_TRIAL_DAYS));
+    form.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel");
+  }
+  if (env.STRIPE_TAX_ENABLED === "1") {
+    form.set("billing_address_collection", "required");
+    form.set("customer_update[address]", "auto");
+  }
   return stripeRequest<StripeCheckoutSession>(
     env,
     "POST",
     "/v1/checkout/sessions",
     form,
-    `checkout:${crypto.randomUUID()}`,
+    input.attemptId,
   );
 }
 
@@ -214,6 +259,14 @@ export async function retrieveStripeSubscription(
   );
 }
 
+export async function listStripeSubscriptions(
+  env: Bindings,
+  customerId: string,
+): Promise<StripeSubscriptionList> {
+  const query = new URLSearchParams({ customer: customerId, status: "all", limit: "100" });
+  return stripeRequest<StripeSubscriptionList>(env, "GET", `/v1/subscriptions?${query}`);
+}
+
 export async function retrieveStripeInvoice(
   env: Bindings,
   invoiceId: string,
@@ -222,6 +275,22 @@ export async function retrieveStripeInvoice(
     env,
     "GET",
     `/v1/invoices/${encodeURIComponent(invoiceId)}`,
+  );
+}
+
+export async function retrieveStripePrice(env: Bindings, priceId: string): Promise<StripePrice> {
+  return stripeRequest<StripePrice>(
+    env,
+    "GET",
+    `/v1/prices/${encodeURIComponent(priceId)}?expand%5B%5D=product`,
+  );
+}
+
+export async function retrieveStripeCharge(env: Bindings, chargeId: string): Promise<StripeCharge> {
+  return stripeRequest<StripeCharge>(
+    env,
+    "GET",
+    `/v1/charges/${encodeURIComponent(chargeId)}`,
   );
 }
 
