@@ -66,8 +66,7 @@ function ContainerCard({
         </span>
       </div>
       <p className="muted">
-        {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.diskGb} GB Storage · actual plan {container.tier}
-        {container.planTransition ? ` · desired plan ${container.planTransition.desiredTier}` : ""}
+        {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.tier === "paid" ? "premium" : "free"}
       </p>
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
       {container.status === "waitlisted" ? (

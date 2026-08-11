@@ -6,14 +6,9 @@ import { cliAuthRoutes } from "./cli-auth.js";
 import { fleetAdminRoutes } from "./fleet-admin.js";
 import { authRoutes, requireAccount } from "./auth.js";
 import { createAuth, handleAuthRequest } from "./better-auth.js";
-import {
-  billingConfigured,
-  billingRoutes,
-  billingStatusForUser,
-  paidPlanDisplay,
-  processBillingQueue,
-  type BillingQueueBatch,
-} from "./billing.js";
+import { billingAvailability } from "./billing-config.js";
+import { billingRoutes, billingStatusForUser } from "./billing-routes.js";
+import { processBillingQueue } from "./billing.js";
 import { codexAuthRoutes } from "./codexauth.js";
 import { githubConfigured, githubRoutes } from "./github.js";
 import { requestBodyLimit } from "./http.js";
@@ -25,7 +20,7 @@ import { DashboardPage } from "./pages/dashboard.js";
 import { AccountPage, ConfigurePage, LandingPage, NotFoundPage, TermsPage } from "./pages/views.js";
 import { reconcile } from "./reconciler.js";
 import { subscriptionRoutes } from "./subscriptions.js";
-import type { AppContext } from "./types.js";
+import type { AppContext, BillingEventMessage } from "./types.js";
 
 export const app = new Hono<AppContext>();
 
@@ -54,10 +49,11 @@ app.get("/terms", async (c) => {
 app.get("/", async (c) => {
   const session = await createAuth(c.env, c.req.url).api.getSession({ headers: c.req.raw.headers });
   if (session) return c.redirect("/account/continue");
+  const billing = billingAvailability(c.env);
   return c.html(
     <LandingPage
       devAuth={c.env.DEV_AUTH === "1"}
-      paidPlan={billingConfigured(c.env) ? paidPlanDisplay(c.env) : null}
+      paidPlan={billing.configured ? billing.paidPlan : null}
     />,
   );
 });
@@ -143,9 +139,9 @@ app.notFound((c) => {
 export default {
   fetch: app.fetch,
   async queue(batch, env) {
-    await processBillingQueue(batch as unknown as BillingQueueBatch, env as AppContext["Bindings"]);
+    await processBillingQueue(batch, env);
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(reconcile(env as AppContext["Bindings"]));
+    ctx.waitUntil(reconcile(env));
   },
-} satisfies ExportedHandler<AppContext["Bindings"]>;
+} satisfies ExportedHandler<AppContext["Bindings"], BillingEventMessage>;

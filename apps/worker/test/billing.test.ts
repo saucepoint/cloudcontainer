@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  billingRoutes,
   processBillingEventMessage,
   reconcileBillingState,
 } from "../src/billing.js";
+import { billingRoutes } from "../src/billing-routes.js";
 import {
   effectiveEntitlement,
   projectStripeEntitlement,
@@ -509,6 +509,31 @@ describe("billing routes", () => {
       error: "A Stripe subscription already exists and is still syncing. Try again shortly.",
     });
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM stripe_checkout_attempts").first())
+      .toEqual({ count: 0 });
+  });
+
+  it("rejects malformed Stripe responses at the transport boundary", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    await seedStripeCustomer(env);
+    stubFetch((url) => {
+      if (url.pathname === "/v1/prices/price_paid_monthly") return Response.json(paidPrice());
+      if (url.pathname === "/v1/subscriptions") {
+        return Response.json({ data: {}, has_more: false });
+      }
+      throw new Error("invalid subscription data must stop before Checkout");
+    });
+
+    const response = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "Stripe is temporarily unavailable. Try again shortly.",
+    });
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM stripe_checkout_attempts").first())
       .toEqual({ count: 0 });
   });

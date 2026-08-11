@@ -193,7 +193,8 @@ readiness is approved), `BILLING_GRACE_DAYS`, `BILLING_CHECKOUT_SESSION_MINUTES`
 (31–1440, default 60), and
 `BILLING_EXPORT_WINDOW_DAYS`. Omitting the export-window value disables
 automatic billing destruction; it is intentionally not given an implicit
-deadline.
+deadline. Omitted optional values use only the documented defaults; malformed
+explicit values fail billing configuration instead of silently changing policy.
 
 Create the production Queue and dead-letter Queue, then add this shape to
 `apps/worker/wrangler.jsonc` using the final queue names:
@@ -499,6 +500,9 @@ daemon capability fleet-wide before setting `BILLING_ENABLED=1`.
 configuration from expiring wizard drafts and backfills existing containers.
 `0021_paid_tier_cpu.sql` aligns existing Paid host accounting with its 2-vCPU
 reservation.
+`0022_billing_checkout_hardening.sql` records whether a Stripe Customer has
+already consumed the account-level trial so cancellation and resubscription
+cannot create another free-service period.
 
 The CLI package can be built and inspected without publishing:
 

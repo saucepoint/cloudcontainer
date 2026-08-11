@@ -7,7 +7,7 @@ import {
   type JobOp,
   type Tier,
 } from "@workbench/contract";
-import { billingStatusForUser } from "./billing.js";
+import { billingStatusForUser } from "./billing-routes.js";
 import {
   requireAccount,
   requireCredentialSetup,

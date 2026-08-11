@@ -1,9 +1,7 @@
-import { Hono } from "hono";
 import { SERVICE_PLANS, TIERS } from "@workbench/contract";
-import { bearerToken, secretMatches } from "./admin-auth.js";
-import { requireAccount } from "./auth.js";
+import { configuredExportWindowMs, configuredGraceMs } from "./billing-config.js";
+import { BillingEventError } from "./billing-errors.js";
 import {
-  accountAccess,
   accountEntitlement,
   effectiveEntitlementForUser,
   hasPermanentFreeEligibility,
@@ -23,32 +21,24 @@ import {
 } from "./jobs.js";
 import { createUserNotification } from "./notifications.js";
 import {
-  createStripeCheckoutSession,
-  createStripeCustomer,
-  createStripePortalSession,
-  listStripeSubscriptions,
+  parseStripeCheckoutEvent,
+  parseStripeInvoice,
   paidPriceId,
   retrieveStripeCharge,
   retrieveStripeEvent,
   retrieveStripeInvoice,
-  retrieveStripePrice,
   retrieveStripeSubscription,
+  stripeEntityId,
   PAID_TRIAL_DAYS,
   STRIPE_API_VERSION,
   StripeApiError,
-  StripeConfigurationError,
-  type StripeCheckoutSession,
   type StripeCharge,
   type StripeInvoice,
-  type StripePrice,
   type StripeSubscription,
-  verifyStripeEvent,
 } from "./stripe.js";
 import type {
-  AppContext,
   BillingEventMessage,
   Bindings,
-  ContainerPlanTransitionRow,
   StripeCustomerRow,
   StripeSubscriptionRow,
   UserRow,
@@ -71,190 +61,25 @@ const SUPPORTED_EVENT_TYPES = new Set([
   "charge.dispute.created",
 ]);
 const BILLING_EVENT_LEASE_MS = 5 * 60_000;
-const DEFAULT_CHECKOUT_SESSION_MINUTES = 60;
-const MIN_CHECKOUT_SESSION_MINUTES = 31;
-const MAX_CHECKOUT_SESSION_MINUTES = 24 * 60;
-const DECIMAL_PRICE_RE = /^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/;
-const ISO_CURRENCY_RE = /^[A-Z]{3}$/;
-
-interface StripeCheckoutAttemptRow {
-  id: string;
-  user_id: string;
-  stripe_checkout_session_id: string | null;
-  status: "creating" | "open" | "complete" | "expired" | "failed";
-  expires_at: number;
-  created_at: number;
-  updated_at: number;
-}
-
-interface BillingQueueMessage {
-  body: BillingEventMessage;
-  ack(): void;
-  retry(): void;
-}
-
-export interface BillingQueueBatch {
-  messages: BillingQueueMessage[];
-}
-
-export class BillingEventError extends Error {
-  constructor(readonly code: string) {
-    super(`Billing event failed (${code})`);
-    this.name = "BillingEventError";
-  }
-}
-
-function customerId(value: StripeSubscription["customer"] | StripeInvoice["customer"]): string | null {
-  if (typeof value === "string") return value;
-  return value?.id ?? null;
-}
 
 function objectId(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
-  return typeof (value as { id?: unknown }).id === "string"
-    ? (value as { id: string }).id
-    : null;
+  return stripeEntityId(value);
 }
 
-function relatedSubscriptionId(eventType: string, object: Record<string, unknown>): string | null {
+function relatedSubscriptionId(eventType: string, object: unknown): string | null {
   if (eventType.startsWith("customer.subscription.")) return objectId(object);
   if (eventType === "checkout.session.completed") {
-    const subscription = (object as unknown as StripeCheckoutSession).subscription;
-    return typeof subscription === "string" ? subscription : subscription?.id ?? null;
+    return stripeEntityId(parseStripeCheckoutEvent(object).subscription);
   }
   if (eventType.startsWith("invoice.")) {
-    const invoice = object as unknown as StripeInvoice;
+    const invoice = parseStripeInvoice(object);
     const parentSubscription = invoice.parent?.type === "subscription_details"
       ? invoice.parent.subscription_details?.subscription
       : null;
-    const subscription = parentSubscription ?? invoice.subscription;
-    return typeof subscription === "string" ? subscription : subscription?.id ?? null;
+    return stripeEntityId(parentSubscription ?? invoice.subscription);
   }
   return null;
-}
-
-function configuredGraceMs(env: Bindings): number {
-  const raw = env.BILLING_GRACE_DAYS?.trim();
-  if (!raw) return 0;
-  const days = Number(raw);
-  return Number.isFinite(days) && days >= 0 ? Math.floor(days * 86_400_000) : 0;
-}
-
-function configuredCheckoutSessionMinutes(env: Bindings): number {
-  const raw = env.BILLING_CHECKOUT_SESSION_MINUTES?.trim();
-  if (!raw) return DEFAULT_CHECKOUT_SESSION_MINUTES;
-  const minutes = Number(raw);
-  if (
-    !Number.isInteger(minutes) ||
-    minutes < MIN_CHECKOUT_SESSION_MINUTES || minutes > MAX_CHECKOUT_SESSION_MINUTES
-  ) {
-    throw new StripeConfigurationError("Checkout Session lifetime is invalid");
-  }
-  return minutes;
-}
-
-export function billingConfigured(env: Bindings): boolean {
-  const price = env.PAID_PLAN_MONTHLY_PRICE?.trim();
-  const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase();
-  let policyValid = true;
-  try {
-    configuredUnitAmount(env);
-    configuredCheckoutSessionMinutes(env);
-  } catch {
-    policyValid = false;
-  }
-  return Boolean(
-    env.BILLING_ENABLED === "1" &&
-    env.STRIPE_SECRET_KEY?.trim() &&
-    env.STRIPE_WEBHOOK_SECRET?.trim() &&
-    env.STRIPE_PRICE_PAID_MONTHLY?.trim() &&
-    price && DECIMAL_PRICE_RE.test(price) &&
-    currency && ISO_CURRENCY_RE.test(currency) &&
-    policyValid &&
-    (!env.STRIPE_TAX_ENABLED || ["0", "1"].includes(env.STRIPE_TAX_ENABLED.trim())) &&
-    env.BILLING_EVENTS,
-  );
-}
-
-export function paidPlanDisplay(env: Bindings) {
-  const price = env.PAID_PLAN_MONTHLY_PRICE?.trim() ?? null;
-  const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase() ?? null;
-  if (!price || !currency || !DECIMAL_PRICE_RE.test(price) || !ISO_CURRENCY_RE.test(currency)) {
-    return null;
-  }
-  try {
-    configuredUnitAmount(env);
-  } catch {
-    return null;
-  }
-  return {
-    price,
-    currency,
-    interval: "month" as const,
-    trialDays: PAID_TRIAL_DAYS,
-    display: `${PAID_TRIAL_DAYS}-day free trial, then ${currency} ${price}/month`,
-  };
-}
-
-function currencyMinorUnits(currency: string): number {
-  try {
-    const units = new Intl.NumberFormat("en", { style: "currency", currency })
-      .resolvedOptions().maximumFractionDigits;
-    if (units === undefined) throw new Error("missing currency precision");
-    return units;
-  } catch {
-    throw new StripeConfigurationError("Paid plan currency is invalid");
-  }
-}
-
-function configuredUnitAmount(env: Bindings): number {
-  const price = env.PAID_PLAN_MONTHLY_PRICE?.trim();
-  const currency = env.PAID_PLAN_CURRENCY?.trim().toUpperCase();
-  if (!price || !currency || !DECIMAL_PRICE_RE.test(price) || !ISO_CURRENCY_RE.test(currency)) {
-    throw new StripeConfigurationError("Paid plan disclosure is invalid");
-  }
-  const minorUnits = currencyMinorUnits(currency);
-  const [whole, fraction = ""] = price.split(".");
-  if (fraction.length > minorUnits) {
-    throw new StripeConfigurationError("Paid plan amount has too many decimal places");
-  }
-  const amount = Number(whole) * (10 ** minorUnits) + Number(fraction.padEnd(minorUnits, "0") || "0");
-  if (!Number.isSafeInteger(amount) || amount <= 0) {
-    throw new StripeConfigurationError("Paid plan amount is invalid");
-  }
-  return amount;
-}
-
-function productTaxCode(product: StripePrice["product"]): string | null {
-  if (typeof product === "string") return null;
-  if (typeof product.tax_code === "string") return product.tax_code;
-  return product.tax_code?.id ?? null;
-}
-
-/** Fail closed before Checkout if the charged Stripe Price can differ from the UI disclosure. */
-export async function validatePaidStripePrice(env: Bindings): Promise<StripePrice> {
-  const expectedId = paidPriceId(env);
-  const expectedCurrency = env.PAID_PLAN_CURRENCY?.trim().toLowerCase();
-  const price = await retrieveStripePrice(env, expectedId);
-  const productActive = typeof price.product === "object" && price.product !== null &&
-    price.product.active === true;
-  if (
-    price.id !== expectedId || !price.active || !productActive ||
-    price.type !== "recurring" || price.billing_scheme !== "per_unit" ||
-    price.unit_amount !== configuredUnitAmount(env) ||
-    typeof price.currency !== "string" || price.currency.toLowerCase() !== expectedCurrency ||
-    price.recurring?.interval !== "month" || price.recurring.interval_count !== 1 ||
-    price.recurring.usage_type !== "licensed"
-  ) {
-    throw new StripeConfigurationError("Paid Stripe Price does not match the published plan");
-  }
-  if (env.STRIPE_TAX_ENABLED === "1" && (
-    !["exclusive", "inclusive"].includes(price.tax_behavior ?? "") ||
-    productTaxCode(price.product) === null
-  )) {
-    throw new StripeConfigurationError("Stripe Tax requires Price tax behavior and a Product tax code");
-  }
-  return price;
 }
 
 function deadlineLabel(value: number): string {
@@ -285,343 +110,6 @@ function billingNoticeStatement(
     input.createdAt,
   );
 }
-
-async function stripeCustomerForUser(
-  env: Bindings,
-  user: UserRow,
-): Promise<StripeCustomerRow> {
-  const existing = await env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
-    .bind(user.id)
-    .first<StripeCustomerRow>();
-  if (existing) return existing;
-
-  const customer = await createStripeCustomer(env, { userId: user.id, email: user.email });
-  if (!customer.id || customer.deleted) throw new BillingEventError("invalid_customer_response");
-  const now = Date.now();
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO stripe_customers
-       (user_id, stripe_customer_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?)`,
-  ).bind(user.id, customer.id, now, now).run();
-  const row = await env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
-    .bind(user.id)
-    .first<StripeCustomerRow>();
-  if (!row || row.stripe_customer_id !== customer.id) {
-    throw new BillingEventError("customer_mapping_conflict");
-  }
-  return row;
-}
-
-async function claimCheckoutAttempt(
-  env: Bindings,
-  userId: string,
-  now = Date.now(),
-): Promise<{ attempt: StripeCheckoutAttemptRow; created: boolean }> {
-  const candidateId = `checkout:${crypto.randomUUID()}`;
-  const expiresAt = now + configuredCheckoutSessionMinutes(env) * 60_000;
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE stripe_checkout_attempts
-       SET status = 'expired', updated_at = ?
-       WHERE user_id = ? AND status IN ('creating','open') AND expires_at <= ?`,
-    ).bind(now, userId, now),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO stripe_checkout_attempts
-         (id, user_id, status, expires_at, created_at, updated_at)
-       VALUES (?, ?, 'creating', ?, ?, ?)`,
-    ).bind(candidateId, userId, expiresAt, now, now),
-  ]);
-  const attempt = await env.DB.prepare(
-    `SELECT * FROM stripe_checkout_attempts
-     WHERE user_id = ? AND status IN ('creating','open')
-     ORDER BY created_at DESC LIMIT 1`,
-  ).bind(userId).first<StripeCheckoutAttemptRow>();
-  if (!attempt) throw new BillingEventError("checkout_attempt_conflict");
-  return { attempt, created: attempt.id === candidateId };
-}
-
-async function markCheckoutAttemptFailed(
-  env: Bindings,
-  attemptId: string,
-): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE stripe_checkout_attempts SET status = 'failed', updated_at = ?
-     WHERE id = ? AND status IN ('creating','open')`,
-  ).bind(Date.now(), attemptId).run();
-}
-
-async function checkoutTrialEligible(
-  env: Bindings,
-  customer: StripeCustomerRow,
-): Promise<boolean> {
-  if (customer.trial_used_at !== null) return false;
-  const priorTrial = await env.DB.prepare(
-    `SELECT 1 FROM stripe_subscriptions
-     WHERE user_id = ? AND trial_start IS NOT NULL LIMIT 1`,
-  ).bind(customer.user_id).first();
-  return priorTrial === null;
-}
-
-export async function billingStatusForUser(env: Bindings, user: UserRow, now = Date.now()) {
-  const [entitlement, subscription, customer] = await Promise.all([
-    accountEntitlement(env, user.id),
-    env.DB.prepare(
-      `SELECT * FROM stripe_subscriptions
-       WHERE user_id = ?
-       ORDER BY CASE WHEN stripe_status NOT IN ('canceled','incomplete_expired')
-         THEN 0 ELSE 1 END, updated_at DESC
-       LIMIT 1`,
-    ).bind(user.id).first<StripeSubscriptionRow>(),
-    env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
-      .bind(user.id).first<StripeCustomerRow>(),
-  ]);
-  const effective = await effectiveEntitlementForUser(env, user, now);
-  const trialEligible = customer === null
-    ? true
-    : await checkoutTrialEligible(env, customer);
-  const displayedBillingState = entitlement?.source === "stripe" && subscription
-    ? projectStripeEntitlement({
-        stripeStatus: subscription.stripe_status,
-        cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
-        cancelAt: subscription.cancel_at,
-        trialEnd: subscription.trial_end,
-        serviceUntil: subscription.service_until,
-        graceUntil: subscription.grace_until,
-      }, now).state
-    : entitlement?.state;
-  return {
-    configured: billingConfigured(env),
-    paidPlan: paidPlanDisplay(env),
-    trialEligible,
-    entitlement: effective,
-    account: accountAccess(user, effective),
-    billing: entitlement
-      ? {
-          plan: entitlement.plan,
-          source: entitlement.source,
-          state: displayedBillingState ?? entitlement.state,
-          trialUntil: entitlement.trial_until,
-          serviceUntil: entitlement.service_until,
-          graceUntil: entitlement.grace_until,
-        }
-      : null,
-    subscription: subscription
-      ? {
-          status: subscription.stripe_status,
-          cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
-          cancelAt: subscription.cancel_at,
-          trialStart: subscription.trial_start,
-          trialEnd: subscription.trial_end,
-          serviceUntil: subscription.service_until,
-          graceUntil: subscription.grace_until,
-        }
-      : null,
-  };
-}
-
-function routeError(c: Parameters<typeof requireAccount>[0], error: unknown) {
-  if (error instanceof StripeConfigurationError) {
-    return c.json({ error: "Paid billing is not available yet." }, 503);
-  }
-  if (error instanceof StripeApiError) {
-    return c.json({ error: "Stripe is temporarily unavailable. Try again shortly." }, 502);
-  }
-  if (error instanceof BillingEventError && error.code === "stripe_subscription_pending") {
-    return c.json({
-      error: "A Stripe subscription already exists and is still syncing. Try again shortly.",
-    }, 409);
-  }
-  throw error;
-}
-
-async function billingAdminFailure(
-  c: Parameters<typeof requireAccount>[0],
-): Promise<Response | null> {
-  if (!c.env.FLEET_ADMIN_SECRET) return c.notFound();
-  const provided = bearerToken(c.req.header("authorization"));
-  if (!(await secretMatches(provided, c.env.FLEET_ADMIN_SECRET))) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  return null;
-}
-
-export const billingRoutes = new Hono<AppContext>()
-  .get("/api/billing/status", requireAccount, async (c) => {
-    c.header("cache-control", "no-store");
-    return c.json(await billingStatusForUser(c.env, c.get("user")));
-  })
-  .post("/api/billing/checkout", requireAccount, async (c) => {
-    if (!billingConfigured(c.env)) {
-      return c.json({ error: "Paid billing is not available yet." }, 503);
-    }
-    const user = c.get("user");
-    try {
-      paidPriceId(c.env);
-      const live = await c.env.DB.prepare(
-        `SELECT stripe_subscription_id FROM stripe_subscriptions
-         WHERE user_id = ? AND stripe_status NOT IN ('canceled','incomplete_expired')
-         LIMIT 1`,
-      ).bind(user.id).first();
-      if (live) {
-        const customer = await c.env.DB.prepare(
-          "SELECT * FROM stripe_customers WHERE user_id = ?",
-        ).bind(user.id).first<StripeCustomerRow>();
-        if (!customer) throw new BillingEventError("live_subscription_missing_customer");
-        const portal = await createStripePortalSession(c.env, customer.stripe_customer_id);
-        if (!portal.url) throw new BillingEventError("invalid_portal_response");
-        return c.json({ url: portal.url }, 200);
-      }
-      await validatePaidStripePrice(c.env);
-      const customer = await stripeCustomerForUser(c.env, user);
-      const remoteSubscriptions = await listStripeSubscriptions(
-        c.env,
-        customer.stripe_customer_id,
-      );
-      if (!Array.isArray(remoteSubscriptions.data)) {
-        throw new BillingEventError("invalid_subscription_list");
-      }
-      if (remoteSubscriptions.data.some((subscription) =>
-        !["canceled", "incomplete_expired"].includes(subscription.status)
-      )) {
-        throw new BillingEventError("stripe_subscription_pending");
-      }
-      const remoteTrialUsed = remoteSubscriptions.has_more ||
-        remoteSubscriptions.data.some((subscription) => subscription.trial_start != null);
-      const { attempt, created } = await claimCheckoutAttempt(c.env, user.id);
-      try {
-        const session = await createStripeCheckoutSession(c.env, {
-          userId: user.id,
-          customerId: customer.stripe_customer_id,
-          attemptId: attempt.id,
-          expiresAt: Math.floor(attempt.expires_at / 1000),
-          trialEligible: !remoteTrialUsed && await checkoutTrialEligible(c.env, customer),
-        });
-        if (!session.id || !session.url || customerId(session.customer) !== customer.stripe_customer_id) {
-          await markCheckoutAttemptFailed(c.env, attempt.id);
-          throw new BillingEventError("invalid_checkout_response");
-        }
-        const updated = await c.env.DB.prepare(
-          `UPDATE stripe_checkout_attempts
-           SET stripe_checkout_session_id = ?, status = 'open', updated_at = ?
-           WHERE id = ? AND user_id = ? AND status IN ('creating','open')`,
-        ).bind(session.id, Date.now(), attempt.id, user.id).run();
-        if (!updated.meta.changes) throw new BillingEventError("checkout_attempt_lost");
-        return c.json({ url: session.url }, created ? 201 : 200);
-      } catch (error) {
-        if (
-          error instanceof StripeConfigurationError ||
-          (error instanceof StripeApiError && error.status >= 400 && error.status < 500)
-        ) {
-          await markCheckoutAttemptFailed(c.env, attempt.id);
-        }
-        return routeError(c, error);
-      }
-    } catch (error) {
-      return routeError(c, error);
-    }
-  })
-  .post("/api/billing/portal", requireAccount, async (c) => {
-    const customer = await c.env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
-      .bind(c.get("user").id)
-      .first<StripeCustomerRow>();
-    if (!customer) return c.json({ error: "No billing account exists yet." }, 404);
-    try {
-      const session = await createStripePortalSession(c.env, customer.stripe_customer_id);
-      if (!session.url) throw new BillingEventError("invalid_portal_response");
-      return c.json({ url: session.url }, 201);
-    } catch (error) {
-      return routeError(c, error);
-    }
-  })
-  .post("/api/stripe/webhook", async (c) => {
-    const rawBody = await c.req.text();
-    let event;
-    try {
-      event = await verifyStripeEvent(
-        rawBody,
-        c.req.header("stripe-signature"),
-        c.env.STRIPE_WEBHOOK_SECRET,
-      );
-    } catch (error) {
-      if (error instanceof StripeConfigurationError) {
-        return c.json({ error: "webhook unavailable" }, 503);
-      }
-      return c.json({ error: "invalid webhook" }, 400);
-    }
-    if (!c.env.BILLING_EVENTS) return c.json({ error: "billing queue unavailable" }, 503);
-    try {
-      await c.env.BILLING_EVENTS.send({
-        eventId: event.id,
-        eventType: event.type,
-        eventCreated: event.created,
-      });
-    } catch {
-      return c.json({ error: "billing queue unavailable" }, 503);
-    }
-    return c.body(null, 204);
-  })
-  .get("/api/admin/billing/:userId", async (c) => {
-    const failure = await billingAdminFailure(c);
-    if (failure) return failure;
-    const userId = c.req.param("userId");
-    const user = await c.env.DB.prepare("SELECT * FROM users WHERE id = ?")
-      .bind(userId).first<UserRow>();
-    if (!user) return c.json({ error: "unknown account" }, 404);
-    const [entitlement, customer, subscription, container, transition] = await Promise.all([
-      accountEntitlement(c.env, userId),
-      c.env.DB.prepare("SELECT * FROM stripe_customers WHERE user_id = ?")
-        .bind(userId).first<StripeCustomerRow>(),
-      c.env.DB.prepare(
-        `SELECT * FROM stripe_subscriptions WHERE user_id = ?
-         ORDER BY CASE WHEN stripe_status NOT IN ('canceled','incomplete_expired')
-           THEN 0 ELSE 1 END, updated_at DESC
-         LIMIT 1`,
-      ).bind(userId).first<StripeSubscriptionRow>(),
-      c.env.DB.prepare(
-        `SELECT id, tier, placement_mode, status, suspension_reason, destroy_after
-         FROM containers WHERE user_id = ?`,
-      ).bind(userId).first(),
-      c.env.DB.prepare(
-        `SELECT t.* FROM container_plan_transitions t
-         JOIN containers c ON c.id = t.container_id WHERE c.user_id = ?`,
-      ).bind(userId).first<ContainerPlanTransitionRow>(),
-    ]);
-    const latestEvent = subscription
-      ? await c.env.DB.prepare(
-          `SELECT event_id, event_type, status, attempt_count, received_at,
-                  processed_at, last_error_code
-           FROM stripe_billing_events WHERE subscription_id = ?
-           ORDER BY received_at DESC LIMIT 1`,
-        ).bind(subscription.stripe_subscription_id).first()
-      : null;
-    return c.json({
-      account: {
-        id: user.id,
-        status: user.status,
-        verifiedAt: user.verified_at,
-        verificationMethod: user.verification_method,
-      },
-      effectiveEntitlement: await effectiveEntitlementForUser(c.env, user),
-      entitlement,
-      stripeCustomerId: customer?.stripe_customer_id ?? null,
-      subscription,
-      latestEvent,
-      container,
-      transition,
-    });
-  })
-  .post("/api/admin/billing/:userId/retry-transition", async (c) => {
-    const failure = await billingAdminFailure(c);
-    if (failure) return failure;
-    const userId = c.req.param("userId");
-    const transition = await c.env.DB.prepare(
-      `SELECT t.* FROM container_plan_transitions t
-       JOIN containers c ON c.id = t.container_id WHERE c.user_id = ?`,
-    ).bind(userId).first<ContainerPlanTransitionRow>();
-    if (!transition) return c.json({ error: "no plan transition" }, 404);
-    const result = await requestPlanTransition(c.env, userId, transition.to_tier);
-    return c.json({ result }, result === "resizing" ? 202 : 200);
-  });
 
 async function claimBillingEvent(
   env: Bindings,
@@ -671,7 +159,7 @@ async function markEventFailed(env: Bindings, eventId: string, error: unknown): 
 async function markNonSubscriptionEvent(
   env: Bindings,
   eventId: string,
-  object: Record<string, unknown>,
+  object: unknown,
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE stripe_billing_events
@@ -704,14 +192,14 @@ async function processBillingRiskEvent(
     return;
   }
   const invoice = await retrieveStripeInvoice(env, invoiceId);
-  const subscriptionId = relatedSubscriptionId("invoice.paid", invoice as unknown as Record<string, unknown>);
+  const subscriptionId = relatedSubscriptionId("invoice.paid", invoice);
   if (!subscriptionId) throw new BillingEventError("risk_event_missing_subscription");
   const subscription = await retrieveStripeSubscription(env, subscriptionId);
   const customer = await validatedSubscriptionOwner(env, subscription);
-  const stripeCustomerId = customerId(charge.customer);
+  const stripeCustomerId = stripeEntityId(charge.customer);
   if (
     stripeCustomerId !== customer.stripe_customer_id ||
-    customerId(invoice.customer) !== customer.stripe_customer_id
+    stripeEntityId(invoice.customer) !== customer.stripe_customer_id
   ) {
     throw new BillingEventError("risk_event_customer_mismatch");
   }
@@ -748,7 +236,7 @@ async function validatedSubscriptionOwner(
   env: Bindings,
   subscription: StripeSubscription,
 ): Promise<StripeCustomerRow> {
-  const stripeCustomerId = customerId(subscription.customer);
+  const stripeCustomerId = stripeEntityId(subscription.customer);
   if (!stripeCustomerId) throw new BillingEventError("subscription_missing_customer");
   const customer = await env.DB.prepare(
     "SELECT * FROM stripe_customers WHERE stripe_customer_id = ?",
@@ -793,7 +281,7 @@ async function applyCanonicalSubscription(
     eventId: string | null;
     eventType: string;
     eventCreated: number;
-    object: Record<string, unknown>;
+    object: unknown;
     subscription: StripeSubscription;
   },
 ): Promise<string> {
@@ -808,13 +296,10 @@ async function applyCanonicalSubscription(
   const existingEntitlement = await accountEntitlement(env, customer.user_id);
 
   const invoice = input.eventType.startsWith("invoice.")
-    ? input.object as unknown as StripeInvoice
+    ? parseStripeInvoice(input.object)
     : null;
-  if (invoice && customerId(invoice.customer) !== stripeCustomerId) {
+  if (invoice && stripeEntityId(invoice.customer) !== stripeCustomerId) {
     throw new BillingEventError("invoice_customer_mismatch");
-  }
-  if (invoice?.id === undefined && input.eventType.startsWith("invoice.")) {
-    throw new BillingEventError("invoice_missing_id");
   }
   if (input.eventType === "invoice.paid" && invoice?.paid !== true && invoice?.status !== "paid") {
     throw new BillingEventError("invoice_not_paid");
@@ -841,9 +326,10 @@ async function applyCanonicalSubscription(
     input.subscription.status === "active";
   const paidThrough = paidInvoice ? item.current_period_end * 1000 : null;
   const serviceUntil = Math.max(existing?.service_until ?? 0, paidThrough ?? 0) || null;
+  const graceMs = configuredGraceMs(env);
   const graceUntil = input.eventType === "invoice.payment_failed" && serviceUntil !== null &&
-      configuredGraceMs(env) > 0
-    ? serviceUntil + configuredGraceMs(env)
+      graceMs > 0
+    ? serviceUntil + graceMs
     : existing?.grace_until ?? null;
   const now = Date.now();
   const trialStart = input.subscription.trial_start === null ||
@@ -973,7 +459,7 @@ async function applyCanonicalSubscription(
     ).bind(compatibilityPlan, now, customer.user_id));
   }
   if (input.eventType === "checkout.session.completed") {
-    const session = input.object as unknown as StripeCheckoutSession;
+    const session = parseStripeCheckoutEvent(input.object);
     if (
       session.client_reference_id !== null &&
       session.client_reference_id !== undefined &&
@@ -981,7 +467,7 @@ async function applyCanonicalSubscription(
     ) {
       throw new BillingEventError("checkout_user_mismatch");
     }
-    if (customerId(session.customer) !== stripeCustomerId) {
+    if (stripeEntityId(session.customer) !== stripeCustomerId) {
       throw new BillingEventError("checkout_customer_mismatch");
     }
     statements.push(env.DB.prepare(
@@ -1204,7 +690,7 @@ export async function processBillingEventMessage(
 }
 
 export async function processBillingQueue(
-  batch: BillingQueueBatch,
+  batch: MessageBatch<BillingEventMessage>,
   env: Bindings,
 ): Promise<void> {
   await Promise.all(batch.messages.map(async (message) => {
@@ -1220,13 +706,6 @@ export async function processBillingQueue(
       message.retry();
     }
   }));
-}
-
-function configuredExportWindowMs(env: Bindings): number {
-  const raw = env.BILLING_EXPORT_WINDOW_DAYS?.trim();
-  if (!raw) return 0;
-  const days = Number(raw);
-  return Number.isFinite(days) && days > 0 ? Math.floor(days * 86_400_000) : 0;
 }
 
 async function publishSuspensionNotices(
@@ -1507,7 +986,7 @@ export async function reconcileStaleStripeSubscriptions(
       eventId: null,
       eventType: paidInvoice ? "invoice.paid" : "customer.subscription.updated",
       eventCreated: Math.floor(at / 1000),
-      object: (invoice ?? subscription) as unknown as Record<string, unknown>,
+      object: invoice ?? subscription,
       subscription,
     });
   }
