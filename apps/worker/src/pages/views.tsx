@@ -296,6 +296,9 @@ export const AccountPage: FC<{
                   ? `${billing.subscription.cancelAtPeriodEnd ? "Paid until" : "Current period ends"} ${new Date(billing.billing.serviceUntil).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
                   : "Confirming payment…"}
               </p>
+              <p class="muted">
+                When Premium access ends, your workbench is stopped before its machine limits change. Save active work first. Unsaved progress may be lost. Files already on the persistent disk are retained, including storage above the standard Free allocation.
+              </p>
               <button id="billing-portal-btn" class="btn secondary" type="button">
                 {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
               </button>

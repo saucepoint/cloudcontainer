@@ -108,9 +108,9 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
   credential-refresh jobs.
 - Automatic bounded-backfill FIFO waitlist admission when host capacity becomes
   available.
-- Dashboard status, a key-gated SSH command and host-key fingerprints,
-  post-ready key management, read-only credential presence, lifecycle controls,
-  and account deletion.
+- Dashboard status, a running-Free in-place Premium upgrade CTA, a key-gated
+  SSH command and host-key fingerprints, post-ready key management, read-only
+  credential presence, lifecycle controls, and account deletion.
 - One production control-plane Worker and a D1-registered fleet of heterogeneous
   Incus hosts, plus an isolated staging Worker, D1 database, secret set, and
   daemon trust domain at `staging.usebench.dev` for release validation. Shared
@@ -789,10 +789,14 @@ container tier and resource fields do not change until the daemon succeeds.
 Free-to-Paid claims only the positive CPU/RAM/disk delta on its current mixed
 shared host; insufficient capacity leaves the Free container usable in
 `upgrade_pending` and retries automatically. Resize failure retains the claimed
-delta and retries without double reservation. Success restores the prior
-running/stopped state. Paid-to-Free releases CPU/RAM after success and retains
-an already-grown 8 GiB home/root reservation as explicit grandfathered
-storage. Automated paid changes never invoke destructive re-home.
+delta and retries without double reservation. Upgrade success restores the
+prior running/stopped state. Paid-to-Free first stops a running container, then
+applies the lower CPU/RAM limits while stopped and leaves it stopped. The UI
+warns that stopping disconnects sessions and can lose unsaved progress. Every
+plan transition keeps at least the container's current home/root allocation;
+an already-grown allocation remains reserved as explicit grandfathered
+storage. Automated paid changes never rebuild, destroy, or re-home the
+container.
 
 Canceling a trial removes Paid access immediately. A failed first post-trial
 charge does the same; a failed renewal preserves already-paid service and any
@@ -981,7 +985,8 @@ Current automated coverage includes:
   Price disclosure validation, first-subscription-only trials, refund
   correlation, and the disabled sales gate;
 - in-place upgrade delta reservation, no-capacity preservation, idempotent
-  resize retry, prior-state restoration, and storage-grandfathered downgrade;
+  resize retry, upgrade prior-state restoration, stop-before-resize downgrade,
+  and nonshrinking grandfathered storage;
 - authenticated host registration/probe/state APIs, daemon release telemetry,
   and fleet-controller release ordering;
 - onboarding and lifecycle APIs, credential presence, key enrollment, account
@@ -1024,7 +1029,8 @@ public release, an operator must record:
     resubscription, renewal, payment failure, scheduled cancellation and undo,
     refund/dispute correlation, and expiry; and
 18. running and stopped in-place upgrade, no-capacity retry, resize failure,
-    downgrade, and grandfathered disk behavior.
+    running downgrade to a stopped Free container, stopped downgrade, and
+    grandfathered disk behavior.
 
 Manual results are release evidence; they must not be described as automated
 coverage.
@@ -1099,8 +1105,10 @@ manual checks above have been completed for affected areas.
     Paid access; and disabled billing cannot contact Stripe for a new sale.
 16. **Safe plan change:** Free-to-Paid claims only the resource delta and keeps
     the current container usable when capacity is absent; retries cannot
-    double-reserve; success restores running/stopped state; Paid-to-Free does
-    not shrink storage; and automated paid changes never destroy/re-home.
+    double-reserve; upgrade success restores running/stopped state;
+    Paid-to-Free stops before lowering limits, finishes stopped, and warns
+    about unsaved progress; no transition shrinks storage; and automated paid
+    changes never rebuild, destroy, or re-home.
 
 ---
 

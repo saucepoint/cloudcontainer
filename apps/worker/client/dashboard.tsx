@@ -22,6 +22,9 @@ const CHECKOUT_POLL_INTERVAL_MS = 1_000;
 const CHECKOUT_POLL_MAX_ATTEMPTS = 30;
 
 type CheckoutStatus = "idle" | "confirming" | "confirmed" | "timed_out";
+type PremiumUpgradeOffer = NonNullable<DashboardSnapshot["billing"]["paidPlan"]> & {
+  trialEligible: boolean;
+};
 
 function redirectIfSignedOut(error: unknown): boolean {
   if (!isUnauthorized(error)) return false;
@@ -33,24 +36,38 @@ function ContainerCard({
   container,
   action,
   cancelPlacement,
+  upgradeOffer,
+  upgrade,
   actionBusy,
 }: {
   container: ContainerView;
   action: (operation: ContainerAction) => void;
   cancelPlacement: () => void;
+  upgradeOffer: PremiumUpgradeOffer | null;
+  upgrade: () => void;
   actionBusy: boolean;
 }) {
   const busy = isBusy(container);
   const runAction = (operation: ContainerAction) => {
-    if (operation === "destroy" || operation === "rebuild") {
+    if (operation === "destroy" || operation === "rebuild" || operation === "stop") {
       askConfirmation(
-        operation === "destroy" ? "Destroy workbench?" : "Rebuild workbench?",
+        operation === "destroy"
+          ? "Destroy workbench?"
+          : operation === "rebuild"
+          ? "Rebuild workbench?"
+          : "Stop workbench?",
         operation === "destroy"
           ? "Destroy the workbench and ALL its data? This cannot be undone."
-          : "Rebuild resets everything outside /home/dev. Continue?",
-        operation === "destroy" ? "Destroy workbench" : "Rebuild workbench",
+          : operation === "rebuild"
+          ? "Rebuild resets everything outside /home/dev. Continue?"
+          : "Stopping disconnects active sessions. Unsaved progress may be lost, but files already written to disk are preserved.",
+        operation === "destroy"
+          ? "Destroy workbench"
+          : operation === "rebuild"
+          ? "Rebuild workbench"
+          : "Stop workbench",
         () => action(operation),
-        true,
+        operation !== "stop",
       );
       return;
     }
@@ -68,6 +85,17 @@ function ContainerCard({
       <p className="muted">
         {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.tier === "paid" ? "premium" : "free"}
       </p>
+      {container.status === "running" && container.tier === "free" && upgradeOffer ? (
+        <div className="premium-upgrade-cta">
+          <p>
+            <strong>Upgrade this workbench in place.</strong><br />
+            Get 2 vCPU, 4 GB RAM, and more storage for {upgradeOffer.currency} {upgradeOffer.price}/month. Your persistent files stay on the same disk.
+          </p>
+          <button className="btn primary" type="button" disabled={actionBusy} onClick={upgrade}>
+            {upgradeOffer.trialEligible ? "Start 7-day Premium trial →" : "Upgrade to Premium →"}
+          </button>
+        </div>
+      ) : null}
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
       {container.status === "waitlisted" ? (
         <>
@@ -96,7 +124,9 @@ function ContainerCard({
       ) : null}
       {container.status === "upgrade_pending" ? (
         <p className="notice warning">
-          Payment confirmed. Your existing workbench remains available while we allocate capacity for the larger plan.
+          {container.planTransition?.desiredTier === "free"
+            ? "Premium access ended. We are stopping the workbench before applying Free limits. Unsaved progress in active sessions may be lost; files on the persistent disk will be retained."
+            : "Payment confirmed. Your existing workbench remains available while we allocate capacity for the larger plan. Persistent files stay on the same disk."}
         </p>
       ) : null}
       {container.status === "destroying" ? <p><BusyLabel busy>Deleting…</BusyLabel></p> : null}
@@ -473,12 +503,12 @@ function DashboardApp() {
       ) : null}
       {billing?.billing?.state === "cancel_scheduled" && billing.billing.serviceUntil ? (
         <div className="notice warning" role="status">
-          Premium service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}.
+          Premium service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}. The workbench will then stop before returning to Free limits. Save active work first; persistent files will be retained.
         </div>
       ) : null}
       {billing?.billing?.state === "expired" ? (
         <div className="notice error" role="status">
-          Premium access ended. Resubscribe or complete Free verification to restore eligibility.
+          Premium access ended. An eligible workbench will stop before returning to Free limits. Unsaved progress may be lost, but persistent files are retained. Resubscribe or complete Free verification to restore eligibility.
         </div>
       ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
@@ -564,6 +594,11 @@ function DashboardApp() {
           container={container}
           action={(operation) => void act(operation)}
           cancelPlacement={() => void cancelPlacement()}
+          upgradeOffer={container.status === "running" && container.tier === "free" &&
+              account && !account.premium && billing?.configured && billing.paidPlan
+            ? { ...billing.paidPlan, trialEligible: billing.trialEligible }
+            : null}
+          upgrade={() => void openBilling("/api/billing/checkout")}
           actionBusy={actionBusy}
         />
       ) : null}

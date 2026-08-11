@@ -885,8 +885,8 @@ describe("billing event consumer", () => {
     expect(await env.DB.prepare(
       `SELECT to_tier, state FROM container_plan_transitions
        WHERE container_id = 'container-1'`,
-    ).first()).toEqual({ to_tier: "free", state: "resizing" });
-    expect(daemon.submitted).toMatchObject([{ op: "resize", containerId: "container-1" }]);
+    ).first()).toEqual({ to_tier: "free", state: "requested" });
+    expect(daemon.submitted).toMatchObject([{ op: "stop", containerId: "container-1" }]);
   });
 
   it("grants service from invoice.paid and makes duplicate delivery a no-op", async () => {
@@ -1164,11 +1164,10 @@ describe("billing deadline reconciliation", () => {
 
     expect(await env.DB.prepare(
       "SELECT to_tier, target_disk_gb, state FROM container_plan_transitions WHERE container_id = 'container-1'",
-    ).first()).toEqual({ to_tier: "free", target_disk_gb: 8, state: "resizing" });
+    ).first()).toEqual({ to_tier: "free", target_disk_gb: 8, state: "requested" });
     expect(daemon.submitted).toMatchObject([{
-      op: "resize",
+      op: "stop",
       containerId: "container-1",
-      spec: { tier: "free", cpu: 1, ramMb: 1536, diskGb: 8 },
     }]);
   });
 

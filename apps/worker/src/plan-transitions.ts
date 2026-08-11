@@ -11,7 +11,13 @@ import {
   HOST_HEARTBEAT_MAX_AGE_MS,
 } from "./capacity.js";
 import { effectiveEntitlementForUser } from "./entitlements.js";
-import { enqueueJob, getContainerForUser, getHost } from "./jobs.js";
+import {
+  enqueueJob,
+  getContainerForUser,
+  getHost,
+  HostJobAdmissionError,
+  LifecycleJobConflictError,
+} from "./jobs.js";
 import type {
   Bindings,
   ContainerPlanTransitionRow,
@@ -22,6 +28,7 @@ import type {
 export type PlanTransitionResult =
   | "not_needed"
   | "waiting_capacity"
+  | "stopping"
   | "resizing"
   | "ineligible"
   | "conflict";
@@ -54,9 +61,10 @@ async function createTransition(
 ): Promise<ContainerPlanTransitionRow | null> {
   const prior = priorStatus(container);
   if (!prior) return transitionForContainer(env, container.id);
-  const targetDiskGb = toTier === "free"
-    ? Math.max(container.disk_gb, TIERS.free.diskGb)
-    : TIERS.paid.diskGb;
+  // Incus/ZFS volumes are never shrunk as part of an automated plan change.
+  // This covers Paid-to-Free downgrades as well as a later upgrade of a Free
+  // container that already owns a grandfathered allocation.
+  const targetDiskGb = Math.max(container.disk_gb, TIERS[toTier].diskGb);
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO container_plan_transitions
@@ -92,6 +100,40 @@ async function createTransition(
     ),
   ]);
   return transitionForContainer(env, container.id);
+}
+
+/**
+ * A Paid-to-Free transition deliberately stops a running workbench before
+ * lowering its cgroup limits. The transition row remains the durable intent;
+ * stop success changes `prior_status` to stopped, after which the normal
+ * resize path can safely continue without exposing a start action in between.
+ */
+async function stopRunningDowngrade(
+  env: Bindings,
+  container: ContainerRow,
+  transition: ContainerPlanTransitionRow,
+): Promise<PlanTransitionResult | null> {
+  if (transition.to_tier !== "free" || transition.prior_status !== "running") return null;
+
+  const activeJob = await env.DB.prepare(
+    `SELECT op FROM jobs
+     WHERE container_id = ? AND status IN ('queued','running')
+       AND op IN ('provision','rebuild','start','stop','destroy','resize')
+     ORDER BY rowid DESC LIMIT 1`,
+  ).bind(container.id).first<{ op: string }>();
+  if (activeJob) return "stopping";
+  if (!container.host_id) return "waiting_capacity";
+
+  const host = await getHost(env, container.host_id);
+  if (!host || host.status !== "active") return "waiting_capacity";
+  try {
+    await enqueueJob(env, "stop", container, host);
+  } catch (error) {
+    if (error instanceof LifecycleJobConflictError) return "stopping";
+    if (error instanceof HostJobAdmissionError) return "waiting_capacity";
+    throw error;
+  }
+  return "stopping";
 }
 
 async function reserveTransition(
@@ -255,7 +297,7 @@ export async function requestPlanTransition(
   if (desiredTier !== toTier) return "ineligible";
 
   let container = await getContainerForUser(env, userId);
-  if (!container || container.tier === toTier) return "not_needed";
+  if (!container) return "not_needed";
   let transition = await transitionForContainer(env, container.id);
   if (transition?.state === "complete" || transition?.state === "cancelled") {
     await env.DB.prepare("DELETE FROM container_plan_transitions WHERE container_id = ?")
@@ -263,12 +305,19 @@ export async function requestPlanTransition(
       .run();
     transition = null;
   }
-  if (transition && transition.to_tier !== toTier) return "conflict";
+  if (transition && transition.to_tier !== toTier) {
+    if (!(await cancelUnreservedPlanTransition(env, container.id, at))) return "conflict";
+    transition = null;
+    container = (await getContainerForUser(env, userId)) ?? container;
+  }
+  if (container.tier === toTier) return "not_needed";
   transition ??= await createTransition(env, container, toTier, at);
   if (!transition) return "conflict";
   if (transition.state === "resizing") return "resizing";
 
   container = (await getContainerForUser(env, userId)) ?? container;
+  const stopping = await stopRunningDowngrade(env, container, transition);
+  if (stopping) return stopping;
   if (transition.state === "failed_retryable" && transition.reserved_cpu +
       transition.reserved_ram_mb + transition.reserved_disk_gb > 0) {
     await env.DB.prepare(

@@ -198,6 +198,10 @@ export class Incus {
     }
   }
 
+  async setTier(name: string, tier: Tier): Promise<void> {
+    await this.run(["config", "set", name, `user.workbench.tier=${tier}`]);
+  }
+
   /** Cap the disposable root filesystem inherited from the default profile. */
   async setRootDiskLimit(name: string, sizeGb: number): Promise<void> {
     await this.run([

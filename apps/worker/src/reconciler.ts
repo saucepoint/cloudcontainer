@@ -209,6 +209,29 @@ async function timeoutStuckJobs(env: Bindings, now: () => number): Promise<void>
         ).bind(job.container_id),
       ])) as Array<{ meta: { changes?: number } }>;
       claimed = results[0] ?? { meta: {} };
+    } else if (job.op === "stop" && await env.DB.prepare(
+      `SELECT 1 FROM container_plan_transitions
+       WHERE container_id = ? AND to_tier = 'free' AND prior_status = 'running'
+         AND state IN ('requested','waiting_capacity','failed_retryable')`,
+    ).bind(job.container_id).first()) {
+      const results = (await env.DB.batch([
+        claim,
+        env.DB.prepare(
+          `UPDATE container_plan_transitions
+           SET state = 'failed_retryable', updated_at = ?,
+               last_error_code = 'downgrade_stop_timeout'
+           WHERE container_id = ? AND to_tier = 'free'
+             AND state IN ('requested','waiting_capacity','failed_retryable')
+             AND changes() = 1`,
+        ).bind(now(), job.container_id),
+        env.DB.prepare(
+          `UPDATE containers
+           SET status = 'upgrade_pending',
+               status_detail = 'paid access ended; stop will retry automatically'
+           WHERE id = ? AND changes() = 1`,
+        ).bind(job.container_id),
+      ])) as Array<{ meta: { changes?: number } }>;
+      claimed = results[0] ?? { meta: {} };
     } else if (LIFECYCLE_OPS.has(job.op)) {
       const results = (await env.DB.batch([
         claim,

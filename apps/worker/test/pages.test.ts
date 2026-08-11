@@ -326,6 +326,52 @@ describe("account page", () => {
     expect(account).not.toContain("Start 7-day Premium trial →");
   });
 
+  it("warns Premium subscribers before a plan-ending stop", () => {
+    const account = String(AccountPage({
+      passkeyCount: 1,
+      continueHref: "/dashboard",
+      welcome: false,
+      billing: {
+        configured: true,
+        trialEligible: false,
+        paidPlan: {
+          price: "6",
+          currency: "USD",
+          interval: "month",
+          trialDays: 7,
+          display: "$6/month",
+        },
+        entitlement: {
+          eligible: true,
+          plan: "paid",
+          source: "stripe",
+          state: "active",
+          accessUntil: 2_000,
+        },
+        billing: {
+          plan: "paid",
+          source: "stripe",
+          state: "active",
+          trialUntil: null,
+          serviceUntil: 2_000,
+          graceUntil: null,
+        },
+        subscription: {
+          status: "active",
+          cancelAtPeriodEnd: false,
+          cancelAt: null,
+          trialStart: null,
+          trialEnd: null,
+          serviceUntil: 2_000,
+          graceUntil: null,
+        },
+      },
+    }));
+    expect(account).toContain("your workbench is stopped before its machine limits change");
+    expect(account).toContain("Unsaved progress");
+    expect(account).toContain("storage above the standard Free allocation");
+  });
+
   it("wires destructive actions to authenticated endpoints", () => {
     expect(securityClient).toContain('requestJson("/api/credentials", { method: "DELETE" })');
     expect(securityClient).toContain('requestJson("/api/account/delete", { method: "POST" })');
@@ -676,8 +722,24 @@ describe("dashboard loading and polling", () => {
     expect(poll).not.toContain("/api/keys");
   });
 
+  it("offers an in-place Premium upgrade on an already-running Free workbench", () => {
+    expect(dashboardClient).toContain("Upgrade this workbench in place.");
+    expect(dashboardClient).toContain("Your persistent files stay on the same disk.");
+    expect(dashboardClient).toContain('container.status === "running" && container.tier === "free"');
+    expect(dashboardClient).toContain('openBilling("/api/billing/checkout")');
+    expect(dashboardClient).toContain("Start 7-day Premium trial →");
+  });
+
+  it("warns that downgrade stops can lose unsaved progress while retaining disk data", () => {
+    expect(dashboardClient).toContain("We are stopping the workbench before applying Free limits.");
+    expect(dashboardClient).toContain("Unsaved progress in active sessions may be lost");
+    expect(dashboardClient).toContain("files on the persistent disk will be retained");
+    expect(dashboardClient).toContain("Stopping disconnects active sessions. Unsaved progress may be lost");
+  });
+
   it("uses non-overlapping, visibility-aware polling with distinct build and waitlist delays", () => {
     expect(dashboardClient).toContain('if (container.status === "waitlisted") return 30_000');
+    expect(dashboardClient).toContain('if (container.status === "upgrade_pending") return 5_000');
     expect(dashboardClient).toContain("if (isBusy(container)) return 5_000");
     expect(dashboardClient).toContain("setTimeout(pollContainer, delay)");
     expect(dashboardClient).toContain("pollInFlight");

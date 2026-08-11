@@ -70,6 +70,7 @@ describe("dashboard polling policy", () => {
   it("polls waitlisted environments slowly and active operations quickly", () => {
     expect(pollDelay(container({ status: "waitlisted" }))).toBe(30_000);
     expect(pollDelay(container({ status: "provisioning" }))).toBe(5_000);
+    expect(pollDelay(container({ status: "upgrade_pending" }))).toBe(5_000);
     expect(pollDelay(container({
       job: { id: "job-1", op: "sync-keys", status: "running", error: null },
     }))).toBe(5_000);

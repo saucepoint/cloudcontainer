@@ -364,6 +364,33 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
       return;
     }
   }
+  if (job.op === "stop") {
+    const downgrade = await env.DB.prepare(
+      `SELECT 1 FROM container_plan_transitions
+       WHERE container_id = ? AND to_tier = 'free' AND prior_status = 'running'
+         AND state IN ('requested','waiting_capacity','failed_retryable')`,
+    ).bind(job.container_id).first();
+    if (downgrade) {
+      await env.DB.batch([
+        claim,
+        env.DB.prepare(
+          `UPDATE container_plan_transitions
+           SET state = 'failed_retryable', updated_at = ?,
+               last_error_code = 'downgrade_stop_failed'
+           WHERE container_id = ? AND to_tier = 'free'
+             AND state IN ('requested','waiting_capacity','failed_retryable')
+             AND changes() = 1`,
+        ).bind(failedAt, job.container_id),
+        env.DB.prepare(
+          `UPDATE containers
+           SET status = 'upgrade_pending',
+               status_detail = 'paid access ended; stop will retry automatically'
+           WHERE id = ? AND changes() = 1`,
+        ).bind(job.container_id),
+      ]);
+      return;
+    }
+  }
   await env.DB.batch([
     claim,
     env.DB.prepare(
@@ -376,6 +403,40 @@ async function failJob(env: Bindings, job: Pick<JobRow, "id" | "container_id" | 
        )`,
     ).bind(error, job.container_id, job.id, job.container_id),
   ]);
+}
+
+/** Keep the plan transition locked while a running downgrade is stopped. */
+async function finalizeDowngradeStop(
+  env: Bindings,
+  job: JobRow,
+  container: ContainerRow,
+  completedAt: number,
+): Promise<boolean> {
+  const results = (await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE jobs SET status = 'succeeded', updated_at = ?
+       WHERE id = ? AND status IN ('queued','running') AND ? = (
+         SELECT id FROM jobs
+         WHERE container_id = ?
+           AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         ORDER BY rowid DESC LIMIT 1
+       )`,
+    ).bind(completedAt, job.id, job.id, container.id),
+    env.DB.prepare(
+      `UPDATE container_plan_transitions
+       SET prior_status = 'stopped', updated_at = ?, last_error_code = NULL
+       WHERE container_id = ? AND to_tier = 'free' AND prior_status = 'running'
+         AND state IN ('requested','waiting_capacity','failed_retryable')
+         AND changes() = 1`,
+    ).bind(completedAt, container.id),
+    env.DB.prepare(
+      `UPDATE containers
+       SET status = 'upgrade_pending',
+           status_detail = 'workbench stopped; applying free resources'
+       WHERE id = ? AND changes() = 1`,
+    ).bind(container.id),
+  ])) as Array<{ meta?: { changes?: number } }>;
+  return Boolean(results[0]?.meta?.changes && results[1]?.meta?.changes);
 }
 
 async function finalizePlanTransition(
@@ -434,7 +495,7 @@ async function finalizePlanTransition(
       target.cpu,
       target.ramMb,
       transition.target_disk_gb,
-      transition.prior_status,
+      transition.to_tier === "free" ? "stopped" : transition.prior_status,
       transition.to_tier === "free" && transition.target_disk_gb > TIERS.free.diskGb ? 1 : 0,
       completedAt,
       container.id,
@@ -615,6 +676,13 @@ export async function refreshJob(env: Bindings, job: JobRow): Promise<JobRow> {
     const completedAt = Date.now();
     if (job.op === "destroy") {
       const finalized = await finalizeDestroy(env, job, container, completedAt);
+      if (!finalized) return (await getJob(env, job.id)) ?? job;
+    } else if (job.op === "stop" && await env.DB.prepare(
+      `SELECT 1 FROM container_plan_transitions
+       WHERE container_id = ? AND to_tier = 'free' AND prior_status = 'running'
+         AND state IN ('requested','waiting_capacity','failed_retryable')`,
+    ).bind(container.id).first()) {
+      const finalized = await finalizeDowngradeStop(env, job, container, completedAt);
       if (!finalized) return (await getJob(env, job.id)) ?? job;
     } else if (job.op === "resize" && await env.DB.prepare(
       `SELECT 1 FROM container_plan_transitions

@@ -85,6 +85,7 @@ export class Provisioner {
           await this.existingHomeVolume(request.containerId),
           request.spec.diskGb,
         );
+        await this.incus.setTier(name, request.spec.tier);
         return null;
       case "destroy": {
         if (await this.incus.exists(name)) await this.incus.delete(name);

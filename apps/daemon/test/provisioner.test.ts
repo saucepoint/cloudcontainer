@@ -1140,6 +1140,10 @@ describe("resize / destroy", () => {
       .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"));
     expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
     expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=paid");
+    expect(flat.some((command) => command.startsWith("delete "))).toBe(false);
+    expect(flat.some((command) => command.startsWith("storage volume delete "))).toBe(false);
+    expect(flat.some((command) => command.startsWith("init "))).toBe(false);
   });
 
   it("keeps the Incus CPU limit equal to the scheduler reservation", async () => {
@@ -1155,6 +1159,7 @@ describe("resize / destroy", () => {
     expect(flat).toContain("config set workbench-aaaaaa limits.cpu=1");
     expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=100%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1024MiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=free");
     expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1024MiB"))
       .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=1536MiB"));
   });

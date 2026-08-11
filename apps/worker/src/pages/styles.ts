@@ -321,6 +321,11 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .instance-tier-option small { color: var(--muted); font-size: 0.78rem; }
 .instance-cta { display: grid; justify-items: start; gap: 0.35rem; margin-top: 1.1rem; }
 .instance-cta .choice-hint { min-height: 1.35em; margin: 0; color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
+.premium-upgrade-cta { display: flex; gap: 1rem; align-items: center; justify-content: space-between;
+  margin: 1rem 0; padding: 1rem; border: 1px solid var(--accent); border-radius: var(--radius);
+  background: var(--accent-soft); }
+.premium-upgrade-cta p { margin: 0; }
+.premium-upgrade-cta .btn { flex: 0 0 auto; white-space: nowrap; }
 .row.flush, form.flush { margin: 0; }
 .github-connected { display: inline-flex; align-items: center; gap: 0.45rem; align-self: center;
   color: var(--muted); font-size: 0.86rem; }
@@ -490,6 +495,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
   .ssh-key-toolbar-actions { width: 100%; justify-content: flex-start; }
   .auth-code-row, .verification-grid { grid-template-columns: 1fr; gap: 0.35rem; }
   .instance-tier-options { grid-template-columns: 1fr; gap: 0.35rem; }
+  .premium-upgrade-cta { align-items: flex-start; flex-direction: column; }
   .auth-code-row .btn { justify-self: start; }
   .otp-field { gap: 0.35rem; }
   .otp-field input { width: 2.35rem; }

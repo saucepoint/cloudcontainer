@@ -486,7 +486,7 @@ async function applyCanonicalSubscription(
       id: noticeId,
       userId: customer.user_id,
       title: "Paid trial ends soon",
-      message: `Your Paid trial ends ${deadlineLabel(trialEnd)}. Stripe will then charge your saved payment method. Use Manage billing to update payment details or cancel.`,
+      message: `Your Paid trial ends ${deadlineLabel(trialEnd)}. Stripe will then charge your saved payment method. Use Manage billing to update payment details or cancel. If access ends, save active work first: the workbench will stop, but persistent files will be retained.`,
       severity: "warning",
       createdAt: now,
     }));
@@ -511,8 +511,8 @@ async function applyCanonicalSubscription(
       userId: customer.user_id,
       title: "Paid trial canceled",
       message: hasPermanentFreeEligibility(user)
-        ? "Your Paid trial was canceled. Your workbench is returning to the Free resource limits without deleting your files."
-        : "Your Paid trial was canceled. Your workbench will be suspended until you resubscribe or complete Free verification.",
+        ? "Your Paid trial was canceled. Your workbench will stop before returning to Free resource limits. Unsaved progress may be lost, but persistent files will be retained."
+        : "Your Paid trial was canceled. Your workbench will stop and remain suspended until you resubscribe or complete Free verification. Unsaved progress may be lost, but persistent files will be retained.",
       severity: "warning",
       createdAt: now,
     }));
@@ -563,7 +563,7 @@ async function applyCanonicalSubscription(
       id: noticeId,
       userId: customer.user_id,
       title: "Paid plan ending",
-      message: `Your Paid plan remains available through ${deadlineLabel(serviceUntil)}.`,
+      message: `Your Paid plan remains available through ${deadlineLabel(serviceUntil)}. At that deadline the workbench will stop before its machine limits change. Save active work first; persistent files will be retained.`,
       severity: "warning",
       createdAt: now,
     }));
@@ -572,7 +572,7 @@ async function applyCanonicalSubscription(
       id: noticeId,
       userId: customer.user_id,
       title: "Cancellation scheduled",
-      message: `Your Paid plan remains active through ${deadlineLabel(serviceUntil)}. You can undo cancellation from Manage billing before it ends.`,
+      message: `Your Paid plan remains active through ${deadlineLabel(serviceUntil)}. You can undo cancellation from Manage billing before it ends. Otherwise the workbench will stop at the deadline; save active work first. Persistent files will be retained.`,
       severity: "warning",
       createdAt: now,
     }));
@@ -718,7 +718,7 @@ async function publishSuspensionNotices(
     id: `billing:suspended:${userId}:${at}`,
     userId,
     title: "Workbench suspended",
-    message: "Paid access ended and your workbench has been stopped. Resubscribe or complete Free verification to restore access.",
+    message: "Paid access ended and your workbench is being stopped. Unsaved progress may be lost, but persistent files are retained. Resubscribe or complete Free verification to restore access.",
     severity: "critical",
     createdAt: at,
   });
@@ -934,7 +934,7 @@ export async function reconcileBillingState(
         id: `billing:grace-start:${subscription.stripe_subscription_id}:${subscription.grace_until}`,
         userId: user.id,
         title: "Payment grace period started",
-        message: `Restore payment before ${deadlineLabel(subscription.grace_until)} to avoid suspension or a Free-plan downgrade.`,
+        message: `Restore payment before ${deadlineLabel(subscription.grace_until)} to avoid suspension or a Free-plan downgrade. Otherwise the workbench will stop at the deadline; save active work first. Persistent files will be retained.`,
         severity: "critical",
         createdAt: at,
       }));
@@ -945,8 +945,8 @@ export async function reconcileBillingState(
         userId: user.id,
         title: "Paid access ended",
         message: hasPermanentFreeEligibility(user)
-          ? "Your Paid plan ended. Your workbench is returning to the Free resource limits without deleting your files."
-          : "Your Paid plan and any grace period ended. Your workbench will be suspended until you resubscribe or complete Free verification.",
+          ? "Your Paid plan ended. Your workbench will stop before returning to Free resource limits. Unsaved progress may be lost, but persistent files will be retained."
+          : "Your Paid plan and any grace period ended. Your workbench will stop and remain suspended until you resubscribe or complete Free verification. Unsaved progress may be lost, but persistent files will be retained.",
         severity: "critical",
         createdAt: at,
       }));

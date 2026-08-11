@@ -98,7 +98,7 @@ export const STATUS_LABELS: Record<ContainerStatus, string> = {
   running: "Ready",
   stopped: "Stopped",
   suspended: "Suspended",
-  upgrade_pending: "Upgrade pending",
+  upgrade_pending: "Plan change pending",
   error: "Needs attention",
   destroying: "Deleting",
 };
@@ -129,6 +129,7 @@ export function pollDelay(container: ContainerView | null, refreshNeeded = false
   if (refreshNeeded) return 5_000;
   if (!container) return null;
   if (container.status === "waitlisted") return 30_000;
+  if (container.status === "upgrade_pending") return 5_000;
   if (isBusy(container)) return 5_000;
   return null;
 }
