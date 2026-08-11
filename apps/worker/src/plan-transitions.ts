@@ -368,6 +368,53 @@ export async function cancelUnreservedPlanTransition(
   return Boolean(results[0]?.meta?.changes);
 }
 
+/**
+ * Fence automatic retries when deletion supersedes a plan change. A failed
+ * resize may already have applied some limits, so its capacity reservation is
+ * retained until destroy succeeds and releases the base plus reserved delta.
+ */
+export async function cancelPlanTransitionForDestroy(
+  env: Bindings,
+  containerId: string,
+  at = Date.now(),
+): Promise<boolean> {
+  const transition = await transitionForContainer(env, containerId);
+  if (!transition) return false;
+  const unreserved = transition.reserved_cpu === 0 &&
+    transition.reserved_ram_mb === 0 && transition.reserved_disk_gb === 0;
+  const cancellable = transition.state === "failed_retryable" ||
+    (unreserved && ["requested", "waiting_capacity"].includes(transition.state));
+  if (!cancellable) return false;
+
+  const results = (await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE container_plan_transitions
+       SET state = 'cancelled', updated_at = ?, last_error_code = NULL
+       WHERE container_id = ?
+         AND (
+           state = 'failed_retryable'
+           OR (state IN ('requested','waiting_capacity')
+             AND reserved_cpu = 0 AND reserved_ram_mb = 0 AND reserved_disk_gb = 0)
+         )
+         AND EXISTS (
+           SELECT 1 FROM containers c
+           WHERE c.id = ? AND c.status = 'upgrade_pending'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs
+           WHERE container_id = ? AND status IN ('queued','running')
+             AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         )`,
+    ).bind(at, containerId, containerId, containerId),
+    env.DB.prepare(
+      `UPDATE containers
+       SET status = 'error', status_detail = 'resource change cancelled; ready to destroy'
+       WHERE id = ? AND status = 'upgrade_pending' AND changes() = 1`,
+    ).bind(containerId),
+  ])) as Array<{ meta?: { changes?: number } }>;
+  return Boolean(results[0]?.meta?.changes && results[1]?.meta?.changes);
+}
+
 export async function retryPlanTransitions(
   env: Bindings,
   at = Date.now(),

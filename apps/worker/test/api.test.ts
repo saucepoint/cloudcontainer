@@ -9,6 +9,7 @@ import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
 import { app as workerApp } from "../src/index.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
+import { getContainerForUser } from "../src/jobs.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { createTestSession, fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
 
@@ -731,6 +732,56 @@ describe("POST /api/container/:op", () => {
     expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
     const row = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(row?.status).toBe("destroying");
+  });
+
+  it("allows destroy to supersede a terminal failed resize", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env, "user-1", "paid");
+    await seedHost(env, {
+      daemon_pubkey: hostKeys.publicKey,
+      vcpu_allocated: 2,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 16,
+    });
+    await seedContainer(env, { status: "upgrade_pending" });
+    await env.DB.prepare(
+      `INSERT INTO container_plan_transitions
+         (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+          reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at,
+          last_error_code)
+       VALUES ('container-1', 'free', 'paid', 8, 'running', 'failed_retryable',
+               1, 2560, 6, 1, 2, 'resize_failed')`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, error, created_at, updated_at)
+       VALUES ('failed-resize', 'container-1', 'resize', 'failed',
+               'The device already exists', 1, 2)`,
+    ).run();
+    const headers = await login(env, user);
+
+    const dashboard = await app().request("/api/dashboard", { headers }, env);
+    const view = await dashboard.json() as { container: { allowedOps: string[] } };
+    expect(view.container.allowedOps).toEqual(["destroy"]);
+
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+    const response = await app().request(
+      "/api/container/destroy",
+      { method: "POST", headers },
+      env,
+    );
+
+    expect(response.status).toBe(202);
+    expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
+    expect(await env.DB.prepare(
+      "SELECT state, reserved_cpu, reserved_ram_mb, reserved_disk_gb FROM container_plan_transitions",
+    ).first()).toEqual({
+      state: "cancelled",
+      reserved_cpu: 1,
+      reserved_ram_mb: 2560,
+      reserved_disk_gb: 6,
+    });
+    expect(await getContainerForUser(env, user.id)).toMatchObject({ status: "destroying" });
   });
 
   it("returns a conflict instead of enqueueing a second lifecycle operation", async () => {

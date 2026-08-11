@@ -89,9 +89,11 @@ export async function containerView(
     createdAt: container.created_at,
     job: job ? { id: job.id, op: job.op, status: job.status, error: job.error } : null,
     allowedOps: container.status === "upgrade_pending" && transition &&
-        transition.reserved_cpu === 0 && transition.reserved_ram_mb === 0 &&
-        transition.reserved_disk_gb === 0 &&
-        ["requested", "waiting_capacity"].includes(transition.state)
+        (transition.state === "failed_retryable" || (
+          transition.reserved_cpu === 0 && transition.reserved_ram_mb === 0 &&
+          transition.reserved_disk_gb === 0 &&
+          ["requested", "waiting_capacity"].includes(transition.state)
+        ))
       ? ["destroy"]
       : allowedUserOps(container.status),
   };

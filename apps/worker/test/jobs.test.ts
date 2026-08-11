@@ -487,6 +487,34 @@ describe("refreshJob", () => {
     expect((await env.DB.prepare("SELECT * FROM waitlist").all()).results).toHaveLength(0);
   });
 
+  it("releases a cancelled resize reservation when destroy succeeds", async () => {
+    const { env } = makeEnv();
+    await seedUser(env);
+    await seedHost(env, { vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 16 });
+    await seedContainer(env, { status: "running" });
+    await env.DB.prepare(
+      `INSERT INTO container_plan_transitions
+         (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+          reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at)
+       VALUES ('container-1', 'free', 'paid', 8, 'running', 'cancelled',
+               1, 2560, 6, 1, 2)`,
+    ).run();
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+
+    const job = await runJob(env, "destroy");
+    await refreshJob(env, job);
+
+    expect(await getContainerForUser(env, "user-1")).toBeNull();
+    expect(await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
+    ).first()).toEqual({
+      vcpu_allocated: 0,
+      ram_allocated_mb: 0,
+      disk_allocated_gb: 0,
+    });
+  });
+
   it("keeps destroy retryable when an atomic finalization step fails", async () => {
     const { env } = makeEnv();
     await seedUser(env);

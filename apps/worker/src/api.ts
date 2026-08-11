@@ -43,7 +43,7 @@ import {
 } from "./jobs.js";
 import { ProvisioningNotAllowedError, startProvision } from "./placement.js";
 import { accountAccessForUser } from "./entitlements.js";
-import { cancelUnreservedPlanTransition } from "./plan-transitions.js";
+import { cancelPlanTransitionForDestroy } from "./plan-transitions.js";
 import { readJsonBody } from "./http.js";
 import {
   markAllNotificationsRead,
@@ -441,7 +441,7 @@ export const apiRoutes = new Hono<AppContext>()
     const validOps: JobOp[] = ["start", "stop", "rebuild", "destroy"];
     if (!validOps.includes(op as JobOp)) return c.json({ error: "unknown action" }, 400);
     if (op === "destroy" && container.status === "upgrade_pending") {
-      if (!(await cancelUnreservedPlanTransition(c.env, container.id))) {
+      if (!(await cancelPlanTransitionForDestroy(c.env, container.id))) {
         return c.json({
           error: "The resource change has reached the host. Retry deletion after it settles.",
         }, 409);

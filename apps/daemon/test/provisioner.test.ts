@@ -1146,6 +1146,32 @@ describe("resize / destroy", () => {
     expect(flat.some((command) => command.startsWith("init "))).toBe(false);
   });
 
+  it("updates an existing root disk override when retrying resize", async () => {
+    const calls: Call[] = [];
+    const fallback = fakeExec(calls);
+    const exec: ExecFn = async (cmd, args, stdin) => {
+      if (args.slice(0, 3).join(" ") === "config device override") {
+        calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
+        throw new Error("incus config device override… failed: Error: The device already exists");
+      }
+      return fallback(cmd, args, stdin);
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "resize",
+      jobId: "retry-resize",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
+    })).resolves.toBeNull();
+
+    const flat = calls.map((call) => call.args.join(" "));
+    expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
+    expect(flat).toContain("config device set workbench-aaaaaa root size=8GiB");
+    expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=paid");
+  });
+
   it("keeps the Incus CPU limit equal to the scheduler reservation", async () => {
     const calls: Call[] = [];
     const provisioner = new Provisioner(new Incus(fakeExec(calls)), makeConfig());

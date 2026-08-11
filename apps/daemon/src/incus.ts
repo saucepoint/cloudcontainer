@@ -79,6 +79,10 @@ function isExplicitNotFound(error: unknown): boolean {
   return /(?:Instance|Storage.*volume).*not found/i.test(error.message);
 }
 
+function isDeviceAlreadyExists(error: unknown): boolean {
+  return error instanceof Error && /device already exists/i.test(error.message);
+}
+
 export class Incus {
   constructor(
     private exec: ExecFn = realExec,
@@ -204,14 +208,22 @@ export class Incus {
 
   /** Cap the disposable root filesystem inherited from the default profile. */
   async setRootDiskLimit(name: string, sizeGb: number): Promise<void> {
-    await this.run([
-      "config",
-      "device",
-      "override",
-      name,
-      "root",
-      `size=${sizeGb}GiB`,
-    ]);
+    const size = `size=${sizeGb}GiB`;
+    try {
+      await this.run([
+        "config",
+        "device",
+        "override",
+        name,
+        "root",
+        size,
+      ]);
+    } catch (error) {
+      // Provision creates the local override. A later resize must update that
+      // same device instead of trying to override the inherited device again.
+      if (!isDeviceAlreadyExists(error)) throw error;
+      await this.run(["config", "device", "set", name, "root", size]);
+    }
   }
 
   async attachHome(name: string, pool: string, volume: string): Promise<void> {

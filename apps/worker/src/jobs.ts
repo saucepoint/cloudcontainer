@@ -516,6 +516,18 @@ async function finalizeDestroy(
   container: ContainerRow,
   completedAt: number,
 ): Promise<boolean> {
+  const transition = await env.DB.prepare(
+    `SELECT reserved_cpu, reserved_ram_mb, reserved_disk_gb
+     FROM container_plan_transitions
+     WHERE container_id = ? AND state <> 'complete'`,
+  ).bind(container.id).first<{
+    reserved_cpu: number;
+    reserved_ram_mb: number;
+    reserved_disk_gb: number;
+  }>();
+  const allocatedCpu = cpuReservation(container.tier) + (transition?.reserved_cpu ?? 0);
+  const allocatedRamMb = container.ram_mb + (transition?.reserved_ram_mb ?? 0);
+  const allocatedDiskGb = container.disk_gb * 2 + (transition?.reserved_disk_gb ?? 0);
   const latestActiveDestroy = `EXISTS (
     SELECT 1 FROM jobs j
     WHERE j.id = ? AND j.container_id = ? AND j.op = 'destroy'
@@ -552,9 +564,9 @@ async function finalizeDestroy(
          WHERE id = ? AND EXISTS (SELECT 1 FROM containers WHERE id = ?)
            AND ${latestActiveDestroy}`,
       ).bind(
-        cpuReservation(container.tier),
-        container.ram_mb,
-        container.disk_gb * 2,
+        allocatedCpu,
+        allocatedRamMb,
+        allocatedDiskGb,
         container.rehome_placement_class,
         container.rehome_placement_class,
         container.host_id,
@@ -613,9 +625,9 @@ async function finalizeDestroy(
        WHERE id = ? AND EXISTS (SELECT 1 FROM containers WHERE id = ?)
          AND ${latestActiveDestroy}`,
     ).bind(
-      cpuReservation(container.tier),
-      container.ram_mb,
-      container.disk_gb * 2,
+      allocatedCpu,
+      allocatedRamMb,
+      allocatedDiskGb,
       container.host_id,
       container.id,
       ...gate,
