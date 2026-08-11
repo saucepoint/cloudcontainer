@@ -17,6 +17,7 @@ import {
 } from "./dashboard-model.js";
 import { Connection, SshKeys } from "./dashboard-ssh.js";
 import { isUnauthorized, requestJson as api } from "./http.js";
+import { formatMonthlyPrice } from "../src/price.js";
 
 const CHECKOUT_POLL_INTERVAL_MS = 1_000;
 const CHECKOUT_POLL_MAX_ATTEMPTS = 30;
@@ -89,7 +90,7 @@ function ContainerCard({
         <div className="premium-upgrade-cta">
           <p>
             <strong>Upgrade this workbench in place.</strong><br />
-            Get 2 vCPU, 4 GB RAM, and more storage for {upgradeOffer.currency} {upgradeOffer.price}/month. Your persistent files stay on the same disk.
+            Get 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(upgradeOffer.price, upgradeOffer.currency)}. Your persistent files stay on the same disk.
           </p>
           <button className="btn primary" type="button" disabled={actionBusy} onClick={upgrade}>
             {upgradeOffer.trialEligible ? "Start 7-day Premium trial →" : "Upgrade to Premium →"}
@@ -544,7 +545,7 @@ function DashboardApp() {
                     {MACHINE_SPECS.paid}
                     {account.premium || !billing?.paidPlan
                       ? ""
-                      : ` · ${billing.paidPlan.currency} ${billing.paidPlan.price}/mo`}
+                      : ` · ${formatMonthlyPrice(billing.paidPlan.price, billing.paidPlan.currency)}`}
                   </small>
                 </span>
               </label>

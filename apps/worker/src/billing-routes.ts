@@ -4,6 +4,7 @@ import { requireAccount } from "./auth.js";
 import {
   billingAvailability,
   configuredCheckoutSessionMinutes,
+  inspectPaidStripePrice,
   validatePaidStripePrice,
 } from "./billing-config.js";
 import { BillingEventError } from "./billing-errors.js";
@@ -312,6 +313,50 @@ export const billingRoutes = new Hono<AppContext>()
       return c.json({ error: "billing queue unavailable" }, 503);
     }
     return c.body(null, 204);
+  })
+  .get("/api/admin/billing-configuration", async (c) => {
+    const failure = await billingAdminFailure(c);
+    if (failure) return failure;
+    try {
+      const availability = billingAvailability(c.env);
+      if (!availability.configured) {
+        return c.json({ availability, stripePrice: null });
+      }
+      try {
+        return c.json({ availability, stripePrice: await inspectPaidStripePrice(c.env) });
+      } catch (error) {
+        if (error instanceof StripeApiError) {
+          return c.json({
+            availability,
+            stripePrice: {
+              valid: false,
+              error: { type: "stripe_api", status: error.status, code: error.code },
+            },
+          });
+        }
+        if (error instanceof StripeConfigurationError) {
+          return c.json({
+            availability,
+            stripePrice: {
+              valid: false,
+              error: { type: "configuration", message: error.message },
+            },
+          });
+        }
+        throw error;
+      }
+    } catch (error) {
+      if (error instanceof StripeConfigurationError) {
+        return c.json({
+          availability: { configured: false, paidPlan: null },
+          stripePrice: {
+            valid: false,
+            error: { type: "configuration", message: error.message },
+          },
+        });
+      }
+      throw error;
+    }
   })
   .get("/api/admin/billing/:userId", async (c) => {
     const failure = await billingAdminFailure(c);

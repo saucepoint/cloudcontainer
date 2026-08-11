@@ -5,6 +5,7 @@ import {
   StripeConfigurationError,
   type StripePrice,
 } from "./stripe.js";
+import { formatMonthlyPrice } from "./price.js";
 import type { Bindings } from "./types.js";
 
 const DAY_MS = 86_400_000;
@@ -20,6 +21,33 @@ export interface PaidPlanDisplay {
   interval: "month";
   trialDays: number;
   display: string;
+}
+
+export interface PaidStripePriceReport {
+  valid: boolean;
+  mismatches: string[];
+  expected: {
+    id: string;
+    unitAmount: number;
+    currency: string;
+    taxEnabled: boolean;
+  };
+  actual: {
+    id: string;
+    active: boolean;
+    liveMode: boolean;
+    productId: string;
+    productActive: boolean;
+    type: string;
+    billingScheme: string | null;
+    unitAmount: number | null;
+    currency: string;
+    interval: string | null;
+    intervalCount: number | null;
+    usageType: string | null;
+    taxBehavior: string | null;
+    productTaxCode: string | null;
+  };
 }
 
 function configuredDurationMs(
@@ -102,7 +130,7 @@ function paidPlanDisplay(env: Bindings): PaidPlanDisplay | null {
     currency,
     interval: "month",
     trialDays: PAID_TRIAL_DAYS,
-    display: `${PAID_TRIAL_DAYS}-day free trial, then ${currency} ${price}/month`,
+    display: `${PAID_TRIAL_DAYS}-day free trial, then ${formatMonthlyPrice(price, currency)}`,
   };
 }
 
@@ -141,27 +169,66 @@ function productTaxCode(product: StripePrice["product"]): string | null {
   return product.tax_code?.id ?? null;
 }
 
+function paidStripePriceReport(
+  env: Bindings,
+  price: StripePrice,
+): PaidStripePriceReport {
+  const expected = {
+    id: paidPriceId(env),
+    unitAmount: configuredUnitAmount(env),
+    currency: env.PAID_PLAN_CURRENCY?.trim().toLowerCase() ?? "",
+    taxEnabled: env.STRIPE_TAX_ENABLED === "1",
+  };
+  const actual = {
+    id: price.id,
+    active: price.active,
+    liveMode: price.livemode,
+    productId: typeof price.product === "string" ? price.product : price.product.id,
+    productActive: typeof price.product === "object" && price.product.active,
+    type: price.type,
+    billingScheme: price.billing_scheme ?? null,
+    unitAmount: price.unit_amount,
+    currency: price.currency.toLowerCase(),
+    interval: price.recurring?.interval ?? null,
+    intervalCount: price.recurring?.interval_count ?? null,
+    usageType: price.recurring?.usage_type ?? null,
+    taxBehavior: price.tax_behavior ?? null,
+    productTaxCode: productTaxCode(price.product),
+  };
+  const mismatches = [
+    actual.id !== expected.id ? "id" : null,
+    !actual.active ? "active" : null,
+    !actual.productActive ? "product_active" : null,
+    actual.type !== "recurring" ? "type" : null,
+    actual.billingScheme !== "per_unit" ? "billing_scheme" : null,
+    actual.unitAmount !== expected.unitAmount ? "unit_amount" : null,
+    actual.currency !== expected.currency ? "currency" : null,
+    actual.interval !== "month" ? "interval" : null,
+    actual.intervalCount !== 1 ? "interval_count" : null,
+    actual.usageType !== "licensed" ? "usage_type" : null,
+    expected.taxEnabled && !["exclusive", "inclusive"].includes(actual.taxBehavior ?? "")
+      ? "tax_behavior"
+      : null,
+    expected.taxEnabled && actual.productTaxCode === null ? "product_tax_code" : null,
+  ].filter((value): value is string => value !== null);
+  return { valid: mismatches.length === 0, mismatches, expected, actual };
+}
+
+/** Fleet-admin-safe report of public Stripe Price attributes; never includes credentials. */
+export async function inspectPaidStripePrice(env: Bindings): Promise<PaidStripePriceReport> {
+  const price = await retrieveStripePrice(env, paidPriceId(env));
+  return paidStripePriceReport(env, price);
+}
+
 /** Fail closed before Checkout if the charged Stripe Price can differ from the UI disclosure. */
 export async function validatePaidStripePrice(env: Bindings): Promise<StripePrice> {
   const expectedId = paidPriceId(env);
-  const expectedCurrency = env.PAID_PLAN_CURRENCY?.trim().toLowerCase();
   const price = await retrieveStripePrice(env, expectedId);
-  const productActive = typeof price.product === "object" && price.product.active;
-  if (
-    price.id !== expectedId || !price.active || !productActive ||
-    price.type !== "recurring" || price.billing_scheme !== "per_unit" ||
-    price.unit_amount !== configuredUnitAmount(env) ||
-    price.currency.toLowerCase() !== expectedCurrency ||
-    price.recurring?.interval !== "month" || price.recurring.interval_count !== 1 ||
-    price.recurring.usage_type !== "licensed"
-  ) {
-    throw new StripeConfigurationError("Paid Stripe Price does not match the published plan");
-  }
-  if (env.STRIPE_TAX_ENABLED === "1" && (
-    !["exclusive", "inclusive"].includes(price.tax_behavior ?? "") ||
-    productTaxCode(price.product) === null
-  )) {
-    throw new StripeConfigurationError("Stripe Tax requires Price tax behavior and a Product tax code");
+  const report = paidStripePriceReport(env, price);
+  if (!report.valid) {
+    throw new StripeConfigurationError(
+      `Paid Stripe Price does not match the published plan (${report.mismatches.join(",")})`,
+    );
   }
   return price;
 }

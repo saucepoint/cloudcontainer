@@ -7,6 +7,7 @@ import {
   type LlmProvider,
 } from "@workbench/contract";
 import type { NotificationView } from "../notifications.js";
+import { formatMonthlyPrice } from "../price.js";
 import { AgentLogo, AgentLogoItem, ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
@@ -89,7 +90,7 @@ export const LandingPage: FC<{
         <li>
           <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
           <span class="tier-label">
-            {paidPlan ? `${paidPlan.currency} ${paidPlan.price}/mo` : "coming soon"}
+            {paidPlan ? formatMonthlyPrice(paidPlan.price, paidPlan.currency) : "coming soon"}
           </span>
         </li>
         <li>
@@ -308,7 +309,7 @@ export const AccountPage: FC<{
           ) : billing.configured && billing.paidPlan ? (
             <>
               <p>
-                Upgrade to 2 vCPU, 4 GB RAM, and more storage for {billing.paidPlan.currency} {billing.paidPlan.price}/month.
+                Upgrade to 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(billing.paidPlan.price, billing.paidPlan.currency)}.
               </p>
               <button id="billing-checkout-btn" class="btn primary" type="button">
                 {billing.trialEligible === false

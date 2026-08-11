@@ -58,6 +58,7 @@ const StripeInvoiceSchema = z.object({
 const StripePriceSchema = z.object({
   id: StripeIdSchema,
   active: z.boolean(),
+  livemode: z.boolean(),
   currency: z.string().min(1),
   type: z.string().min(1),
   unit_amount: z.number().int().nullable(),

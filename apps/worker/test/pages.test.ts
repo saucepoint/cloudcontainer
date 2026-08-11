@@ -134,9 +134,9 @@ describe("landing page call to action", () => {
       '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
     );
     expect(html).toContain(
-      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">USD 6/mo</span>'
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">$6/mo</span>'
     );
-    expect(html).toContain('<span class="tier-label">USD 6/mo</span>');
+    expect(html).toContain('<span class="tier-label">$6/mo</span>');
     expect(String(LandingPage({ devAuth: false }))).toContain(
       '<span class="tier-label">coming soon</span>',
     );
@@ -307,7 +307,7 @@ describe("account page", () => {
           currency: "USD",
           interval: "month",
           trialDays: 7,
-          display: "$6/month",
+          display: "$6/mo",
         },
         entitlement: {
           eligible: false,
@@ -321,7 +321,7 @@ describe("account page", () => {
       },
     }));
     expect(account.indexOf('id="notifications"')).toBeLessThan(account.indexOf('id="billing"'));
-    expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 6/month.");
+    expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for $6/mo.");
     expect(account).toContain("Subscribe to Premium →");
     expect(account).not.toContain("Start 7-day Premium trial →");
   });
@@ -339,7 +339,7 @@ describe("account page", () => {
           currency: "USD",
           interval: "month",
           trialDays: 7,
-          display: "$6/month",
+          display: "$6/mo",
         },
         entitlement: {
           eligible: true,

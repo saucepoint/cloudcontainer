@@ -83,6 +83,7 @@ function paidPrice(overrides: Record<string, unknown> = {}) {
   return {
     id: "price_paid_monthly",
     active: true,
+    livemode: false,
     currency: "usd",
     type: "recurring",
     unit_amount: 2_000,
@@ -293,7 +294,7 @@ describe("billing routes", () => {
         currency: "USD",
         interval: "month",
         trialDays: 7,
-        display: "7-day free trial, then USD 20.00/month",
+        display: "7-day free trial, then $20.00/mo",
       },
     });
 
@@ -588,6 +589,37 @@ describe("billing routes", () => {
     });
     expect(JSON.stringify(body)).not.toContain("user-1@example.test");
   });
+
+  it("reports Stripe Price mismatches without exposing billing secrets", async () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, FLEET_ADMIN_SECRET: "support-secret" });
+    stubFetch((url) => {
+      if (url.pathname === "/v1/prices/price_paid_monthly") {
+        return Response.json(paidPrice({ unit_amount: 2_100 }));
+      }
+      return null;
+    });
+
+    expect((await app().request("/api/admin/billing-configuration", {
+      headers: { authorization: "Bearer wrong" },
+    }, env)).status).toBe(401);
+    const response = await app().request("/api/admin/billing-configuration", {
+      headers: { authorization: "Bearer support-secret" },
+    }, env);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      availability: { configured: true },
+      stripePrice: {
+        valid: false,
+        mismatches: ["unit_amount"],
+        expected: { id: "price_paid_monthly", unitAmount: 2_000, currency: "usd" },
+        actual: { id: "price_paid_monthly", unitAmount: 2_100, currency: "usd" },
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("sk_test_local");
+    expect(JSON.stringify(body)).not.toContain("whsec_local");
+  });
+
 });
 
 describe("billing event consumer", () => {
