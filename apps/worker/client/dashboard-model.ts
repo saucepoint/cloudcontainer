@@ -85,6 +85,10 @@ export interface DashboardSnapshot {
   };
 }
 
+export type BillingStatus = DashboardSnapshot["billing"] & {
+  account: DashboardSnapshot["account"];
+};
+
 export type ContainerAction = JobOp | "retry";
 
 export const STATUS_LABELS: Record<ContainerStatus, string> = {

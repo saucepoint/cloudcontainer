@@ -293,6 +293,22 @@ describe("billing routes", () => {
     expect(await disabled.json()).toMatchObject({ configured: false, paidPlan: null });
   });
 
+  it("returns current account access with billing status for post-Checkout refreshes", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    await env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, trial_until, source_ref, updated_at)
+       VALUES ('user-1', 'paid', 'manual', 'manual', NULL, 'support', ?)`,
+    ).bind(Date.now()).run();
+
+    const response = await app().request("/api/billing/status", { headers: { cookie } }, env);
+
+    expect(await response.json()).toMatchObject({
+      account: { state: "premium", verified: false, premium: true },
+    });
+  });
+
   it("keeps new sales disabled until the operator feature flag is enabled", async () => {
     const { env } = makeEnv({ ...BILLING_CONFIG, BILLING_ENABLED: "0" });
     const { cookie } = await unverifiedUser(env);

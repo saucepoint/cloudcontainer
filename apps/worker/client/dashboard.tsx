@@ -9,6 +9,7 @@ import {
   formatRamGb,
   isBusy,
   pollDelay,
+  type BillingStatus,
   type ContainerAction,
   type ContainerView,
   type DashboardSnapshot,
@@ -16,6 +17,11 @@ import {
 } from "./dashboard-model.js";
 import { Connection, SshKeys } from "./dashboard-ssh.js";
 import { isUnauthorized, requestJson as api } from "./http.js";
+
+const CHECKOUT_POLL_INTERVAL_MS = 1_000;
+const CHECKOUT_POLL_MAX_ATTEMPTS = 30;
+
+type CheckoutStatus = "idle" | "confirming" | "confirmed" | "timed_out";
 
 function redirectIfSignedOut(error: unknown): boolean {
   if (!isUnauthorized(error)) return false;
@@ -210,6 +216,12 @@ function ConfigurationSummary({
 }
 
 function DashboardApp() {
+  const [checkoutSuccess] = React.useState(
+    () => new URLSearchParams(window.location.search).get("checkout") === "success",
+  );
+  const [checkoutStatus, setCheckoutStatus] = React.useState<CheckoutStatus>(
+    checkoutSuccess ? "confirming" : "idle",
+  );
   const [loaded, setLoaded] = React.useState(false);
   const [container, setContainer] = React.useState<ContainerView | null>(null);
   const [configuration, setConfiguration] = React.useState<DashboardSnapshot["configuration"]>(null);
@@ -223,6 +235,7 @@ function DashboardApp() {
   const [actionBusy, setActionBusy] = React.useState(false);
   const [pollVersion, setPollVersion] = React.useState(0);
   const pollInFlight = React.useRef(false);
+  const checkoutPollInFlight = React.useRef(false);
   const refreshNeeded = React.useRef(false);
   const containerRef = React.useRef<ContainerView | null>(null);
 
@@ -230,6 +243,14 @@ function DashboardApp() {
     containerRef.current = next;
     setContainer(next);
   }, []);
+
+  const completeCheckout = React.useCallback(() => {
+    setCheckoutStatus("confirmed");
+    if (!checkoutSuccess) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("checkout");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [checkoutSuccess]);
 
   const loadDashboard = React.useCallback(async () => {
     setPageError("");
@@ -243,6 +264,7 @@ function DashboardApp() {
       setCredentials(snapshot.credentials);
       setBilling(snapshot.billing);
       setAccount(snapshot.account);
+      if (checkoutSuccess && snapshot.account.premium) completeCheckout();
       setLoaded(true);
     } catch (error) {
       if (!redirectIfSignedOut(error)) {
@@ -250,9 +272,62 @@ function DashboardApp() {
       }
       setLoaded(true);
     }
-  }, [applyContainer]);
+  }, [applyContainer, checkoutSuccess, completeCheckout]);
 
   React.useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+
+  React.useEffect(() => {
+    if (!checkoutSuccess || !loaded || account?.premium || checkoutStatus === "confirmed") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    let disposed = false;
+
+    const schedule = () => {
+      if (!disposed && !document.hidden) {
+        timer = setTimeout(() => void pollBilling(), CHECKOUT_POLL_INTERVAL_MS);
+      }
+    };
+    const pollBilling = async () => {
+      if (disposed || document.hidden || checkoutPollInFlight.current) return;
+      checkoutPollInFlight.current = true;
+      let confirmed = false;
+      try {
+        const result = await api<BillingStatus>("/api/billing/status");
+        if (disposed) return;
+        setBilling(result);
+        setAccount(result.account);
+        confirmed = result.account.premium;
+        if (confirmed) completeCheckout();
+      } catch (error) {
+        if (!disposed) redirectIfSignedOut(error);
+      } finally {
+        checkoutPollInFlight.current = false;
+        if (!disposed && !confirmed) {
+          attempts += 1;
+          if (attempts >= CHECKOUT_POLL_MAX_ATTEMPTS) {
+            setCheckoutStatus("timed_out");
+          } else {
+            schedule();
+          }
+        }
+      }
+    };
+    const visibilityChanged = () => {
+      if (document.hidden) {
+        if (timer) clearTimeout(timer);
+      } else {
+        void pollBilling();
+      }
+    };
+
+    void pollBilling();
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [account?.premium, checkoutPollInFlight, checkoutStatus, checkoutSuccess, completeCheckout, loaded]);
 
   React.useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -379,6 +454,19 @@ function DashboardApp() {
         <h1>Your workbench.</h1>
         {account ? <span className={`account-state ${account.state}`}>{ACCOUNT_STATE_LABELS[account.state]}</span> : null}
       </div>
+      {checkoutStatus === "confirming" ? (
+        <div className="notice" role="status" aria-live="polite">
+          Checkout completed. Activating your 7-day Premium trial…
+        </div>
+      ) : checkoutStatus === "confirmed" ? (
+        <div className="notice" role="status" aria-live="polite">
+          Your Premium trial is active.
+        </div>
+      ) : checkoutStatus === "timed_out" ? (
+        <div className="notice warning" role="status" aria-live="polite">
+          Checkout completed, but Premium activation is taking longer than expected. <button type="button" className="link-btn" onClick={() => setCheckoutStatus("confirming")}>Check again</button>
+        </div>
+      ) : null}
       {billing?.billing?.state === "past_due" || billing?.billing?.state === "grace" ? (
         <div className="notice warning" role="status">
           Your payment needs attention. Premium service remains available only through the displayed billing deadline.

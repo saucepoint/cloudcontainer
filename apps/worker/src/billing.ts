@@ -3,6 +3,7 @@ import { SERVICE_PLANS, TIERS } from "@workbench/contract";
 import { bearerToken, secretMatches } from "./admin-auth.js";
 import { requireAccount } from "./auth.js";
 import {
+  accountAccess,
   accountEntitlement,
   effectiveEntitlementForUser,
   hasPermanentFreeEligibility,
@@ -228,6 +229,7 @@ export async function billingStatusForUser(env: Bindings, user: UserRow, now = D
     configured: billingConfigured(env),
     paidPlan: paidPlanDisplay(env),
     entitlement: effective,
+    account: accountAccess(user, effective),
     billing: entitlement
       ? {
           plan: entitlement.plan,

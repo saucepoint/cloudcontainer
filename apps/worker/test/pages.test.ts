@@ -633,6 +633,14 @@ describe("GitHub repository onboarding", () => {
 });
 
 describe("dashboard loading and polling", () => {
+  it("automatically confirms a successful Checkout before enabling the Premium tier", () => {
+    expect(dashboardClient).toContain('new URLSearchParams(window.location.search).get("checkout") === "success"');
+    expect(dashboardClient).toContain('api<BillingStatus>("/api/billing/status")');
+    expect(dashboardClient).toContain("setAccount(result.account)");
+    expect(dashboardClient).toContain('setCheckoutStatus("confirmed")');
+    expect(dashboardClient).toContain("setTimeout(() => void pollBilling()");
+  });
+
   it("loads one dashboard snapshot, then polls only container state without replacing forms", () => {
     const load = dashboardClient.slice(
       dashboardClient.indexOf("const loadDashboard"),

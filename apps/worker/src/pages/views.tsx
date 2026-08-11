@@ -282,14 +282,13 @@ export const AccountPage: FC<{
           !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
             <>
               <p>
-                Premium · {billing.billing.state.replaceAll("_", " ")}
                 {billing.billing.state === "trialing" && billing.billing.trialUntil
-                  ? ` · trial ends ${new Date(billing.billing.trialUntil).toISOString().slice(0, 10)}`
+                  ? `Trial ends ${new Date(billing.billing.trialUntil).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
                   : billing.billing.state === "expired" && billing.subscription.trialEnd
-                  ? " · trial access ended"
+                  ? "Trial access ended"
                   : billing.billing.serviceUntil
-                  ? ` · ${billing.subscription.cancelAtPeriodEnd ? "paid until" : "current paid period ends"} ${new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}`
-                  : " · confirming payment"}
+                  ? `${billing.subscription.cancelAtPeriodEnd ? "Paid until" : "Current period ends"} ${new Date(billing.billing.serviceUntil).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                  : "Confirming payment…"}
               </p>
               <button id="billing-portal-btn" class="btn secondary" type="button">
                 {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
