@@ -108,7 +108,7 @@
         // matching Stripe sandbox recurring Price ID.
         "BILLING_ENABLED": "1",
         "STRIPE_PRICE_PAID_MONTHLY": "price_1TzTMOGR5QgQQ8Vf600SJC7k",
-        "PAID_PLAN_MONTHLY_PRICE": "5.99",
+        "PAID_PLAN_MONTHLY_PRICE": "6",
         "PAID_PLAN_CURRENCY": "USD",
         "STRIPE_TAX_ENABLED": "0",
         "BILLING_GRACE_DAYS": "0",

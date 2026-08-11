@@ -120,7 +120,7 @@ describe("landing page call to action", () => {
   it("presents the free capacity first and shows only the server-configured paid price", () => {
     const html = String(LandingPage({
       devAuth: false,
-      paidPlan: { price: "5.99", currency: "USD", interval: "month" },
+      paidPlan: { price: "6", currency: "USD", interval: "month" },
     }));
     const freeTier = "1 vCPU · 1.5 GB RAM · ";
     expect(html).not.toContain("1 GB Swap");
@@ -134,9 +134,9 @@ describe("landing page call to action", () => {
       '<span class="landing-copy">1 vCPU · 1.5 GB RAM · <span class="landing-only-desktop">Storage for 3-5 projects</span><span class="landing-only-mobile">3-5 projects</span></span><span class="ok">free tier</span>'
     );
     expect(html).toContain(
-      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">USD 5.99/mo</span>'
+      '<span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span><span class="tier-label">USD 6/mo</span>'
     );
-    expect(html).toContain('<span class="tier-label">USD 5.99/mo</span>');
+    expect(html).toContain('<span class="tier-label">USD 6/mo</span>');
     expect(String(LandingPage({ devAuth: false }))).toContain(
       '<span class="tier-label">coming soon</span>',
     );
@@ -303,11 +303,11 @@ describe("account page", () => {
         configured: true,
         trialEligible: false,
         paidPlan: {
-          price: "5.99",
+          price: "6",
           currency: "USD",
           interval: "month",
           trialDays: 7,
-          display: "$5.99/month",
+          display: "$6/month",
         },
         entitlement: {
           eligible: false,
@@ -321,7 +321,7 @@ describe("account page", () => {
       },
     }));
     expect(account.indexOf('id="notifications"')).toBeLessThan(account.indexOf('id="billing"'));
-    expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 5.99/month.");
+    expect(account).toContain("Upgrade to 2 vCPU, 4 GB RAM, and more storage for USD 6/month.");
     expect(account).toContain("Subscribe to Premium →");
     expect(account).not.toContain("Start 7-day Premium trial →");
   });
@@ -467,6 +467,15 @@ describe("subscription sign-in wiring", () => {
     expect(dashboardClient).toContain('void deploy("free")');
     expect(dashboardClient).toContain('void deploy("paid")');
     expect(dashboardClient).toContain('"/api/deploy"');
+    const instanceCreation = dashboardClient.indexOf('className="instance-creation"');
+    const configurationSummary = dashboardClient.indexOf("<ConfigurationSummary");
+    expect(instanceCreation).toBeGreaterThan(-1);
+    expect(configurationSummary).toBeGreaterThan(instanceCreation);
+    expect(PAGE_STYLES).toContain(
+      ".instance-creation + .configuration-summary { margin-top: 2.25rem; padding-top: 0; border-top: 0; }",
+    );
+    expect(PAGE_STYLES).toContain(".instance-cta .choice-hint { min-height: 1.35em;");
+    expect(dashboardClient.match(/className="choice-hint"/g)).toHaveLength(1);
     expect(dashboardClient).not.toContain('href="/onboarding"');
     expect(dashboardClient).not.toContain('id="dashboard-plan-heading"');
     expect(dashboardClient).not.toContain(">Plan</h2>");

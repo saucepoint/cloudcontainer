@@ -482,23 +482,6 @@ function DashboardApp() {
         </div>
       ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
-      {!pageError && configuration && credentials ? (
-        <ConfigurationSummary
-          configuration={configuration}
-          credentials={credentials}
-          sshKeyCount={keys.length}
-          selectedTier={container?.tier ?? selectedTier}
-          editable={!container}
-        />
-      ) : null}
-      {!pageError && container ? (
-        <ContainerCard
-          container={container}
-          action={(operation) => void act(operation)}
-          cancelPlacement={() => void cancelPlacement()}
-          actionBusy={actionBusy}
-        />
-      ) : null}
       {!pageError && configuration && !container && account ? (
         <section className="instance-creation">
           <fieldset className="instance-tier-picker">
@@ -557,14 +540,32 @@ function DashboardApp() {
             ) : (
               <button className="btn primary" type="button" disabled>Continue</button>
             )}
-            {selectedTier === "free" && !account.verified ? (
-              <p className="choice-hint">Verify to create a Free instance</p>
-            ) : null}
-            {selectedTier === "paid" && !account.premium ? (
-              <p className="choice-hint">Upgrade to Premium</p>
-            ) : null}
+            <p className="choice-hint">
+              {selectedTier === "free" && !account.verified
+                ? "Verify to create a Free instance"
+                : selectedTier === "paid" && !account.premium
+                  ? "Upgrade to Premium"
+                  : ""}
+            </p>
           </div>
         </section>
+      ) : null}
+      {!pageError && configuration && credentials ? (
+        <ConfigurationSummary
+          configuration={configuration}
+          credentials={credentials}
+          sshKeyCount={keys.length}
+          selectedTier={container?.tier ?? selectedTier}
+          editable={!container}
+        />
+      ) : null}
+      {!pageError && container ? (
+        <ContainerCard
+          container={container}
+          action={(operation) => void act(operation)}
+          cancelPlacement={() => void cancelPlacement()}
+          actionBusy={actionBusy}
+        />
       ) : null}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
       {container ? <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section> : null}

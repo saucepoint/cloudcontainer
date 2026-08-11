@@ -306,6 +306,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .configuration-api-keys { margin-top: 1.35rem; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
 .instance-creation { margin-top: 1.5rem; }
+.instance-creation + .configuration-summary { margin-top: 2.25rem; padding-top: 0; border-top: 0; }
 .instance-tier-picker { margin-top: 0; }
 .instance-tier-picker legend { margin-bottom: 0.55rem; }
 .instance-tier-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
@@ -319,7 +320,7 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .instance-tier-option span { display: grid; gap: 0.2rem; min-width: 0; }
 .instance-tier-option small { color: var(--muted); font-size: 0.78rem; }
 .instance-cta { display: grid; justify-items: start; gap: 0.35rem; margin-top: 1.1rem; }
-.instance-cta .choice-hint { margin: 0; color: var(--muted); font-size: 0.76rem; }
+.instance-cta .choice-hint { min-height: 1.35em; margin: 0; color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
 .row.flush, form.flush { margin: 0; }
 .github-connected { display: inline-flex; align-items: center; gap: 0.45rem; align-self: center;
   color: var(--muted); font-size: 0.86rem; }
