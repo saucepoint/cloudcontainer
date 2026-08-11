@@ -601,7 +601,7 @@ describe("billing event consumer", () => {
     await seedStripeCustomer(env);
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -871,7 +871,7 @@ describe("billing deadline reconciliation", () => {
     await seedExpiredStripeSubscription(env);
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -906,7 +906,7 @@ describe("billing deadline reconciliation", () => {
     await seedExpiredStripeSubscription(env);
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });

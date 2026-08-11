@@ -120,8 +120,7 @@ function specOf(
   return {
     agents: containerAgents(container),
     tier,
-    // D1/public views retain the advertised 1/2-vCPU value; daemon job specs
-    // carry the actual 1/3-vCPU limit for current releases.
+    // The D1/public view and daemon job spec both use the advertised tier value.
     cpu: cpuReservation(tier),
     ramMb: desired?.ramMb ?? container.ram_mb,
     diskGb: desired?.diskGb ?? container.disk_gb,

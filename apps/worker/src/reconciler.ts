@@ -367,7 +367,7 @@ async function placeWaitlistedContainer(
                SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
              )
              AND h.vcpu_allocated + CASE containers.tier
-               WHEN 'free' THEN 1 WHEN 'paid' THEN 3 ELSE 2147483647 END <= h.vcpu_capacity
+               WHEN 'free' THEN 1 WHEN 'paid' THEN 2 ELSE 2147483647 END <= h.vcpu_capacity
              AND (h.ram_allocated_mb + containers.ram_mb) *
                  ${HOST_RAM_OVERCOMMIT_DENOMINATOR} <=
                  (h.ram_total_mb - h.ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}

@@ -317,9 +317,9 @@ while IFS= read -r name; do
       INSTANCE_SWAP_MB=1024
       ;;
     paid)
-      INSTANCE_CPU=3
+      INSTANCE_CPU=2
       INSTANCE_RAM_MB=4096
-      INSTANCE_SWAP_MB=0
+      INSTANCE_SWAP_MB=1536
       ;;
     *)
       fail "$name has supported tier metadata (got ${INSTANCE_TIER:-<empty>})"
@@ -341,13 +341,8 @@ while IFS= read -r name; do
     incus --project "$PROJECT_NAME" config get "$name" limits.memory
   check_eq "$name has hard memory enforcement" "hard" \
     incus --project "$PROJECT_NAME" config get "$name" limits.memory.enforce
-  if (( INSTANCE_SWAP_MB > 0 )); then
-    check_eq "$name has its tier swap limit" "${INSTANCE_SWAP_MB}MiB" \
-      incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
-  else
-    check_eq "$name has swap disabled" "false" \
-      incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
-  fi
+  check_eq "$name has its tier swap limit" "${INSTANCE_SWAP_MB}MiB" \
+    incus --project "$PROJECT_NAME" config get "$name" limits.memory.swap
   check_eq "$name process ceiling" "$TENANT_PROCESS_LIMIT" \
     incus --project "$PROJECT_NAME" config get "$name" limits.processes
   check_eq "$name is unprivileged" "false" \

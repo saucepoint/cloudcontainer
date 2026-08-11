@@ -482,7 +482,7 @@ describe("fleet administration", () => {
       host_type: "dedicated",
       max_tenants: 1,
       dedicated_user_id: "dedicated-user",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -697,7 +697,7 @@ describe("fleet administration", () => {
       host_type: "dedicated",
       max_tenants: 1,
       dedicated_user_id: "user-1",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });

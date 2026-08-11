@@ -32,8 +32,8 @@ shared tenancy and accept either Free or Paid after the daemon reports
 | Tenancy / plan | Advertised CPU | Incus/host reservation | RAM | Swap | Home + root disk | Maximum tenants |
 |---|---|---:|---:|---:|---:|---:|---:|
 | shared / Free | 1 vCPU | 1 vCPU | 1536 MiB | 1024 MiB | 5 + 5 GiB | host safety ceiling plus additive budgets |
-| shared / Paid | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | host safety ceiling plus additive budgets |
-| dedicated / paid account | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | exactly 1 |
+| shared / Paid | 2 vCPU | 2 vCPU | 4096 MiB | 1536 MiB | 8 + 8 GiB | host safety ceiling plus additive budgets |
+| dedicated / paid account | 2 vCPU | 2 vCPU | 4096 MiB | 1536 MiB | 8 + 8 GiB | exactly 1 |
 
 Bootstrap computes a conservative ceiling from the actual host:
 
@@ -58,14 +58,15 @@ the placement shape on shared hosts. A host with no complete slot fails
 bootstrap; never override that failure merely to advertise capacity.
 
 `max_tenants` is an additional hard ceiling. Every placement also rechecks
-tenant count, the requested container's actual 1/3-vCPU reservation, RAM,
+tenant count, the requested container's actual 1/2-vCPU reservation, RAM,
 doubled disk quota, health, tenancy mode, mixed-tier capability, and a dedicated
 account assignment in the same D1 reservation transaction. Capacity belongs to
 the individual host row. The restricted Incus project's aggregate CPU/RAM
 limits match the shared D1 budgets, while each instance retains its tier limits.
 Every shared host reserves enough physical swap for the worst case in which all
-tenant slots are Free. The scheduler may admit any safe Free/Paid combination
-that fits; `max_tenants` is not a promise that every resource can be exhausted.
+tenant slots use the largest configured shared-tier allowance. The scheduler
+may admit any safe Free/Paid combination that fits; `max_tenants` is not a
+promise that every resource can be exhausted.
 
 CPU can bind instead: a 4-vCPU/16-GiB budget host configured with
 `--vcpu-overcommit 1` has four CPU slots but eleven RAM slots. The registered

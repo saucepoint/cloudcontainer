@@ -475,8 +475,7 @@ host draining until its class policy and daemon have been deployed, audited,
 probed, and explicitly reactivated through the fleet controller. See the
 control-plane rollout in the runbook before applying it.
 `0015_host_lifecycle.sql` adds generation history and orderly re-home state.
-`0016_free_tier_cpu.sql` repairs host CPU accounting to the actual 1/3-vCPU
-reservations.
+`0016_free_tier_cpu.sql` repairs free-tier host CPU accounting to 1 vCPU.
 `0017_cli_auth.sql` adds expiring, one-time browser-to-terminal authentication
 handoffs for the `usebench` CLI. Apply the Worker migration and deploy the
 compatible Worker before publishing a CLI version that uses it.
@@ -489,6 +488,8 @@ manual entitlements, and adds trial/billing/event/transition state. Deploy the m
 daemon capability fleet-wide before setting `BILLING_ENABLED=1`.
 `0020_workbench_configurations.sql` separates durable, completed workbench
 configuration from expiring wizard drafts and backfills existing containers.
+`0021_paid_tier_cpu.sql` aligns existing Paid host accounting with its 2-vCPU
+reservation.
 
 The CLI package can be built and inspected without publishing:
 
@@ -551,7 +552,7 @@ Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
 remainder is tenant RAM. Its CPU reservation budget defaults to four times the
 detected online vCPU count, and an operator may select a lower multiplier from
 1 through 4. Every admission adds that container's actual 1-vCPU Free or
-3-vCPU Paid reservation, hard RAM, and doubled home/root disk reservation.
+2-vCPU Paid reservation, hard RAM, and doubled home/root disk reservation.
 RAM permits 1.25x oversubscription. `max_tenants` remains a separate isolation
 and operational safety ceiling. Selection and the authoritative D1 write
 recheck the same resource, health, tenancy, tenant, and port predicates.

@@ -14,7 +14,7 @@ tests, and `SPEC.md` together.
 
 | Tenancy | Test accounts | Required placement | Advertised / enforced CPU and other limits |
 |---|---|---|---|
-| shared | at least two Free, two Paid, and one overflow | Free and Paid concurrently on one capable host | Free: 1 / 1 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home/root; Paid: 2 / 3 vCPU, 4096 MiB RAM, no swap, 8 GiB home/root |
+| shared | at least two Free, two Paid, and one overflow | Free and Paid concurrently on one capable host | Free: 1 / 1 vCPU, 1536 MiB RAM, 1024 MiB swap, 5 GiB home/root; Paid: 2 / 2 vCPU, 4096 MiB RAM, 1536 MiB swap, 8 GiB home/root |
 | dedicated | two dedicated-entitled accounts and one shared paid account | only the assigned account; exactly one tenant | Paid limits |
 
 Also include an account-bound dedicated host during shared capacity tests. That
@@ -50,10 +50,10 @@ For the host under test, independently compute:
 
     ram_reserve_mb = max(3072, ceil(ram_total_mb * 8 / 100), configured_higher_reserve)
     vcpu_capacity = online_host_vcpus * vcpu_overcommit  # integer 1..4; default 4
-    cpu_slots = ceil(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 3 paid
+    cpu_slots = ceil(vcpu_capacity / provisioned_tenant_cpu)  # 1 free, 2 paid
     ram_slots = ceil((ram_total_mb - ram_reserve_mb) * 1.25 / tenant_ram_mb)
     disk_slots = floor(safe_disk_gb / (2 * tenant_disk_gb))
-    swap_slots = floor(host_swap_mb / 1024)  # every shared slot can be Free
+    swap_slots = floor(host_swap_mb / 1536)  # every shared slot can be Paid
     idmap_slots = floor(min(root_subuid_count, root_subgid_count) / 65536) - 1  # explicit ranges only
 
     expected_slots = min(cpu_slots, ram_slots, disk_slots[, swap_slots, idmap_slots])
@@ -86,7 +86,7 @@ then submit one additional request concurrently. Confirm:
   waitlisted;
 - every assigned host tenancy mode matches persisted placement mode and the
   daemon reports `mixed-tier-shared-v1`;
-- `vcpu_allocated = free_count + 3 * paid_count`;
+- `vcpu_allocated = free_count + 2 * paid_count`;
 - `ram_allocated_mb = 1536 * free_count + 4096 * paid_count`;
 - `disk_allocated_gb = 10 * free_count + 16 * paid_count`, except for explicit
   grandfathered Free storage, which remains 16;
@@ -158,13 +158,13 @@ confirm the file remains owned and writable by `dev`. This exercises the custom
 volume's isolated-idmap transition while the root filesystem is replaced.
 
 For memory enforcement, exceed each tier's RAM limit. A Free tenant may use at
-most 1024 MiB configured swap; Paid and dedicated tenants must report no
-configured swap even when they share the same host. The workload may be killed
+most 1024 MiB configured swap; Paid and dedicated tenants may use at most 1536 MiB
+configured swap. The workload may be killed
 inside the tenant, but the host and neighboring SSH sessions must stay
 responsive with no host OOM event.
 
 Run CPU stress in every tenant simultaneously. Each must remain bounded to its
-exact enforced allowance (1 free, 3 paid/dedicated), while the UI advertises
+exact enforced allowance (1 free, 2 paid/dedicated), matching the UI's
 1/2 vCPU and the host has an explicit aggregate vCPU overcommit ceiling.
 
 ## Health, drain, and controller release tests

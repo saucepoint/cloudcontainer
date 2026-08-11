@@ -76,7 +76,7 @@ TENANT_NETWORK_LIMIT="${TENANT_NETWORK_LIMIT:-100Mbit}"
 # Zero means use the full resource-derived ceiling. A positive value creates a
 # static partition so independent control planes can safely share one host.
 HOST_TENANT_LIMIT="${HOST_TENANT_LIMIT:-0}"
-WORKBENCH_POLICY_VERSION=6
+WORKBENCH_POLICY_VERSION=8
 
 case "$HOST_TYPE" in
   budget)
@@ -90,17 +90,17 @@ case "$HOST_TYPE" in
   regular)
     TENANT_TIER=paid
     TENANT_ADVERTISED_CPU=2
-    TENANT_CPU=3
+    TENANT_CPU=2
     TENANT_RAM_MB=4096
-    TENANT_SWAP_MB=0
+    TENANT_SWAP_MB=1536
     TENANT_DISK_GB=8
     ;;
   dedicated)
     TENANT_TIER=paid
     TENANT_ADVERTISED_CPU=2
-    TENANT_CPU=3
+    TENANT_CPU=2
     TENANT_RAM_MB=4096
-    TENANT_SWAP_MB=0
+    TENANT_SWAP_MB=1536
     TENANT_DISK_GB=8
     ;;
   *)
@@ -119,12 +119,11 @@ if [[ "$HOST_TYPE" == "dedicated" && "$TENANCY_MODE" != "dedicated" ]] || \
   return 1 2>/dev/null || exit 1
 fi
 
-# Every shared host can receive Free, whose advertised contract includes 1 GiB
-# of bounded swap. Reserve that worst-case per tenant even when the legacy
-# rollout class is regular/Paid.
+# Every shared host can receive either tier. Reserve the largest configured
+# shared-tier allowance per tenant (currently Paid's 1.5 GiB).
 SLOT_SWAP_MB=$TENANT_SWAP_MB
 if [[ "$TENANCY_MODE" == "shared" ]]; then
-  SLOT_SWAP_MB=1024
+  SLOT_SWAP_MB=1536
 fi
 
 TENANT_DISK_RESERVATION_GB=$(( TENANT_DISK_GB * 2 ))

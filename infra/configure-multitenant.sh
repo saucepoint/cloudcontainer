@@ -240,9 +240,9 @@ while IFS= read -r name; do
       INSTANCE_SWAP_MB=1024
       ;;
     paid)
-      INSTANCE_CPU=3
+      INSTANCE_CPU=2
       INSTANCE_RAM_MB=4096
-      INSTANCE_SWAP_MB=0
+      INSTANCE_SWAP_MB=1536
       ;;
     *)
       echo "!! $name has unsupported tier metadata: $INSTANCE_TIER"

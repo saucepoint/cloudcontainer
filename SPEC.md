@@ -86,9 +86,9 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - A free tier with 1 vCPU, 1536 MiB RAM, 1024 MiB swap, a 5 GiB persistent
   home volume, and a 5 GiB disposable root filesystem. The public 1-vCPU plan
   is backed by an enforced and reserved 1-vCPU Incus allowance.
-- A paid tier with 2 vCPU, 4096 MiB RAM, no configured swap,
+- A paid tier with 2 vCPU, 4096 MiB RAM, 1536 MiB swap,
   an 8 GiB persistent home volume, and an 8 GiB disposable root filesystem.
-  The public 2-vCPU plan is backed by an enforced and reserved 3-vCPU allowance.
+  The public 2-vCPU plan is backed by an enforced and reserved 2-vCPU allowance.
   Stripe-hosted self-service purchase and in-place upgrades are available only
   when the complete billing configuration and `BILLING_ENABLED` launch gate
   are enabled. Every self-service Paid subscription begins with a seven-day
@@ -710,8 +710,8 @@ Placement requires all of the following at reservation time:
 - mixed-tier daemon capability on shared hosts, or an exact legacy class match
   during the rolling interval;
 - a free tenant slot below `max_tenants`;
-- enough additive vCPU reservation capacity (1 free, 3 paid/dedicated), distinct
-  from the advertised 1/2-vCPU plan value stored on the container;
+- enough additive vCPU reservation capacity (1 free, 2 paid/dedicated), matching
+  the advertised 1/2-vCPU plan value stored on the container;
 - enough additive 1.25x non-reserved RAM capacity;
 - enough registered disk capacity for both home and root quotas;
 - a recent successful signed daemon stats response with no current failure;
@@ -858,9 +858,9 @@ operations synchronize keys and credentials.
   disk, and instance ceilings.
 - Public plan values remain free 1 vCPU and paid/dedicated 2 vCPU. Incus limits
   and host scheduler reservations use the enforced class values: free uses 1
-  vCPU and paid/dedicated use 3 vCPU. Free has hard 1.5 GiB memory,
+  vCPU and paid/dedicated use 2 vCPU. Free has hard 1.5 GiB memory,
   1 GiB swap, and 5 GiB each for home and root; paid/dedicated have hard 4 GiB
-  memory, swap disabled, and 8 GiB each for home and root. Every class also has
+  memory, 1.5 GiB swap, and 8 GiB each for home and root. Every class also has
   a 1024-process ceiling and an isolated unprivileged idmap.
 - No nesting, privileged containers, or Docker-in-container support. The
   restricted project permits low-level configuration only for the daemon-owned

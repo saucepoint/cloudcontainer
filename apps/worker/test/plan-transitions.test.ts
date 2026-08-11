@@ -47,14 +47,14 @@ describe("in-place plan transitions", () => {
       to_tier: "paid",
       prior_status: "running",
       state: "resizing",
-      reserved_cpu: 2,
+      reserved_cpu: 1,
       reserved_ram_mb: 2560,
       reserved_disk_gb: 6,
     });
     expect(await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first()).toEqual({
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -68,7 +68,7 @@ describe("in-place plan transitions", () => {
     expect(daemon.submitted).toHaveLength(1);
     expect(daemon.submitted[0]).toMatchObject({
       op: "resize",
-      spec: { tier: "paid", cpu: 3, ramMb: 4096, diskGb: 8 },
+      spec: { tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8 },
     });
 
     const jobId = String(daemon.submitted[0]?.jobId);
@@ -89,7 +89,7 @@ describe("in-place plan transitions", () => {
     expect(await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first()).toEqual({
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -149,7 +149,7 @@ describe("in-place plan transitions", () => {
     await refreshJob(env, failedJob);
     expect(await transition(env)).toMatchObject({
       state: "failed_retryable",
-      reserved_cpu: 2,
+      reserved_cpu: 1,
       reserved_ram_mb: 2560,
       reserved_disk_gb: 6,
     });
@@ -162,7 +162,7 @@ describe("in-place plan transitions", () => {
     expect(await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first()).toEqual({
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });
@@ -182,7 +182,7 @@ describe("in-place plan transitions", () => {
     await seedUser(env, "user-1", "free");
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 16,
     });

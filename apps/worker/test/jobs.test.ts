@@ -685,7 +685,7 @@ describe("pickHost (scheduler §10)", () => {
     await seedHost(env, { id: "regular", host_type: "regular" });
 
     expect((await pickHost(env, request({ hostType: "budget" })))?.id).toBe("budget");
-    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("budget");
+    expect((await pickHost(env, request({ hostType: "regular", cpu: 2 })))?.id).toBe("budget");
   });
 
   it("scores heterogeneous capacity independently even within the same host class", async () => {
@@ -714,19 +714,19 @@ describe("pickHost (scheduler §10)", () => {
     expect((await pickHost(env, request()))?.id).toBe("budget-4cpu-8gb");
   });
 
-  it("applies the paid 3-vCPU reservation to an independently sized regular host", async () => {
+  it("applies the paid 2-vCPU reservation to an independently sized regular host", async () => {
     const { env } = makeEnv();
     await seedHost(env, {
       host_type: "regular",
-      vcpu_capacity: 9,
+      vcpu_capacity: 6,
       ram_total_mb: 16384,
       ram_reserve_mb: 3072,
       max_tenants: 2,
-      vcpu_allocated: 6,
+      vcpu_allocated: 4,
     });
-    expect((await pickHost(env, request({ hostType: "regular", cpu: 3 })))?.id).toBe("host-1");
-    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 9 WHERE id = 'host-1'").run();
-    expect(await pickHost(env, request({ hostType: "regular", cpu: 3 }))).toBeNull();
+    expect((await pickHost(env, request({ hostType: "regular", cpu: 2 })))?.id).toBe("host-1");
+    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 6 WHERE id = 'host-1'").run();
+    expect(await pickHost(env, request({ hostType: "regular", cpu: 2 }))).toBeNull();
   });
 
   it("enforces tenant ceilings and dedicated account assignment", async () => {
@@ -738,12 +738,12 @@ describe("pickHost (scheduler §10)", () => {
       dedicated_user_id: "user-1",
     });
 
-    expect((await pickHost(env, request({ hostType: "dedicated", cpu: 3 })))?.id).toBe("host-1");
-    expect(await pickHost(env, request({ userId: "another", hostType: "dedicated", cpu: 3 })))
+    expect((await pickHost(env, request({ hostType: "dedicated", cpu: 2 })))?.id).toBe("host-1");
+    expect(await pickHost(env, request({ userId: "another", hostType: "dedicated", cpu: 2 })))
       .toBeNull();
 
     await seedContainer(env, { placement_class: "dedicated" });
-    expect(await pickHost(env, request({ hostType: "dedicated", cpu: 3 }))).toBeNull();
+    expect(await pickHost(env, request({ hostType: "dedicated", cpu: 2 }))).toBeNull();
   });
 });
 

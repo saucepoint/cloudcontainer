@@ -105,7 +105,7 @@ describe("provision command construction", () => {
     const freeRequest = provisionRequest();
     const paidRequest: Extract<JobRequest, { op: "provision" }> = {
       ...freeRequest,
-      spec: { ...freeRequest.spec, tier: "paid", cpu: 3, ramMb: 4096, diskGb: 8 },
+      spec: { ...freeRequest.spec, tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8 },
     };
     await expect(budget.run(paidRequest)).resolves.toMatchObject({ hostKeyFingerprints: [] });
 
@@ -1132,12 +1132,12 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=3");
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=300%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory=4096MiB");
-    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=false");
-    expect(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"))
-      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=false"));
+    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1536MiB");
+    expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1536MiB"))
+      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"));
     expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
     expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
   });

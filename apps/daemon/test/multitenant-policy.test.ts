@@ -66,7 +66,7 @@ describe("restricted tenant project policy", () => {
     expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=1");
     expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=2");
     expect(hostPolicy).toContain("TENANT_CPU=1");
-    expect(hostPolicy).toContain("TENANT_CPU=3");
+    expect(hostPolicy).toContain("TENANT_CPU=2");
     expect(configurePolicy).toContain('limits.cpu="$INSTANCE_CPU"');
     expect(configurePolicy).toContain("limits.memory.enforce=hard");
     expect(auditPolicy).toContain('"$INSTANCE_CPU"');
@@ -81,7 +81,10 @@ describe("restricted tenant project policy", () => {
     expect(configurePolicy).not.toContain('host classes cannot be mixed');
     expect(configurePolicy).not.toContain("storage volume set");
     expect(auditPolicy).toContain('"5GiB" || "$actual" == "8GiB"');
-    expect(hostPolicy).toContain("SLOT_SWAP_MB=1024");
+    expect(configurePolicy).toContain("INSTANCE_SWAP_MB=1536");
+    expect(auditPolicy).toContain("INSTANCE_SWAP_MB=1536");
+    expect(hostPolicy).toContain("TENANT_SWAP_MB=1536");
+    expect(hostPolicy).toContain("SLOT_SWAP_MB=1536");
   });
 
   it("rounds up 4x CPU and 1.25x RAM tenant ceilings", () => {

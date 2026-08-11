@@ -639,7 +639,7 @@ describe("drift correction (D1 <-> incus)", () => {
     await seedUser(env, "user-1", "paid");
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 32,
     });
@@ -663,7 +663,7 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 3, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
   });
 
   it("reuses the preserved reservation when retrying a missing container", async () => {

@@ -55,10 +55,10 @@ describe("tier capacities", () => {
     expect(TIERS.free.diskGb).toBe(5);
   });
 
-  it("keeps the paid tier at 8 GiB disk without swap", () => {
+  it("gives the paid tier 1.5 GiB swap and 8 GiB disk", () => {
     expect(TIERS.paid.cpu).toBe(2);
-    expect(TIERS.paid.provisionedCpu).toBe(3);
-    expect(TIERS.paid.swapMb).toBe(0);
+    expect(TIERS.paid.provisionedCpu).toBe(2);
+    expect(TIERS.paid.swapMb).toBe(1536);
     expect(TIERS.paid.diskGb).toBe(8);
   });
 
@@ -86,7 +86,7 @@ describe("tier capacities", () => {
   });
 
   it("rounds up CPU and 1.25x RAM tenant ceilings", () => {
-    expect(cpuTenantCeiling(16, "paid")).toBe(6);
+    expect(cpuTenantCeiling(16, "paid")).toBe(8);
     expect(ramTenantCeiling(8192, 3072, "free")).toBe(5);
     expect(hostCpuRamTenantCeiling({
       ramTotalMb: 8192,

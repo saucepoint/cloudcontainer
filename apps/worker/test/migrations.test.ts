@@ -543,5 +543,58 @@ describe("0019 monetization foundation migration", () => {
     ]);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
+});
 
+describe("0021 paid-tier CPU migration", () => {
+  it("reduces existing paid host reservations to two vCPUs", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('free-user', 'Free', 'free@example.test', 1, 'free', 1, 1),
+        ('paid-user', 'Paid', 'paid@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
+         disk_total_gb, status, joined_at, host_type, max_tenants)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         16384, 3072, 16, 0, 200, 'draining', 1, 'regular', 4);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('free-container', 'free-user', 'host-1', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'running', 1),
+        ('paid-container', 'paid-user', 'host-1', 30501, '["codex"]',
+         'paid', 'regular', 2, 4096, 8, 'running', 1);
+    `);
+
+    db.exec(migration("0016_free_tier_cpu.sql"));
+    expect(db.prepare("SELECT vcpu_allocated FROM hosts WHERE id = 'host-1'").get())
+      .toEqual({ vcpu_allocated: 4 });
+
+    db.exec(migration("0021_paid_tier_cpu.sql"));
+    expect(db.prepare("SELECT vcpu_allocated FROM hosts WHERE id = 'host-1'").get())
+      .toEqual({ vcpu_allocated: 3 });
+  });
 });
