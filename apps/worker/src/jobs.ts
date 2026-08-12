@@ -7,7 +7,6 @@ import {
   AgentsSchema,
   GithubReposSchema,
   JobRequestSchema,
-  MIXED_TIER_SHARED_CAPABILITY,
   TIERS,
   sealJson,
   type Agent,
@@ -49,15 +48,7 @@ function validateContainerPlacement(
   // Only spec-bearing operations are rejected by the daemon. Start, stop, and
   // especially destroy remain available so a divergent row is never trapped.
   if (op !== "provision" && op !== "rebuild" && op !== "resize") return;
-  const capabilities = host.daemon_capabilities ?? "";
-  const mixedShared = host.tenancy_mode === "shared" &&
-    capabilities.includes(MIXED_TIER_SHARED_CAPABILITY);
-  const hostTier = host.host_type === "budget" ? "free" : "paid";
-  const compatible = container.placement_mode === host.tenancy_mode && (
-    mixedShared ||
-    (container.placement_class === host.host_type && container.tier === hostTier)
-  );
-  if (!compatible) {
+  if (container.placement_mode !== host.tenancy_mode) {
     throw new ContainerPlacementConflictError();
   }
 }

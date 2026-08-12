@@ -85,15 +85,18 @@ assumptions were incorrect or incomplete.
 Today:
 
 - `users.subscription_status` is `free | paid | dedicated`;
-- `SERVICE_PLANS` maps those values to a tier and host type;
-- `budget` hosts accept only free containers;
-- `regular` hosts accept only paid containers;
+- `SERVICE_PLANS` maps those values to a resource tier and tenancy mode;
+- `budget` and `regular` are legacy labels on shared hosts, and either host can
+  accept Free or Paid containers;
 - `dedicated` hosts accept one assigned account;
-- host capacity is calculated using one tier shape per host;
-- the daemon rejects a tier that does not match its configured host type;
+- new placements use exact per-container reservations and the host with the
+  greatest post-placement availability;
+- CPU placement targets are fixed at 4x online vCPUs and RAM targets at 1.25x
+  non-reserved memory;
+- a shared daemon accepts either resource tier;
 - `resize` can change Incus CPU, RAM, swap, root disk, and home volume size;
 - operator rehome destroys the old instance before reprovisioning; and
-- there are no Stripe customers, subscriptions, or billing webhooks.
+- Stripe Checkout, subscriptions, and webhooks remain behind the launch gate.
 
 The current rehome path is explicitly destructive. It is not an acceptable
 paid-upgrade mechanism.
@@ -353,12 +356,12 @@ silently destroy or suspend service unless the approved policy says to do so.
 
 ## 7. Mixed-tier shared-host refactor
 
-This refactor is a prerequisite for paid self-service. Billing must not be
-coupled to `budget` versus `regular` host pools.
+This refactor is the implemented foundation for paid self-service. Billing is
+not coupled to `budget` versus `regular` host pools.
 
 ### 7.1 Replace host class with tenancy mode
 
-Target model:
+Current model:
 
 ```ts
 type TenancyMode = "shared" | "dedicated";
@@ -370,14 +373,14 @@ const SERVICE_PLANS = {
 };
 ```
 
-Use an expand-first migration:
+The expand-first migration sequence is:
 
 1. Add `hosts.tenancy_mode` and `containers.placement_mode`.
 2. Backfill `budget` and `regular` as `shared`.
 3. Backfill `dedicated` as `dedicated`.
-4. Dual-read and dual-write during a fleet-compatible release.
-5. Remove old class checks only after every daemon reports support.
-6. Drop or rename legacy columns in a later migration.
+4. Roll out shared-daemon support while retaining legacy compatibility state.
+5. Remove shared class checks and introduce canonical live availability.
+6. Drop or rename legacy columns only in a later contract migration.
 
 ### 7.2 Per-container resource admission
 
@@ -402,19 +405,18 @@ The D1 write remains authoritative against races.
 Replace tier-rounded host ceilings with additive resource budgets. Keep
 `max_tenants` as a separate isolation and operational safety limit.
 
-Placement should prefer the viable host that leaves the least unusable
-resource slack, while avoiding a single-resource hotspot. The exact score must
-be deterministic and tested with mixed free and paid requests.
+Placement prefers the viable host with the greatest normalized
+post-placement availability while avoiding a single-resource hotspot. The
+score is deterministic and tested with mixed Free and Paid requests.
 
 ### 7.3 Daemon and contract changes
 
-The daemon currently rejects a tier that does not match its host type. Change
-that validation so:
+Daemon validation now ensures:
 
 - a shared daemon accepts both `free` and `paid` specs;
 - a dedicated daemon accepts only its assigned account and paid spec;
 - the Worker still validates plan and account binding; and
-- daemon stats report tenancy mode and a rollout-compatible capability.
+- daemon stats report tenancy mode.
 
 The daemon does not receive Stripe IDs or billing state. It receives only the
 container operation and desired resource spec.
@@ -493,11 +495,6 @@ async function requestPaidUpgrade(userId) {
     expectedActualTier: "free",
   });
 
-  if (!claimed) {
-    await markWaitingForCapacity(container.id);
-    return;
-  }
-
   await enqueueIdempotentResize(container.id, "paid");
 }
 ```
@@ -506,7 +503,7 @@ The D1 transaction must:
 
 - confirm the entitlement is still Paid;
 - confirm no lifecycle job or plan transition is active;
-- recheck host health and mixed-tier capacity;
+- recheck host health and shared tenancy;
 - reserve only the CPU, RAM, and disk delta;
 - create one transition keyed by container and desired tier; and
 - set `upgrade_pending` without losing the prior state.
@@ -518,16 +515,11 @@ On retryable failure, keep the delta reserved if the daemon might have applied
 part of the resize. Reconciliation should resend the idempotent desired spec.
 An operator-only repair path handles irreconcilable partial changes.
 
-### 8.4 When the current host cannot fit the upgrade
+### 8.4 When the upgrade exceeds the host target
 
-Leave the container running at the free shape and show:
-
-> Payment confirmed. Your existing workbench remains available while we
-> allocate capacity for the larger plan.
-
-Retry on each reconciliation pass and when capacity changes. Define an upgrade
-support target and alert before it is breached. If the target is missed, support
-must offer the approved credit, refund, or migration remedy.
+Reserve the delta and resize in place. Availability may become negative; this
+is operational pressure, not a failed upgrade. Keep the host active but exclude
+it from new placement until downgrades or destroys restore enough headroom.
 
 Do not use the current destructive rehome flow. Cross-host upgrade requires a
 separate snapshot/copy/verify/cutover design with rollback. Until that exists,
@@ -938,7 +930,7 @@ checks, and no free fallback unless permanent free eligibility was completed.
 
 1. Add tenancy-mode and placement-mode columns.
 2. Refactor capacity accounting for mixed resource requests.
-3. Update daemon validation and stats capability.
+3. Update daemon validation and tenancy-mode stats.
 4. Deploy daemon support fleet-wide.
 5. Dual-read and dual-write from the Worker.
 6. Prove mixed free/paid placement, waitlist fairness, and rollback.

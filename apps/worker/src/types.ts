@@ -123,7 +123,6 @@ export interface HostRow {
   consecutive_failures: number;
   host_type: HostType;
   tenancy_mode: TenancyMode;
-  daemon_capabilities: string | null;
   max_tenants: number;
   dedicated_user_id: string | null;
   management_hostname: string | null;

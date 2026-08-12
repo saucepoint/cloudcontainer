@@ -138,42 +138,11 @@ export const TENANCY_MODES = ["shared", "dedicated"] as const;
 const TenancyModeSchema = z.enum(TENANCY_MODES);
 export type TenancyMode = z.infer<typeof TenancyModeSchema>;
 
-/** Capability emitted by daemons that accept both resource tiers on shared hosts. */
-export const MIXED_TIER_SHARED_CAPABILITY = "mixed-tier-shared-v1";
-const DAEMON_CAPABILITIES = [MIXED_TIER_SHARED_CAPABILITY] as const;
-const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
-
 export const MIN_HOST_RAM_RESERVE_MB = 3072;
 export const HOST_RAM_RESERVE_PERCENT = 8;
-export const MAX_HOST_VCPU_OVERCOMMIT = 4;
-export const HOST_RAM_OVERCOMMIT = 1.25;
+export const HOST_VCPU_OVERCOMMIT = 4;
 export const HOST_RAM_OVERCOMMIT_NUMERATOR = 5;
 export const HOST_RAM_OVERCOMMIT_DENOMINATOR = 4;
-
-export function cpuTenantCeiling(vcpuCapacity: number, tier: Tier): number {
-  return Math.ceil(vcpuCapacity / TIERS[tier].provisionedCpu);
-}
-
-export function ramTenantCeiling(
-  ramTotalMb: number,
-  ramReserveMb: number,
-  tier: Tier,
-): number {
-  return Math.ceil(
-    ((ramTotalMb - ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR) /
-      (HOST_RAM_OVERCOMMIT_DENOMINATOR * TIERS[tier].ramMb),
-  );
-}
-
-export function hostCpuRamTenantCeiling(
-  capacity: { ramTotalMb: number; ramReserveMb: number; vcpuCapacity: number },
-  tier: Tier,
-): number {
-  return Math.min(
-    cpuTenantCeiling(capacity.vcpuCapacity, tier),
-    ramTenantCeiling(capacity.ramTotalMb, capacity.ramReserveMb, tier),
-  );
-}
 
 export function minimumHostRamReserveMb(ramTotalMb: number): number {
   return Math.max(
@@ -188,14 +157,14 @@ export function minimumHostRamReserveMb(ramTotalMb: number): number {
  * than the shared regular pool.
  */
 export const SERVICE_PLANS = {
-  // hostType remains only as a rolling-release fallback for daemons that do
-  // not report mixed-tier support yet. Placement is keyed by tenancyMode.
-  free: { tier: "free", tenancyMode: "shared", hostType: "budget" },
-  paid: { tier: "paid", tenancyMode: "shared", hostType: "regular" },
-  dedicated: { tier: "paid", tenancyMode: "dedicated", hostType: "dedicated" },
+  // placementClass is persisted for backward-compatible container/rehome rows.
+  // It is never an input to shared-host scheduling, which keys on tenancyMode.
+  free: { tier: "free", tenancyMode: "shared", placementClass: "budget" },
+  paid: { tier: "paid", tenancyMode: "shared", placementClass: "regular" },
+  dedicated: { tier: "paid", tenancyMode: "dedicated", placementClass: "dedicated" },
 } as const satisfies Record<
   string,
-  { tier: Tier; tenancyMode: TenancyMode; hostType: HostType }
+  { tier: Tier; tenancyMode: TenancyMode; placementClass: HostType }
 >;
 export type ServicePlan = keyof typeof SERVICE_PLANS;
 
@@ -634,7 +603,8 @@ export const StatsResponseSchema = z
     // Optional while a rolling fleet contains mixed daemon versions.
     hostType: HostTypeSchema.optional(),
     tenancyMode: TenancyModeSchema.optional(),
-    capabilities: z.array(DaemonCapabilitySchema).optional(),
+    /** Accepted from the previous daemon release; current placement ignores it. */
+    capabilities: z.array(z.string().min(1).max(128)).max(32).optional(),
     version: z.string().min(1).max(128).optional(),
     containers: z.array(ContainerStatSchema),
     ramTotalMb: z.number(),
@@ -653,7 +623,8 @@ export const HealthResponseSchema = z
     hostId: z.string(),
     hostType: HostTypeSchema.optional(),
     tenancyMode: TenancyModeSchema.optional(),
-    capabilities: z.array(DaemonCapabilitySchema).optional(),
+    /** Accepted from the previous daemon release; current placement ignores it. */
+    capabilities: z.array(z.string().min(1).max(128)).max(32).optional(),
     version: z.string(),
   })
   .strict();

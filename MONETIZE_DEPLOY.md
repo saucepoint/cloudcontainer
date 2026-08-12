@@ -334,7 +334,7 @@ and daemon trust domain. Cover at least:
 - transient Queue retry and controlled DLQ replay;
 - refund/dispute correlation;
 - automatic-tax address behavior if tax will be enabled; and
-- Free-to-Paid in-place resize, no-capacity retry, and Paid-to-Free downgrade.
+- Free-to-Paid in-place resize beyond placement targets and Paid-to-Free downgrade.
 
 The staging Stripe account/event destination must use API version
 `2026-07-29.dahlia` and sandbox-only objects. Save sanitized evidence and the
@@ -407,9 +407,11 @@ routes must remain operational for any existing billing records.
 
 ## 14. Roll out the compatible daemon fleet
 
-Migration `0019` introduces mixed-tier shared-host state. The migration and
-compatible gated Worker must be deployed before the daemon fleet. Read
-`infra/RUNBOOK.md` before this step.
+Migration `0019` introduced shared-tenancy state. Migration `0024` adds live
+host availability, fixes CPU targets at four times signed online-vCPU count,
+and retires shared placement's legacy class/capability gate. Deploy migrations
+and the compatible gated Worker before applying the host policy fleet-wide.
+Read `infra/RUNBOOK.md` before this step.
 
 Load the fleet administrator secret without passing it on the command line:
 
@@ -441,8 +443,8 @@ npm run hostctl -- audit HOST_ID
 npm run hostctl -- probe HOST_ID
 ```
 
-Require the probe to report the intended release, signed CPU hardware, tenancy
-mode, and `mixed-tier-shared-v1` capability. If registered capacity does not
+Require the probe to report the intended release, signed CPU hardware, and
+tenancy mode. If registered capacity does not
 match canonical capacity, reconcile it deliberately:
 
 ```sh
@@ -456,11 +458,10 @@ audit, probe, capacity, and Paid headroom are correct may it be activated:
 npm run hostctl -- state HOST_ID active
 ```
 
-Confirm at least one full reconciler interval and a real non-destructive job in
-every affected host class. As of 2026-08-12, the active production shared host
-reported legacy/null tenancy capability data; require the fresh probe to show
-the new capability before enabling sales. Do not activate a legacy or
-failed-probe host.
+Confirm at least one full reconciler interval and a real non-destructive job on
+every affected shared host. As of 2026-08-12, require a fresh probe to show
+shared tenancy and exact 4x CPU capacity before enabling sales. Do not activate
+a legacy or failed-probe host.
 
 ## 15. Run the gate-closed billing preflight
 

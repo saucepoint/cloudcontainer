@@ -25,9 +25,8 @@ host registration.
 
 ## Host tenancy and capacity
 
-`budget` and `regular` remain rollout-compatible host labels, but both map to
-shared tenancy and accept either Free or Paid after the daemon reports
-`mixed-tier-shared-v1`. Dedicated remains account-bound.
+`budget` and `regular` remain legacy operational labels, but both map to shared
+tenancy and accept either Free or Paid. Dedicated remains account-bound.
 
 | Tenancy / plan | Advertised CPU | Incus/host reservation | RAM | Swap | Home + root disk | Maximum tenants |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -37,49 +36,49 @@ shared tenancy and accept either Free or Paid after the daemon reports
 
 Bootstrap computes a conservative ceiling from the actual host:
 
-    vcpu_capacity = detected_online_vcpus * VCPU_OVERCOMMIT
+    vcpu_capacity = detected_online_vcpus * 4
     ram_reserve = max(3072 MiB, ceil(8% of total system RAM), HOST_RAM_RESERVE_MB)
     safe_disk = floor(storage_pool_bytes * DISK_CAPACITY_PERCENT / 100)
 
     max_tenants = min(
-      ceil(vcpu_capacity / class_provisioned_vcpu),
-      ceil((total_system_ram - ram_reserve) * 1.25 / class_ram),
-      floor(safe_disk / (class_home_disk + class_root_disk)),
-      floor(host_swap / class_swap) when class_swap is nonzero,
+      floor(vcpu_capacity / smallest_tenant_vcpu),
+      floor((total_system_ram - ram_reserve) * 1.25 / smallest_tenant_ram),
+      floor(safe_disk / smallest_tenant_home_and_root_disk),
+      floor(host_swap / largest_tenant_swap) when swap is nonzero,
       available isolated 65,536-ID maps after one image-build map
     )
 
-The CPU multiplier defaults to its supported maximum of 4; operators may lower
-it to any integer from 1 through 4. The default safe-disk fraction is 70%.
+The CPU oversubscription factor is fixed at 4x. The default safe-disk fraction is 70%.
 The script also caps capacity to the available isolated subordinate ID ranges.
-Dedicated hosts clamp the result to one. The legacy class shape is used only
-to calculate a conservative operational ceiling and profile default. It is not
-the placement shape on shared hosts. A host with no complete slot fails
-bootstrap; never override that failure merely to advertise capacity.
+Dedicated hosts clamp the result to one. A shared host's safety ceiling is
+derived from one class-neutral resource shape; the legacy label affects only a
+compatibility profile default. It is not an admission input. A host with no
+complete slot fails bootstrap; never override that failure merely to advertise
+capacity.
 
 `max_tenants` is an additional hard ceiling. Every placement also rechecks
 tenant count, the requested container's actual 1/2-vCPU reservation, RAM,
-doubled disk quota, health, tenancy mode, mixed-tier capability, and a dedicated
+doubled disk quota, health, tenancy mode, and a dedicated
 account assignment in the same D1 reservation transaction. Capacity belongs to
-the individual host row. The restricted Incus project's aggregate CPU/RAM
-limits match the shared D1 budgets, while each instance retains its tier limits.
+the individual host row. Shared Incus projects deliberately leave aggregate
+CPU/RAM limits unset so an in-place upgrade can cross a placement target; each
+instance retains its exact hard tier limits.
 Every shared host reserves enough physical swap for the worst case in which all
 tenant slots use the largest configured shared-tier allowance. The scheduler
 may admit any safe Free/Paid combination that fits; `max_tenants` is not a
 promise that every resource can be exhausted.
 
-CPU can bind instead: a 4-vCPU/16-GiB budget host configured with
-`--vcpu-overcommit 1` has four CPU slots but eleven RAM slots. The registered
-`max_tenants` is always the minimum, never a promise that every dimension will
-be exhausted equally.
+An in-place tier upgrade is allowed to exceed the CPU or RAM target. Such a
+host remains active and its calculated availability becomes negative, so it
+receives no new tenant until downgrades or destroys restore enough headroom.
 
-Higher RAM reserve, lower CPU overcommit, or lower disk fraction may be set with
-the onboarding options `--ram-reserve-mb`, `--vcpu-overcommit`, and
-`--disk-capacity-percent`. They are persisted as non-secret root-owned host
-policy so later audits and deployments use the same values. The file accepts
-only those three numeric keys and is not evaluated as shell code. Record every
-override in the host inventory. Do not change class or reduce limits on an
-active host.
+Higher RAM reserve, lower disk fraction, or a static tenant partition may be
+set with `--ram-reserve-mb`, `--disk-capacity-percent`, or `--tenant-limit`.
+They are persisted as non-secret root-owned host policy so later audits and
+deployments use the same values. The file accepts only those numeric keys plus
+the ignored legacy CPU-overcommit key, and is not evaluated as shell code.
+Record every override in the host inventory. Do not change class or reduce
+limits on an active host.
 
 Legacy host class or tenancy may change only through `hostctl reclass` while
 the host is drained, empty, and has no active job. The command updates both
@@ -103,7 +102,7 @@ leaves the host draining.
 | State | Meaning |
 |---|---|
 | `draining` | No new placement or daemon jobs; existing tenants remain and already-started jobs can finish; probes and releases are allowed. |
-| `active` | Eligible for tenancy-compatible placement after a recent signed probe reporting class, tenancy mode, capability, daemon release, and hardware telemetry. |
+| `active` | Eligible for tenancy-compatible placement after a recent signed probe reporting class, tenancy mode, daemon release, and hardware telemetry. |
 | `unhealthy` | Automatically quarantined after repeated daemon failures; a valid reconciler probe recovers it. |
 | `dead` | Retired generation; cannot reactivate, but its empty ID may be replaced as a new generation or deregistered. |
 
@@ -180,12 +179,15 @@ re-home targets, then repairs `vcpu_allocated` from the historical 2/3-vCPU tier
 reservations while leaving each container's advertised 1/2-vCPU value intact.
 It is expand-only; Worker rollback does not remove these fields.
 
-Migration `0019_monetization_foundation.sql` adds tenancy/capability fields,
+Migration `0019_monetization_foundation.sql` adds tenancy and rollout fields,
 backfills `budget` and `regular` to shared and `dedicated` to dedicated, and
 adds entitlement, Stripe event, and in-place transition state. Existing
 paid/dedicated users become explicit manual entitlements. Apply the migration
-and compatible Worker first. Shared placement continues to use legacy exact
-class until each daemon reports `mixed-tier-shared-v1`.
+and compatible Worker first. Migration `0024_host_availability.sql` adds the
+canonical availability projection and removes class/capability gating from
+current shared placement without rewriting existing reservations. Its legacy
+D1 capability column remains for expand-first compatibility but is not a
+current placement input; host identity resets clear stale evidence.
 
 Confirm the API and inventory without exposing the secret on a command line:
 
@@ -218,7 +220,7 @@ canonical host calculation, run `hostctl capacity HOST_ID` before activation.
 
 For the mixed-tier release, keep `BILLING_ENABLED` absent or `0`, deploy every
 shared daemon, and require a successful administrator probe showing
-`tenancyMode=shared` and `mixed-tier-shared-v1`. The policy deployment must
+`tenancyMode=shared`. The policy deployment must
 preserve each existing container's `user.workbench.tier`; Free may have 5 or
 grandfathered 8 GiB disks, while Paid must retain 8 GiB. Record a mixed
 Free/Paid staging placement and in-place resize before enabling new sales.
@@ -262,7 +264,7 @@ the full physical host ceiling in both databases would permit overcommit even
 though each scheduler is internally correct. `HOST_TENANT_LIMIT` therefore
 caps each environment's Incus project and D1 host row. The sum of production
 and staging caps must not exceed the resource-derived ceiling for the shared
-host class.
+host allocation.
 
 Before adding one staging slot to a production host whose current safe ceiling
 is `N`:
@@ -354,8 +356,8 @@ From a clean repository root:
       --activate
 
 Both `--type budget` and `--type regular` create shared-tenancy daemons; the
-label selects a conservative legacy capacity/profile default during rollout,
-not which plans the host can admit. A dedicated account must already have the
+label selects only a compatibility profile default, not capacity or which plans
+the host can admit. A dedicated account must already have the
 `dedicated` operator entitlement; then onboard with both:
 
     npm run hostctl -- onboard \
@@ -389,8 +391,8 @@ checks.
 A failure after registration leaves the host draining. Inspect and fix the
 cause, then use `hostctl probe` and `hostctl state`; do not bypass the checks.
 Legacy reduced stats remain readable by the rolling reconciler, but an
-administrator probe rejects a daemon that omits class, tenancy mode,
-capabilities, or release identity and cannot use it to activate a host.
+administrator probe rejects a daemon that omits class, tenancy mode, or release
+identity and cannot use it to activate a host.
 Bootstrap metadata is retained at `/etc/workbench/registration.json` for
 inspection, but the normal controller submits it.
 
@@ -497,9 +499,9 @@ endpoint only after the certificate is trusted and installed.
 Never enable sales merely because Stripe secrets exist. The launch gate is
 open only when all of the following are complete:
 
-1. migrations through `0023` and the compatible Worker are deployed;
-2. every active shared daemon reports `tenancyMode=shared` and
-   `mixed-tier-shared-v1`, and a mixed placement/resize staging run passed;
+1. migrations through `0024` and the compatible Worker are deployed;
+2. every active shared daemon reports `tenancyMode=shared`, and a mixed
+   placement/resize staging run passed;
 3. the monthly Paid Price, currency, tax policy, supported payment methods,
    Customer Portal cancellation-at-period-end behavior, Portal login link, and
    Checkout redirect for Customers with an active subscription are approved;
@@ -512,7 +514,7 @@ open only when all of the following are complete:
 6. Stripe sandbox acceptance covers paid bypass, redirect non-grant, renewal,
    seven-day trial activation, zero-value opening invoice, trial cancellation,
    failed first charge, failed renewal, scheduled paid cancellation/undo,
-   expiry, resubscription, and running/stopped/no-capacity resize; and
+   expiry, resubscription, and running/stopped/over-target resize; and
 7. the on-call operator has reviewed Queue retry/DLQ visibility and capacity
    headroom.
 

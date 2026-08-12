@@ -96,24 +96,29 @@ describe("in-place plan transitions", () => {
     });
   });
 
-  it("preserves the usable free container while an upgrade waits for capacity", async () => {
+  it("allows an upgrade to exceed the host target and makes availability negative", async () => {
     const { env } = makeEnv();
     await seedUser(env, "user-1", "paid");
     await seedHost(env, {
-      vcpu_capacity: 1,
-      vcpu_allocated: 1,
-      ram_allocated_mb: 1536,
+      vcpu_capacity: 4,
+      vcpu_allocated: 4,
+      reported_cpu_logical: 1,
+      ram_total_mb: 5120,
+      ram_reserve_mb: 3072,
+      ram_allocated_mb: 2560,
       disk_allocated_gb: 10,
     });
     await seedContainer(env);
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
 
     await expect(requestPaidUpgrade(env, "user-1", 20_000)).resolves
-      .toBe("waiting_capacity");
+      .toBe("resizing");
     expect(await transition(env)).toMatchObject({
-      state: "waiting_capacity",
-      reserved_cpu: 0,
-      reserved_ram_mb: 0,
-      reserved_disk_gb: 0,
+      state: "resizing",
+      reserved_cpu: 1,
+      reserved_ram_mb: 2560,
+      reserved_disk_gb: 6,
       prior_status: "running",
     });
     expect(await getContainerForUser(env, "user-1")).toMatchObject({
@@ -124,12 +129,49 @@ describe("in-place plan transitions", () => {
       disk_gb: 5,
       host_id: "host-1",
     });
-    expect((await env.DB.prepare("SELECT * FROM jobs").all()).results).toEqual([]);
-
+    expect(await env.DB.prepare(
+      `SELECT vcpu_available, ram_available_mb, disk_available_gb
+       FROM host_availability WHERE id = 'host-1'`,
+    ).first()).toEqual({
+      vcpu_available: -1,
+      ram_available_mb: -2560,
+      disk_available_gb: 984,
+    });
+    expect(daemon.submitted).toMatchObject([{ op: "resize" }]);
     await expect(cancelUnreservedPlanTransition(env, "container-1", 20_001))
+      .resolves.toBe(false);
+  });
+
+  it("waits when the upgrade cannot reserve its physical disk growth", async () => {
+    const { env } = makeEnv();
+    await seedUser(env, "user-1", "paid");
+    await seedHost(env, {
+      vcpu_capacity: 4,
+      vcpu_allocated: 4,
+      reported_cpu_logical: 1,
+      ram_allocated_mb: 1536,
+      disk_total_gb: 15,
+      disk_allocated_gb: 10,
+    });
+    await seedContainer(env);
+
+    await expect(requestPaidUpgrade(env, "user-1", 25_000)).resolves
+      .toBe("waiting_capacity");
+    expect(await transition(env)).toMatchObject({
+      state: "waiting_capacity",
+      reserved_cpu: 0,
+      reserved_ram_mb: 0,
+      reserved_disk_gb: 0,
+    });
+    expect(await env.DB.prepare(
+      "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts",
+    ).first()).toEqual({
+      vcpu_allocated: 4,
+      ram_allocated_mb: 1536,
+      disk_allocated_gb: 10,
+    });
+    await expect(cancelUnreservedPlanTransition(env, "container-1", 25_001))
       .resolves.toBe(true);
-    expect(await transition(env)).toMatchObject({ state: "cancelled" });
-    expect(await getContainerForUser(env, "user-1")).toMatchObject({ status: "running" });
   });
 
   it("retries a failed resize without reserving the positive delta twice", async () => {

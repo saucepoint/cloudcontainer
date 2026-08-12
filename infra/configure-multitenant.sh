@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the Incus storage, project, aggregate-capacity, and network-isolation
+# Apply the Incus storage, project, tenant-limit, and network-isolation
 # policy used by tenant hosts. Safe to run on an empty existing host during a
 # drained migration; feature changes intentionally fail if incompatible
 # instances already exist.
@@ -142,8 +142,8 @@ if ! incus project show "$PROJECT_NAME" >/dev/null 2>&1; then
 fi
 
 # Refuse unknown, tenancy-incompatible, or over-capacity contents before
-# changing aggregate or per-instance limits. Shared hosts intentionally accept
-# both resource tiers after the mixed-tier daemon rollout.
+# changing aggregate or per-instance limits. Shared hosts accept both resource
+# tiers regardless of their legacy host-class label.
 EXISTING_TENANTS=0
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
@@ -196,8 +196,16 @@ incus project set "$PROJECT_NAME" restricted.snapshots=block
 incus project set "$PROJECT_NAME" restricted.networks.access="$NETWORK_NAME"
 incus project set "$PROJECT_NAME" restricted.storage-pools.access="$POOL_NAME"
 incus project set "$PROJECT_NAME" limits.containers="$TENANT_SLOTS"
-incus project set "$PROJECT_NAME" limits.cpu="$CPU_LIMIT"
-incus project set "$PROJECT_NAME" limits.memory="${RAM_LIMIT_MB}MiB"
+if [[ "$TENANCY_MODE" == "shared" ]]; then
+  # CPU/RAM are placement targets, not hard project ceilings. Keeping these
+  # aggregate Incus limits would reject an in-place tier upgrade once the sum
+  # of instance limits crosses the target. Per-instance limits remain hard.
+  incus project unset "$PROJECT_NAME" limits.cpu
+  incus project unset "$PROJECT_NAME" limits.memory
+else
+  incus project set "$PROJECT_NAME" limits.cpu="$CPU_LIMIT"
+  incus project set "$PROJECT_NAME" limits.memory="${RAM_LIMIT_MB}MiB"
+fi
 incus project set "$PROJECT_NAME" limits.processes="$(( TENANT_SLOTS * TENANT_PROCESS_LIMIT ))"
 incus project set "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}=${DISK_GB}GiB"
 
@@ -290,4 +298,4 @@ EOF
 [[ ! -e /proc/sched_debug ]] || chmod 0400 /proc/sched_debug
 [[ ! -e /sys/kernel/slab ]] || chmod 0700 /sys/kernel/slab
 
-echo "Incus tenant policy: type=$HOST_TYPE tenancy=$TENANCY_MODE project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu=$CPU_LIMIT ram=${RAM_LIMIT_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"
+echo "Incus tenant policy: type=$HOST_TYPE tenancy=$TENANCY_MODE project=$PROJECT_NAME slots=$TENANT_SLOTS vcpu_target=$CPU_LIMIT ram_target=${RAM_LIMIT_MB}MiB reserve=${RAM_RESERVE}MiB swap=${SWAP_TOTAL_MB}MiB disk=${DISK_GB}GiB idmap=$IDMAP_REQUIRED policy=$WORKBENCH_POLICY_VERSION"

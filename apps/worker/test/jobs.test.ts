@@ -641,7 +641,7 @@ describe("refreshJob", () => {
 describe("pickHost (scheduler §10)", () => {
   const request = (overrides: Partial<Parameters<typeof pickHost>[1]> = {}) => ({
     userId: "user-1",
-    hostType: "budget" as const,
+    tenancyMode: "shared" as const,
     cpu: 2,
     ramMb: 1536,
     diskGb: 8,
@@ -658,8 +658,8 @@ describe("pickHost (scheduler §10)", () => {
 
   it("allows the rounded 1.25x RAM reservation ceiling", async () => {
     const { env } = makeEnv();
-    // 5120 total, 3072 reserved -> 2048 allocatable RAM and a rounded
-    // 1.25x ceiling of two 1536 MiB tenant reservations.
+    // 5120 total, 3072 reserved -> 2048 allocatable RAM and a 2560 MiB
+    // placement target after applying the fixed 1.25x multiplier.
     await seedHost(env, { ram_total_mb: 5120, ram_reserve_mb: 3072, ram_allocated_mb: 1024 });
     expect(await pickHost(env, request())).not.toBeNull();
     await env.DB.prepare("UPDATE hosts SET ram_allocated_mb = 3072 WHERE id = 'host-1'").run();
@@ -681,8 +681,27 @@ describe("pickHost (scheduler §10)", () => {
 
   it("rejects a host whose vCPU reservation ceiling is full", async () => {
     const { env } = makeEnv();
-    await seedHost(env, { vcpu_capacity: 3, vcpu_allocated: 3 });
+    await seedHost(env, {
+      vcpu_capacity: 4,
+      vcpu_allocated: 4,
+      reported_cpu_logical: 1,
+    });
     expect(await pickHost(env, request())).toBeNull();
+  });
+
+  it("skips an over-target host until released reservations restore availability", async () => {
+    const { env } = makeEnv();
+    await seedHost(env, { id: "over-target", vcpu_allocated: 65 });
+    await seedHost(env, { id: "available" });
+
+    expect((await pickHost(env, request()))?.id).toBe("available");
+    await env.DB.prepare("DELETE FROM hosts WHERE id = 'available'").run();
+    expect(await pickHost(env, request())).toBeNull();
+
+    await env.DB.prepare(
+      "UPDATE hosts SET vcpu_allocated = 62 WHERE id = 'over-target'",
+    ).run();
+    expect((await pickHost(env, request()))?.id).toBe("over-target");
   });
 
   it("rejects stale or currently failing daemon heartbeats", async () => {
@@ -707,13 +726,19 @@ describe("pickHost (scheduler §10)", () => {
     expect(await pickHost(missingHardware.env, request())).toBeNull();
   });
 
-  it("admits free and paid requests to the same mixed shared pool", async () => {
+  it("ignores the legacy class for shared-host placement", async () => {
     const { env } = makeEnv();
-    await seedHost(env, { id: "budget", host_type: "budget" });
-    await seedHost(env, { id: "regular", host_type: "regular" });
+    await seedHost(env, {
+      id: "budget",
+      host_type: "budget",
+    });
+    await seedHost(env, {
+      id: "regular",
+      host_type: "regular",
+    });
 
-    expect((await pickHost(env, request({ hostType: "budget" })))?.id).toBe("budget");
-    expect((await pickHost(env, request({ hostType: "regular", cpu: 2 })))?.id).toBe("budget");
+    expect((await pickHost(env, request()))?.id).toBe("budget");
+    expect((await pickHost(env, request({ cpu: 2 })))?.id).toBe("budget");
   });
 
   it("scores heterogeneous capacity independently even within the same host class", async () => {
@@ -742,19 +767,20 @@ describe("pickHost (scheduler §10)", () => {
     expect((await pickHost(env, request()))?.id).toBe("budget-4cpu-8gb");
   });
 
-  it("applies the paid 2-vCPU reservation to an independently sized regular host", async () => {
+  it("applies the paid 2-vCPU reservation to an independently sized shared host", async () => {
     const { env } = makeEnv();
     await seedHost(env, {
       host_type: "regular",
-      vcpu_capacity: 6,
+      vcpu_capacity: 8,
+      reported_cpu_logical: 2,
       ram_total_mb: 16384,
       ram_reserve_mb: 3072,
       max_tenants: 2,
-      vcpu_allocated: 4,
+      vcpu_allocated: 6,
     });
-    expect((await pickHost(env, request({ hostType: "regular", cpu: 2 })))?.id).toBe("host-1");
-    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 6 WHERE id = 'host-1'").run();
-    expect(await pickHost(env, request({ hostType: "regular", cpu: 2 }))).toBeNull();
+    expect((await pickHost(env, request({ cpu: 2 })))?.id).toBe("host-1");
+    await env.DB.prepare("UPDATE hosts SET vcpu_allocated = 8 WHERE id = 'host-1'").run();
+    expect(await pickHost(env, request({ cpu: 2 }))).toBeNull();
   });
 
   it("enforces tenant ceilings and dedicated account assignment", async () => {
@@ -766,12 +792,17 @@ describe("pickHost (scheduler §10)", () => {
       dedicated_user_id: "user-1",
     });
 
-    expect((await pickHost(env, request({ hostType: "dedicated", cpu: 2 })))?.id).toBe("host-1");
-    expect(await pickHost(env, request({ userId: "another", hostType: "dedicated", cpu: 2 })))
+    expect((await pickHost(env, request({ tenancyMode: "dedicated", cpu: 2 })))?.id)
+      .toBe("host-1");
+    expect(await pickHost(env, request({
+      userId: "another",
+      tenancyMode: "dedicated",
+      cpu: 2,
+    })))
       .toBeNull();
 
     await seedContainer(env, { placement_class: "dedicated" });
-    expect(await pickHost(env, request({ hostType: "dedicated", cpu: 2 }))).toBeNull();
+    expect(await pickHost(env, request({ tenancyMode: "dedicated", cpu: 2 }))).toBeNull();
   });
 });
 

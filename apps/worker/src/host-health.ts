@@ -31,7 +31,6 @@ export async function recordHostStats(
      SET last_seen_at = ?,
          consecutive_failures = 0,
          daemon_version = ?,
-         daemon_capabilities = ?,
          reported_ram_total_mb = ?,
          reported_cpu_logical = ?,
          status = CASE WHEN status = 'unhealthy' THEN 'active' ELSE status END
@@ -40,7 +39,6 @@ export async function recordHostStats(
     .bind(
       observedAt,
       verifiedVersion,
-      stats.capabilities ? JSON.stringify(stats.capabilities) : null,
       stats.ramTotalMb,
       stats.cpuLogical ?? null,
       hostId,

@@ -863,7 +863,7 @@ async function enforceEndedPaidAccess(
              status_detail = 'waiting for Free capacity'
          WHERE id = ? AND status = 'waitlisted' AND host_id IS NULL AND tier = 'paid'`,
       ).bind(
-        placement.hostType,
+        placement.placementClass,
         placement.tenancyMode,
         free.cpu,
         free.ramMb,

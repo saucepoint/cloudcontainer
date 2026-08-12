@@ -524,7 +524,7 @@ material. Apply the Worker migration before publishing a client that uses it.
 `0019_monetization_foundation.sql` is expand-first: it backfills shared versus
 dedicated tenancy, preserves existing paid/dedicated accounts as explicit
 manual entitlements, and adds trial/billing/event/transition state. Deploy the mixed
-daemon capability fleet-wide before setting `BILLING_ENABLED=1`.
+shared-daemon release fleet-wide before setting `BILLING_ENABLED=1`.
 `0020_workbench_configurations.sql` separates durable, completed workbench
 configuration from expiring wizard drafts and backfills existing containers.
 `0021_paid_tier_cpu.sql` aligns existing Paid host accounting with its 2-vCPU
@@ -533,8 +533,10 @@ reservation.
 already consumed the account-level trial so cancellation and resubscription
 cannot create another free-service period.
 `0023_paid_upgrade_opt_in.sql` retires legacy, unreserved Free-to-Paid resize
-intents before the compatible Worker makes existing-instance upgrades an
-explicit dashboard action.
+intents so Premium owners explicitly choose when to resize an existing machine.
+`0024_host_availability.sql` adds the canonical availability projection. The
+legacy capability column remains in D1 for expand-first compatibility but no
+longer participates in current placement; identity resets clear stale evidence.
 
 The CLI package can be built and inspected without publishing:
 
@@ -584,9 +586,8 @@ also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md).
 `hostctl` is the supported registration and mutation path; do not construct a
 hosts row with ad hoc SQL.
 
-Tenancy mode is enforced end to end. `budget` and `regular` remain as legacy
-rollout labels, but both are shared hosts after they report
-`mixed-tier-shared-v1`:
+Tenancy mode is enforced end to end. `budget` and `regular` remain legacy
+operational labels, but neither constrains shared placement:
 
 | Tenancy | Eligible account | Advertised / enforced shape | Tenant ceiling |
 |---|---|---|---|
@@ -594,13 +595,15 @@ rollout labels, but both are shared hosts after they report
 | dedicated | one assigned paid account | Paid shape | exactly one |
 
 Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
-remainder is tenant RAM. Its CPU reservation budget defaults to four times the
-detected online vCPU count, and an operator may select a lower multiplier from
-1 through 4. Every admission adds that container's actual 1-vCPU Free or
+remainder is tenant RAM. Its CPU reservation target is four times the detected
+online vCPU count. Every admission adds that container's actual 1-vCPU Free or
 2-vCPU Paid reservation, hard RAM, and doubled home/root disk reservation.
 RAM permits 1.25x oversubscription. `max_tenants` remains a separate isolation
-and operational safety ceiling. Selection and the authoritative D1 write
-recheck the same resource, health, tenancy, tenant, and port predicates.
+and operational safety ceiling. Selection and the authoritative D1 write use
+the same live availability projection and recheck resource, health, tenancy,
+tenant, and port predicates. In-place upgrades may take availability below
+zero; the host remains active but receives no new tenant until later downgrades
+or destroys restore enough headroom.
 After a deliberate hardware or host-policy change,
 `npm run hostctl -- capacity HOST_ID` drains, recalculates, safely re-registers,
 audits, and probes the new ceiling before restoring prior active state.

@@ -18,7 +18,6 @@ import {
   GithubReposSchema,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
-  HOST_RAM_OVERCOMMIT,
   HOST_RAM_OVERCOMMIT_DENOMINATOR,
   HOST_RAM_OVERCOMMIT_NUMERATOR,
   HOST_RAM_RESERVE_PERCENT,
@@ -26,14 +25,11 @@ import {
   TENANCY_MODES,
   LLM_PROVIDERS,
   LlmKeysSchema,
-  MAX_HOST_VCPU_OVERCOMMIT,
+  HOST_VCPU_OVERCOMMIT,
   MIN_HOST_RAM_RESERVE_MB,
   TIERS,
   SERVICE_PLANS,
-  cpuTenantCeiling,
-  hostCpuRamTenantCeiling,
   minimumHostRamReserveMb,
-  ramTenantCeiling,
 } from "../src/types.js";
 
 const spec = {
@@ -66,9 +62,9 @@ describe("tier capacities", () => {
     expect(HOST_TYPES).toEqual(["budget", "regular", "dedicated"]);
     expect(TENANCY_MODES).toEqual(["shared", "dedicated"]);
     expect(SERVICE_PLANS).toEqual({
-      free: { tier: "free", tenancyMode: "shared", hostType: "budget" },
-      paid: { tier: "paid", tenancyMode: "shared", hostType: "regular" },
-      dedicated: { tier: "paid", tenancyMode: "dedicated", hostType: "dedicated" },
+      free: { tier: "free", tenancyMode: "shared", placementClass: "budget" },
+      paid: { tier: "paid", tenancyMode: "shared", placementClass: "regular" },
+      dedicated: { tier: "paid", tenancyMode: "dedicated", placementClass: "dedicated" },
     });
   });
 
@@ -79,20 +75,9 @@ describe("tier capacities", () => {
     expect(minimumHostRamReserveMb(38400)).toBe(3072);
     expect(minimumHostRamReserveMb(38401)).toBe(3073);
     expect(minimumHostRamReserveMb(65536)).toBe(5243);
-    expect(MAX_HOST_VCPU_OVERCOMMIT).toBe(4);
-    expect(HOST_RAM_OVERCOMMIT).toBe(1.25);
+    expect(HOST_VCPU_OVERCOMMIT).toBe(4);
     expect(HOST_RAM_OVERCOMMIT_NUMERATOR).toBe(5);
     expect(HOST_RAM_OVERCOMMIT_DENOMINATOR).toBe(4);
-  });
-
-  it("rounds up CPU and 1.25x RAM tenant ceilings", () => {
-    expect(cpuTenantCeiling(16, "paid")).toBe(8);
-    expect(ramTenantCeiling(8192, 3072, "free")).toBe(5);
-    expect(hostCpuRamTenantCeiling({
-      ramTotalMb: 8192,
-      ramReserveMb: 3072,
-      vcpuCapacity: 16,
-    }, "free")).toBe(5);
   });
 });
 

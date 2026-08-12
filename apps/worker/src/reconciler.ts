@@ -5,8 +5,6 @@
  */
 import {
   decryptJsonAtRest,
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
 } from "@workbench/contract";
 import { daemonStats } from "./daemon.js";
 import {
@@ -285,7 +283,6 @@ async function admitWaitlistedContainers(env: Bindings, now: () => number): Prom
         {
           userId: container.user_id,
           tenancyMode: container.placement_mode,
-          hostType: container.placement_class,
           cpu: cpuReservation(container.tier),
           ramMb: container.ram_mb,
           diskGb: diskReservationGb(container.disk_gb),
@@ -377,24 +374,15 @@ async function placeWaitlistedContainer(
            WHERE occupied.host_id = ? AND occupied.ssh_port = ?
          )
          AND EXISTS (
-           SELECT 1 FROM hosts h
+           SELECT 1 FROM host_availability h
            WHERE h.id = ? AND h.status = 'active'
              AND h.tenancy_mode = containers.placement_mode
              AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = containers.user_id)
-             AND (
-               h.tenancy_mode = 'dedicated'
-               OR h.daemon_capabilities LIKE '%"mixed-tier-shared-v1"%'
-               OR h.host_type = containers.placement_class
-             )
-             AND h.max_tenants > (
-               SELECT COUNT(*) FROM containers assigned WHERE assigned.host_id = h.id
-             )
-             AND h.vcpu_allocated + CASE containers.tier
-               WHEN 'free' THEN 1 WHEN 'paid' THEN 2 ELSE 2147483647 END <= h.vcpu_capacity
-             AND (h.ram_allocated_mb + containers.ram_mb) *
-                 ${HOST_RAM_OVERCOMMIT_DENOMINATOR} <=
-                 (h.ram_total_mb - h.ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
-             AND h.disk_total_gb - h.disk_allocated_gb >= containers.disk_gb * 2
+             AND h.tenant_slots_available > 0
+             AND h.vcpu_available >= CASE containers.tier
+               WHEN 'free' THEN 1 WHEN 'paid' THEN 2 ELSE 2147483647 END
+             AND h.ram_available_mb >= containers.ram_mb
+             AND h.disk_available_gb >= containers.disk_gb * 2
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
              AND h.daemon_version IS NOT NULL

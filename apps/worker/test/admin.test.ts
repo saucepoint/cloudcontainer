@@ -122,7 +122,6 @@ describe("fleet administration", () => {
           hostId: "host-1",
           hostType: "regular",
           tenancyMode: "shared",
-          capabilities: ["mixed-tier-shared-v1"],
           version: "abc123",
           containers: [],
           ramTotalMb: 65536,
@@ -178,31 +177,33 @@ describe("fleet administration", () => {
     ).first()).toEqual({ status: "draining", consecutive_failures: 1, last_seen_at: null });
   });
 
-  it("rejects capacity above four reservations per signed online vCPU", async () => {
-    const { env } = fleetEnv();
-    await seedHost(env, {
-      status: "draining",
-      last_seen_at: null,
-      vcpu_capacity: 17,
-    });
-    stubFetch(() => Response.json({
-      hostId: "host-1",
-      hostType: "budget",
-      version: "undersized",
-      containers: [],
-      ramTotalMb: 65536,
-      cpuLogical: 4,
-      uptimeSec: 10,
-    }));
+  it("requires exactly four reservations per signed online vCPU", async () => {
+    for (const vcpuCapacity of [15, 17]) {
+      const { env } = fleetEnv();
+      await seedHost(env, {
+        status: "draining",
+        last_seen_at: null,
+        vcpu_capacity: vcpuCapacity,
+      });
+      stubFetch(() => Response.json({
+        hostId: "host-1",
+        hostType: "budget",
+        version: "wrong-capacity",
+        containers: [],
+        ramTotalMb: 65536,
+        cpuLogical: 4,
+        uptimeSec: 10,
+      }));
 
-    expect((await app().request(
-      "/api/admin/hosts/host-1/probe",
-      adminRequest("POST"),
-      env,
-    )).status).toBe(502);
-    expect(await env.DB.prepare(
-      "SELECT last_seen_at, consecutive_failures FROM hosts WHERE id = 'host-1'",
-    ).first()).toEqual({ last_seen_at: null, consecutive_failures: 1 });
+      expect((await app().request(
+        "/api/admin/hosts/host-1/probe",
+        adminRequest("POST"),
+        env,
+      )).status).toBe(502);
+      expect(await env.DB.prepare(
+        "SELECT last_seen_at, consecutive_failures FROM hosts WHERE id = 'host-1'",
+      ).first()).toEqual({ last_seen_at: null, consecutive_failures: 1 });
+    }
   });
 
   it("requires current daemons to report CPU hardware before activation", async () => {
@@ -235,18 +236,22 @@ describe("fleet administration", () => {
     )).status).toBe(409);
   });
 
-  it("does not activate a host whose registered capacity is below existing reservations", async () => {
+  it("activates a healthy host that is already beyond its allocation target", async () => {
     const { env } = fleetEnv();
     await seedHost(env, {
       status: "draining",
       vcpu_capacity: 1,
       vcpu_allocated: 2,
     });
-    expect((await app().request(
+    const response = await app().request(
       "/api/admin/hosts/host-1",
       adminRequest("PATCH", { status: "active" }),
       env,
-    )).status).toBe(409);
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      host: { status: "active", vcpuAvailable: -1 },
+    });
   });
 
   it("keeps rolling reconciliation compatible but rejects legacy stats for fleet activation", async () => {
@@ -381,7 +386,7 @@ describe("fleet administration", () => {
     )).status).toBe(409);
   });
 
-  it("re-registers calculated capacity only while drained and within resource ceilings", async () => {
+  it("re-registers targets while drained even when current allocations exceed them", async () => {
     const { env } = fleetEnv();
     await seedHost(env, { status: "active" });
     const capacity = {
@@ -410,11 +415,19 @@ describe("fleet administration", () => {
     await env.DB.prepare(
       "UPDATE hosts SET vcpu_allocated = 12, ram_allocated_mb = 20000, disk_allocated_gb = 400 WHERE id = 'host-1'",
     ).run();
-    expect((await app().request(
+    const exceeded = await app().request(
       "/api/admin/hosts/host-1",
       adminRequest("PATCH", { capacity: { ...capacity, vcpuCapacity: 8 } }),
       env,
-    )).status).toBe(409);
+    );
+    expect(exceeded.status).toBe(200);
+    expect(await exceeded.json()).toMatchObject({
+      host: {
+        vcpuAvailable: -4,
+        ramAvailableMb: 15840,
+        diskAvailableGb: 100,
+      },
+    });
 
     const updated = await app().request(
       "/api/admin/hosts/host-1",

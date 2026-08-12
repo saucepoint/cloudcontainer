@@ -206,10 +206,17 @@ check_eq "tenant project has isolated profiles" "true" \
   incus project get "$PROJECT_NAME" features.profiles
 check_eq "tenant project has isolated custom volumes" "true" \
   incus project get "$PROJECT_NAME" features.storage.volumes
-check_eq "tenant project CPU ceiling" "$CPU_LIMIT" \
-  incus project get "$PROJECT_NAME" limits.cpu
-check_eq "tenant project memory ceiling" "${RAM_LIMIT_MB}MiB" \
-  incus project get "$PROJECT_NAME" limits.memory
+if [[ "$TENANCY_MODE" == "shared" ]]; then
+  check_eq "shared tenant project has no hard CPU ceiling" "" \
+    incus project get "$PROJECT_NAME" limits.cpu
+  check_eq "shared tenant project has no hard memory ceiling" "" \
+    incus project get "$PROJECT_NAME" limits.memory
+else
+  check_eq "dedicated tenant project CPU ceiling" "$CPU_LIMIT" \
+    incus project get "$PROJECT_NAME" limits.cpu
+  check_eq "dedicated tenant project memory ceiling" "${RAM_LIMIT_MB}MiB" \
+    incus project get "$PROJECT_NAME" limits.memory
+fi
 check_eq "tenant project process ceiling" "$(( TENANT_SLOTS * TENANT_PROCESS_LIMIT ))" \
   incus project get "$PROJECT_NAME" limits.processes
 check_eq "tenant project container ceiling" "$TENANT_SLOTS" \

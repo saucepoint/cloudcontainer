@@ -37,8 +37,6 @@ CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-$DEFAULT_CONTROL_PLANE_URL}"
 REMOTE_DAEMON_CONFIG="$REMOTE_CONFIG_DIR/daemon.json"
 REMOTE_POLICY_ENV="$REMOTE_CONFIG_DIR/host-policy.env"
 AUTH_CONFIG=""
-DEFAULT_VCPU_OVERCOMMIT=4
-MAX_VCPU_OVERCOMMIT=4
 
 usage() {
   cat <<'EOF'
@@ -115,7 +113,6 @@ Onboard options:
   --zfs-loop-gb N         Development-only loop-backed ZFS size
   --pool NAME             Incus storage pool (default: default)
   --ram-reserve-mb N      Higher reserve override (floor: max(3072 MiB, ceil(8%)))
-  --vcpu-overcommit N     Reservations per online host vCPU (default/max: 4)
   --disk-capacity-percent N
                           Safe storage fraction (default: 70; max: 90)
   --tenant-limit N        Static project slot cap (staging default: 1). Required
@@ -316,7 +313,7 @@ list_hosts() {
       .status,
       ((.tenantCount | tostring) + "/" + (.maxTenants | tostring)),
       ((.vcpuAllocated | tostring) + "/" + (.vcpuCapacity | tostring)),
-      ((.ramAllocatedMb | tostring) + "/" + ((.ramTotalMb - .ramReserveMb) | tostring)),
+      ((.ramAllocatedMb | tostring) + "/" + (.ramCapacityMb | tostring)),
       ((.diskAllocatedGb | tostring) + "/" + (.diskTotalGb | tostring)),
       (.daemonVersion // "unknown"),
       (.activeJobCount | tostring)
@@ -1020,7 +1017,6 @@ onboard_host() {
   local zfs_loop_gb=0
   local pool_name=default
   local ram_reserve_mb=0
-  local vcpu_overcommit=$DEFAULT_VCPU_OVERCOMMIT
   local disk_capacity_percent=70
   local tenant_limit=$DEFAULT_TENANT_LIMIT
   local daemon_port=$DEFAULT_DAEMON_PORT
@@ -1045,7 +1041,6 @@ onboard_host() {
       --zfs-loop-gb) zfs_loop_gb=${2:-}; shift ;;
       --pool) pool_name=${2:-}; shift ;;
       --ram-reserve-mb) ram_reserve_mb=${2:-}; shift ;;
-      --vcpu-overcommit) vcpu_overcommit=${2:-}; shift ;;
       --disk-capacity-percent) disk_capacity_percent=${2:-}; shift ;;
       --tenant-limit) tenant_limit=${2:-}; shift ;;
       --daemon-port) daemon_port=${2:-}; shift ;;
@@ -1077,9 +1072,6 @@ onboard_host() {
   [[ "$zfs_loop_gb" =~ ^[0-9]+$ ]] || die "Invalid --zfs-loop-gb"
   [[ "$pool_name" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid pool name"
   [[ "$ram_reserve_mb" =~ ^[0-9]+$ ]] || die "Invalid --ram-reserve-mb"
-  [[ "$vcpu_overcommit" =~ ^[0-9]+$ ]] && \
-    (( vcpu_overcommit >= 1 && vcpu_overcommit <= MAX_VCPU_OVERCOMMIT )) || \
-    die "Invalid --vcpu-overcommit (expected 1-$MAX_VCPU_OVERCOMMIT)"
   [[ "$disk_capacity_percent" =~ ^[0-9]+$ ]] && \
     (( disk_capacity_percent >= 1 && disk_capacity_percent <= 90 )) || \
     die "Invalid --disk-capacity-percent"
@@ -1157,7 +1149,7 @@ REMOTE
   ssh_root_run "$management_host" "$management_port" "$management_user" bash -s -- \
     "$host_id" "$host_type" "$WORKER_RPC_PUBLIC_KEY" "$zfs_loop_gb" "$pool_name" \
     "$tls_cert_path" "$tls_key_path" "$release" "$skip_image" "$ram_reserve_mb" \
-    "$vcpu_overcommit" "$disk_capacity_percent" "$tenant_limit" "$daemon_port" \
+    "$disk_capacity_percent" "$tenant_limit" "$daemon_port" \
     "$WORKBENCH_ENVIRONMENT" "$REMOTE_ROOT" "$REMOTE_CONFIG_DIR" \
     "$DAEMON_SERVICE" "$TENANT_PROJECT" "${SHARED_CAPACITY_PROJECT:--}" <<'REMOTE'
 set -Eeuo pipefail
@@ -1171,20 +1163,19 @@ tls_key_path=$7
 release_id=$8
 skip_image=$9
 ram_reserve_mb=${10}
-vcpu_overcommit=${11}
-disk_capacity_percent=${12}
-tenant_limit=${13}
-daemon_port=${14}
-workbench_environment=${15}
-repo_dir=${16}
-config_dir=${17}
-daemon_service=${18}
-project_name=${19}
-shared_capacity_project=${20}
+disk_capacity_percent=${11}
+tenant_limit=${12}
+daemon_port=${13}
+workbench_environment=${14}
+repo_dir=${15}
+config_dir=${16}
+daemon_service=${17}
+project_name=${18}
+shared_capacity_project=${19}
 if [[ "$shared_capacity_project" == - ]]; then shared_capacity_project=""; fi
 export HOST_ID="$host_id" HOST_TYPE="$host_type" WORKER_RPC_PUBLIC_KEY="$worker_public_key"
 export ZFS_LOOP_GB="$zfs_loop_gb" POOL_NAME="$pool_name" DAEMON_VERSION="$release_id"
-export HOST_RAM_RESERVE_MB="$ram_reserve_mb" VCPU_OVERCOMMIT="$vcpu_overcommit"
+export HOST_RAM_RESERVE_MB="$ram_reserve_mb"
 export DISK_CAPACITY_PERCENT="$disk_capacity_percent" HOST_TENANT_LIMIT="$tenant_limit"
 export DAEMON_PORT="$daemon_port" WORKBENCH_ENVIRONMENT="$workbench_environment"
 if [[ "$workbench_environment" == staging ]]; then export SHARED_PHYSICAL_HOST=1; fi

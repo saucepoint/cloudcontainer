@@ -63,8 +63,6 @@ describe("restricted tenant project policy", () => {
   });
 
   it("keeps per-container CPU enforcement equal to its persisted tier", () => {
-    expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=1");
-    expect(hostPolicy).toContain("TENANT_ADVERTISED_CPU=2");
     expect(hostPolicy).toContain("TENANT_CPU=1");
     expect(hostPolicy).toContain("TENANT_CPU=2");
     expect(configurePolicy).toContain('limits.cpu="$INSTANCE_CPU"');
@@ -87,7 +85,7 @@ describe("restricted tenant project policy", () => {
     expect(hostPolicy).toContain("SLOT_SWAP_MB=1536");
   });
 
-  it("rounds up 4x CPU and 1.25x RAM tenant ceilings", () => {
+  it("fixes CPU at 4x and applies 1.25x RAM to shared-host availability", () => {
     const values = execFileSync(
       "bash",
       [
@@ -99,7 +97,7 @@ printf '%s %s %s %s %s\n' \
   "$(minimum_host_ram_reserve_mb 38401)" \
   "$(minimum_host_ram_reserve_mb 65536)" \
   "$VCPU_OVERCOMMIT" \
-  "$MAX_VCPU_OVERCOMMIT"`,
+  "$HOST_RAM_OVERCOMMIT_NUMERATOR/$HOST_RAM_OVERCOMMIT_DENOMINATOR"`,
         "host-policy-test",
         hostPolicyPath,
       ],
@@ -110,20 +108,20 @@ printf '%s %s %s %s %s\n' \
           DISK_CAPACITY_PERCENT: "70",
           HOST_RAM_RESERVE_MB: "0",
           HOST_TYPE: "budget",
-          VCPU_OVERCOMMIT: "4",
+          VCPU_OVERCOMMIT: "2",
           WORKBENCH_HOST_POLICY_ENV: "/nonexistent/workbench-host-policy.env",
         },
       },
     ).trim();
 
-    expect(values).toBe("3072 3073 5243 4 4");
+    expect(values).toBe("3072 3073 5243 4 5/4");
     expect(hostPolicy).toContain("HOST_VCPU_COUNT=$(nproc)");
     expect(hostPolicy).toContain("VCPU_CAPACITY=$(( HOST_VCPU_COUNT * VCPU_OVERCOMMIT ))");
     expect(hostPolicy).toContain("HOST_RAM_OVERCOMMIT_NUMERATOR=5");
     expect(hostPolicy).toContain("HOST_RAM_OVERCOMMIT_DENOMINATOR=4");
-    expect(hostPolicy).toContain("CPU_SLOTS=$(( (VCPU_CAPACITY + TENANT_CPU - 1) / TENANT_CPU ))");
-    expect(hostController).toContain("MAX_VCPU_OVERCOMMIT=4");
-    expect(hostController).toContain("Reservations per online host vCPU (default/max: 4)");
+    expect(hostPolicy).toContain("CPU_SLOTS=$(( VCPU_CAPACITY / SLOT_CPU ))");
+    expect(hostPolicy).toContain("SLOT_RAM_MB=1536");
+    expect(hostController).not.toContain("--vcpu-overcommit");
   });
 
   it("supports static capacity partitions for shared production and staging hosts", () => {
@@ -154,10 +152,10 @@ printf '%s %s %s %s %s\n' \
     expect(capacityReport).toContain('calculate_host_capacity "$POOL_NAME"');
     expect(hostController).toContain("refresh_host_capacity");
     expect(hostController).toContain("'{capacity: $capacity}'");
-    expect(configurePolicy).toContain('limits.cpu="$CPU_LIMIT"');
-    expect(configurePolicy).toContain('limits.memory="${RAM_LIMIT_MB}MiB"');
-    expect(auditPolicy).toContain('"$CPU_LIMIT"');
-    expect(auditPolicy).toContain('"${RAM_LIMIT_MB}MiB"');
+    expect(configurePolicy).toContain('incus project unset "$PROJECT_NAME" limits.cpu');
+    expect(configurePolicy).toContain('incus project unset "$PROJECT_NAME" limits.memory');
+    expect(auditPolicy).toContain("shared tenant project has no hard CPU ceiling");
+    expect(auditPolicy).toContain("shared tenant project has no hard memory ceiling");
   });
 
   it("uses project-aware REST URLs for raw Incus audit queries", () => {

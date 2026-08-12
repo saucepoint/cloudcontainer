@@ -696,12 +696,15 @@ describe("POST /api/container/:op", () => {
     const { env } = makeEnv();
     const user = await seedUser(env, "user-1", "paid");
     await seedHost(env, {
+      daemon_pubkey: hostKeys.publicKey,
       vcpu_capacity: 1,
       vcpu_allocated: 1,
       ram_allocated_mb: 1536,
       disk_allocated_gb: 10,
     });
     await seedContainer(env, { tier: "free", status: "running" });
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
     const headers = await login(env, user);
 
     expect((await env.DB.prepare("SELECT * FROM container_plan_transitions").all()).results)
@@ -714,16 +717,19 @@ describe("POST /api/container/:op", () => {
 
     expect(response.status).toBe(202);
     expect(await response.json()).toMatchObject({
-      result: "waiting_capacity",
-      container: { tier: "free", status: "upgrade_pending" },
+      result: "resizing",
+      container: { tier: "paid", status: "running" },
     });
     expect(await env.DB.prepare(
       "SELECT from_tier, to_tier, state FROM container_plan_transitions",
     ).first()).toEqual({
       from_tier: "free",
       to_tier: "paid",
-      state: "waiting_capacity",
+      state: "complete",
     });
+    expect(await env.DB.prepare(
+      "SELECT vcpu_available FROM host_availability WHERE id = 'host-1'",
+    ).first()).toEqual({ vcpu_available: -1 });
   });
 
   it("rejects an instance upgrade without current Premium access", async () => {

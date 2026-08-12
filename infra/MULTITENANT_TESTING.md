@@ -84,8 +84,7 @@ then submit one additional request concurrently. Confirm:
 
 - exactly the requests that fit are assigned and the extra account is
   waitlisted;
-- every assigned host tenancy mode matches persisted placement mode and the
-  daemon reports `mixed-tier-shared-v1`;
+- every assigned host tenancy mode matches persisted placement mode;
 - `vcpu_allocated = free_count + 2 * paid_count`;
 - `ram_allocated_mb = 1536 * free_count + 4096 * paid_count`;
 - `disk_allocated_gb = 10 * free_count + 16 * paid_count`, except for explicit
@@ -102,10 +101,8 @@ reconciler pass.
 
 Exercise all negative routes:
 
-- Free and Paid both land on a capable shared host regardless of its legacy
+- Free and Paid both land on a shared host regardless of its legacy
   `budget`/`regular` label;
-- a legacy shared daemon without the capability accepts only its exact old
-  class during the rolling interval;
 - shared accounts never land on dedicated hosts;
 - dedicated-entitled account A cannot land on a host assigned to account B;
 - a dedicated host cannot activate without an eligible assignment;
@@ -182,7 +179,7 @@ exact enforced allowance (1 free, 2 paid/dedicated), matching the UI's
    recover an unhealthy host; a draining host must stay draining.
 7. Make the daemon report a wrong host ID, class, or tenancy mode. The signed
    fleet probe must fail and activation must be rejected. Repeat with class,
-   tenancy mode, capability, release, or CPU hardware telemetry omitted:
+   tenancy mode, release, or CPU hardware telemetry omitted:
    rolling reconciliation may read it, but the administrator probe must reject
    it and clear stale activation evidence.
 
@@ -250,7 +247,7 @@ while destroy remains usable.
 
 Exercise `hostctl reclass` on an empty disposable host. Confirm a class/tenancy
 change without a fresh capacity report is rejected, the daemon reports both new
-values and capability, old health evidence is cleared, and the host cannot
+values, old health evidence is cleared, and the host cannot
 activate until audit and probe succeed.
 
 Finally simulate an irrecoverable dedicated host with an active job and one
@@ -281,7 +278,7 @@ Stop admission immediately for any:
 - duplicate SSH port or counter below zero/above a registered limit;
 - tenant count beyond `max_tenants`;
 - placement in the wrong tenancy mode or dedicated assignment;
-- daemon identity/class/tenancy/capability/release mismatch accepted by the Worker; or
+- daemon identity/class/tenancy/release mismatch accepted by the Worker; or
 - tenant lifecycle state changing across reboot contrary to the control plane.
 
 This remains shared-kernel isolation, not hardware-isolated virtualization.

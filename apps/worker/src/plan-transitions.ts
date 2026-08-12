@@ -1,10 +1,4 @@
-import {
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
-  MIXED_TIER_SHARED_CAPABILITY,
-  TIERS,
-  type Tier,
-} from "@workbench/contract";
+import { TIERS, type Tier } from "@workbench/contract";
 import {
   cpuReservation,
   diskReservationGb,
@@ -152,8 +146,6 @@ async function reserveTransition(
     diskReservationGb(transition.target_disk_gb) - diskReservationGb(container.disk_gb),
   );
   const heartbeatCutoff = at - HOST_HEARTBEAT_MAX_AGE_MS;
-  const mixedCapability = `%"${MIXED_TIER_SHARED_CAPABILITY}"%`;
-
   const results = (await env.DB.batch([
     env.DB.prepare(
       `UPDATE container_plan_transitions
@@ -204,10 +196,6 @@ async function reserveTransition(
        WHERE id = ? AND changes() = 1
          AND status = 'active'
          AND tenancy_mode = 'shared'
-         AND daemon_capabilities LIKE ?
-         AND vcpu_allocated + ? <= vcpu_capacity
-         AND (ram_allocated_mb + ?) * ${HOST_RAM_OVERCOMMIT_DENOMINATOR} <=
-             (ram_total_mb - ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
          AND disk_allocated_gb + ? <= disk_total_gb
          AND last_seen_at IS NOT NULL AND last_seen_at >= ?
          AND consecutive_failures = 0
@@ -219,9 +207,6 @@ async function reserveTransition(
       requestedRam,
       requestedDisk,
       container.host_id,
-      mixedCapability,
-      requestedCpu,
-      requestedRam,
       requestedDisk,
       heartbeatCutoff,
     ),

@@ -114,8 +114,8 @@ cgroups, seccomp, and AppArmor rather than KVM or another hypervisor.
 - One production control-plane Worker and a D1-registered fleet of heterogeneous
   Incus hosts, plus an isolated staging Worker, D1 database, secret set, and
   daemon trust domain at `staging.usebench.dev` for release validation. Shared
-  hosts accept both Free and Paid resource shapes after reporting the mixed-tier
-  capability. A dedicated host accepts only its assigned paid account and has
+  hosts accept both Free and Paid resource shapes. A dedicated host accepts only
+  its assigned paid account and has
   exactly one tenant slot.
 - An authenticated fleet controller for host onboarding, registration,
   drain/probe/state operations, destructive host evacuation and container
@@ -277,7 +277,7 @@ Browser SSO handoff records and exchange codes expire and are single-use.
 - Admission reserves host CPU, RAM, disk, and an SSH port before it marks the
   waitlist row admitted and enqueues the provision job. A failed reservation
   must leave the user waitlisted rather than oversubscribe a host.
-- The requested tenancy mode and legacy rollout class are persisted with the
+- The requested tenancy mode and legacy operational class are persisted with the
   container row when it first waitlists; a later account-field change cannot
   silently move that request.
 - The dashboard explains that admission is automatic and keeps checking without
@@ -647,10 +647,10 @@ copy host-local home data, so the failed machine must first be isolated.
 A fleet-introducing migration also drains every legacy host until its inferred
 class policy and daemon release have been deployed and explicitly verified.
 A signed administrator probe requires explicit legacy class, tenancy mode,
-mixed-tier capability, release identity, and CPU hardware telemetry, and
+release identity, and CPU hardware telemetry, and
 rejects a wrong host ID/mode/class or a RAM/vCPU registration that exceeds the
-daemon's hardware report. The background reconciler alone tolerates omitted new
-fields during a rolling interval and then applies legacy exact-class placement.
+daemon's hardware report. The background reconciler alone tolerates omitted
+telemetry fields during a rolling interval.
 The API never returns a host credential private key because no such key leaves
 the host.
 
@@ -700,15 +700,13 @@ also match.
 Only active, recently healthy hosts in the request's tenancy mode receive new
 environments. The account service plan maps both `free` and `paid` to `shared`;
 operator-entitled `dedicated` maps to an account-bound `dedicated` host while
-retaining paid resource limits. `budget` and `regular` remain dual-written only
-as rolling-release fallback labels. Dedicated hosts have `max_tenants = 1`;
+retaining paid resource limits. `budget` and `regular` remain legacy operational
+labels and never constrain shared placement. Dedicated hosts have `max_tenants = 1`;
 shared hosts have an independently configured safety ceiling.
 
 Placement requires all of the following at reservation time:
 
 - an exact tenancy-mode match and, for dedicated, an exact assigned-user match;
-- mixed-tier daemon capability on shared hosts, or an exact legacy class match
-  during the rolling interval;
 - a free tenant slot below `max_tenants`;
 - enough additive vCPU reservation capacity (1 free, 2 paid/dedicated), matching
   the advertised 1/2-vCPU plan value stored on the container;
@@ -720,8 +718,11 @@ Placement requires all of the following at reservation time:
 - an available, non-quarantined SSH port on that host.
 
 Every host row carries independent CPU, RAM, reserve, disk, and tenant budgets.
-The scheduler scores the post-placement normalized headroom deterministically,
-avoids a single-resource hotspot, and then minimizes aggregate slack. The same
+The canonical availability projection subtracts current reservations from the
+4x-vCPU, 1.25x non-reserved-RAM, disk, and tenant-slot targets. The scheduler
+places a new tenant on the eligible host with the greatest post-placement
+normalized availability, avoids a single-resource hotspot, and breaks ties
+deterministically. The same
 resource, health, tenancy, tenant, and port predicates gate the authoritative
 D1 reservation against races. When a physical machine is shared by production
 and staging, each control plane uses a
@@ -729,10 +730,10 @@ separate daemon process, signing/sealing keys, listener, Incus project, SSH port
 range, and statically capped host row. Because separate D1 databases cannot
 coordinate reservations, the sum of those project tenant caps must not exceed
 the physical resource-derived ceiling. Bootstrap derives each machine's tenant
-ceiling from online-vCPU overcommit, allocatable RAM, safe storage, worst-case
-shared swap, isolated-ID ranges, and the conservative legacy class shape. The
-vCPU multiplier defaults to the supported maximum of 4 and may be lowered per
-host. RAM retains the 1.25x policy. The host reserves the larger of 3 GiB
+ceiling from online-vCPU capacity, allocatable RAM, safe storage, worst-case
+shared swap, isolated-ID ranges, and the smallest shared resource shape. CPU is
+always oversubscribed 4x and RAM is always oversubscribed 1.25x. The host
+reserves the larger of 3 GiB
 (3072 MiB) or a rounded-up eight percent of detected total RAM; an operator may
 configure a larger reserve. One failed daemon health check
 immediately pauses new placement; three consecutive failures mark an active host unhealthy, and
@@ -791,9 +792,10 @@ A paid entitlement makes Premium resources available but does not change an
 existing Free container. The owner must explicitly opt in from the dashboard;
 that action creates an idempotent in-place resize intent. The current container
 tier and resource fields do not change until the daemon succeeds. Free-to-Paid
-claims only the positive CPU/RAM/disk delta on its current mixed shared host;
-insufficient capacity leaves the Free container usable in `upgrade_pending` and
-retries automatically. Resize failure retains the claimed delta and retries
+claims the positive CPU/RAM/disk delta on its current shared host, even when
+that makes calculated availability negative. This never drains the host, but
+new placements skip it until later downgrades or destroys restore enough
+availability. Resize failure retains the claimed delta and retries
 without double reservation. Upgrade success restores the prior running/stopped
 state. Paid-to-Free remains automatic: it first stops a running container, then
 applies the lower CPU/RAM limits while stopped and leaves it stopped. The UI
@@ -847,7 +849,7 @@ operations synchronize keys and credentials.
 | world_id_nullifiers | Canonical decimal nullifier unique per action; user link clears on deletion |
 | ssh_keys | Multiple public keys per user; never private keys |
 | containers | user_id unique; at most one environment per account; actual tier, tenancy mode, legacy class, billing suspension/deadline, grandfathered storage, and nullable administrative re-home target; selected GitHub repositories are non-secret JSON metadata |
-| hosts | Current host generation, tenancy mode, rollout class/capabilities, independent CPU/RAM/disk and tenant budgets, allocation counters, health/release telemetry, management address, SSH hostname, daemon endpoint, X25519 public key, optional dedicated-account assignment, and retirement time |
+| hosts | Current host generation, tenancy mode, legacy operational class, independent CPU/RAM/disk and tenant budgets, allocation counters, health/release telemetry, management address, SSH hostname, daemon endpoint, X25519 public key, optional dedicated-account assignment, and retirement time |
 | host_history | Immutable class, capacity, release, and hardware snapshot for each retired host ID/generation |
 | jobs | No secret or arbitrary payload column |
 | credentials_encrypted | One encrypted credential bundle per user |
@@ -989,7 +991,7 @@ Current automated coverage includes:
   deduplication, monotonic paid-through projection, single-flight Checkout,
   Price disclosure validation, first-subscription-only trials, refund
   correlation, and the disabled sales gate;
-- in-place upgrade delta reservation, no-capacity preservation, idempotent
+- in-place upgrade delta reservation beyond placement targets, idempotent
   resize retry, upgrade prior-state restoration, stop-before-resize downgrade,
   and nonshrinking grandfathered storage;
 - authenticated host registration/probe/state APIs, daemon release telemetry,
@@ -1033,7 +1035,7 @@ public release, an operator must record:
     duplicate Checkout start, abandoned-Checkout expiry, first-trial-only
     resubscription, renewal, payment failure, scheduled cancellation and undo,
     refund/dispute correlation, and expiry; and
-18. running and stopped in-place upgrade, no-capacity retry, resize failure,
+18. running and stopped in-place upgrade beyond placement targets, resize failure,
     running downgrade to a stopped Free container, stopped downgrade, and
     grandfathered disk behavior.
 
@@ -1109,8 +1111,8 @@ manual checks above have been completed for affected areas.
     canonical Stripe state; opening trial invoices and payment failure never
     extend paid-through service; canceled trials and failed first charges remove
     Paid access; and disabled billing cannot contact Stripe for a new sale.
-16. **Safe plan change:** Free-to-Paid claims only the resource delta and keeps
-    the current container usable when capacity is absent; retries cannot
+16. **Safe plan change:** Free-to-Paid claims only the resource delta, even
+    when the current host exceeds its placement target; retries cannot
     double-reserve; upgrade success restores running/stopped state;
     Paid-to-Free stops before lowering limits, finishes stopped, and warns
     about unsaved progress; no transition shrinks storage; and automated paid

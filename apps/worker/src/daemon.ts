@@ -5,7 +5,7 @@
  */
 import {
   JobStatusResponseSchema,
-  MAX_HOST_VCPU_OVERCOMMIT,
+  HOST_VCPU_OVERCOMMIT,
   StatsResponseSchema,
   signRequest,
   type JobRequest,
@@ -85,9 +85,9 @@ export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsRe
   }
   if (
     stats.cpuLogical !== undefined &&
-    host.vcpu_capacity > stats.cpuLogical * MAX_HOST_VCPU_OVERCOMMIT
+    host.vcpu_capacity !== stats.cpuLogical * HOST_VCPU_OVERCOMMIT
   ) {
-    throw new Error("daemon reports fewer CPUs than the registered host capacity supports");
+    throw new Error("registered host capacity must equal four times the online CPU count");
   }
   return stats;
 }

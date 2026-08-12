@@ -723,3 +723,76 @@ describe("0023 Paid upgrade opt-in migration", () => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
+
+describe("0024 host availability migration", () => {
+  it("projects negative CPU and RAM availability without mutating reservations", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+      "0022_billing_checkout_hardening.sql",
+      "0023_paid_upgrade_opt_in.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_allocated_mb, ram_reserve_mb,
+         vcpu_capacity, vcpu_allocated, disk_total_gb, disk_allocated_gb,
+         status, joined_at, host_type, max_tenants, reported_cpu_logical)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         5120, 3072, 3072, 4, 9, 40, 30, 'active', 1, 'regular', 1, 2);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('container-1', 'user-1', 'host-1', 30500, '["codex"]',
+         'paid', 'regular', 2, 4096, 8, 'running', 1);
+    `);
+
+    db.exec(migration("0024_host_availability.sql"));
+
+    expect(db.prepare(
+      `SELECT vcpu_available, ram_capacity_mb, ram_available_mb,
+              disk_available_gb, tenant_slots_available
+       FROM host_availability WHERE id = 'host-1'`,
+    ).get()).toEqual({
+      vcpu_available: -1,
+      ram_capacity_mb: 2560,
+      ram_available_mb: -512,
+      disk_available_gb: 10,
+      tenant_slots_available: 0,
+    });
+    expect(db.prepare(
+      `SELECT vcpu_capacity, vcpu_allocated, ram_allocated_mb, disk_allocated_gb
+       FROM hosts WHERE id = 'host-1'`,
+    ).get()).toEqual({
+      vcpu_capacity: 8,
+      vcpu_allocated: 9,
+      ram_allocated_mb: 3072,
+      disk_allocated_gb: 30,
+    });
+  });
+});

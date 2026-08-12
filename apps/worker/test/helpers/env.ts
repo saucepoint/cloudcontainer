@@ -178,7 +178,6 @@ export async function seedHost(
     host_type: "budget",
     tenancy_mode: overrides.tenancy_mode ??
       (overrides.host_type === "dedicated" ? "dedicated" : "shared"),
-    daemon_capabilities: JSON.stringify(["mixed-tier-shared-v1"]),
     max_tenants: 32,
     dedicated_user_id: null,
     management_hostname: "host-1.workbench.test",
@@ -195,18 +194,18 @@ export async function seedHost(
     `INSERT INTO hosts (id, ipv4, ipv6, ssh_hostname, daemon_endpoint, daemon_cert_fp, daemon_pubkey,
        ram_total_mb, ram_allocated_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
        disk_total_gb, disk_allocated_gb, status, joined_at, last_seen_at, consecutive_failures,
-       host_type, tenancy_mode, daemon_capabilities, max_tenants, dedicated_user_id,
+       host_type, tenancy_mode, max_tenants, dedicated_user_id,
        management_hostname, management_port,
        management_user, daemon_version, reported_ram_total_mb, reported_cpu_logical,
        generation, retired_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       host.id, host.ipv4, host.ipv6, host.ssh_hostname, host.daemon_endpoint,
       host.daemon_cert_fp, host.daemon_pubkey, host.ram_total_mb, host.ram_allocated_mb,
       host.ram_reserve_mb, host.vcpu_capacity, host.vcpu_allocated, host.disk_total_gb,
       host.disk_allocated_gb, host.status, host.joined_at, host.last_seen_at,
-      host.consecutive_failures, host.host_type, host.tenancy_mode, host.daemon_capabilities,
+      host.consecutive_failures, host.host_type, host.tenancy_mode,
       host.max_tenants, host.dedicated_user_id,
       host.management_hostname, host.management_port, host.management_user, host.daemon_version,
       host.reported_ram_total_mb, host.reported_cpu_logical,

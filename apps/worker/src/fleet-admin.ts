@@ -1,7 +1,5 @@
 import {
   ContainerRehomeSchema,
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
   SERVICE_PLANS,
@@ -22,6 +20,11 @@ import type { AppContext, ContainerRow, HostRow } from "./types.js";
 interface FleetHostRow extends HostRow {
   tenant_count: number;
   active_job_count: number;
+  vcpu_available: number;
+  ram_capacity_mb: number;
+  ram_available_mb: number;
+  disk_available_gb: number;
+  tenant_slots_available: number;
 }
 
 async function fleetAuthFailure(c: Context<AppContext>): Promise<Response | null> {
@@ -46,7 +49,7 @@ async function getFleetHost(env: AppContext["Bindings"], hostId: string): Promis
        (SELECT COUNT(*)
         FROM jobs j JOIN containers c ON c.id = j.container_id
         WHERE c.host_id = h.id AND j.status IN ('queued','running')) AS active_job_count
-     FROM hosts h
+     FROM host_availability h
      WHERE h.id = ?`,
   )
     .bind(hostId)
@@ -70,15 +73,19 @@ function fleetHostView(host: FleetHostRow) {
     activeJobCount: host.active_job_count,
     vcpuCapacity: host.vcpu_capacity,
     vcpuAllocated: host.vcpu_allocated,
+    vcpuAvailable: host.vcpu_available,
     reportedCpuLogical: host.reported_cpu_logical,
     ramTotalMb: host.ram_total_mb,
     ramReserveMb: host.ram_reserve_mb,
     ramAllocatedMb: host.ram_allocated_mb,
+    ramCapacityMb: host.ram_capacity_mb,
+    ramAvailableMb: host.ram_available_mb,
     reportedRamTotalMb: host.reported_ram_total_mb,
     diskTotalGb: host.disk_total_gb,
     diskAllocatedGb: host.disk_allocated_gb,
+    diskAvailableGb: host.disk_available_gb,
+    tenantSlotsAvailable: host.tenant_slots_available,
     daemonVersion: host.daemon_version,
-    daemonCapabilities: host.daemon_capabilities ? JSON.parse(host.daemon_capabilities) : [],
     joinedAt: host.joined_at,
     lastSeenAt: host.last_seen_at,
     consecutiveFailures: host.consecutive_failures,
@@ -127,15 +134,6 @@ function capacityError(
   }
   if (capacity.maxTenants < host.tenant_count) {
     return "tenant ceiling is below the current tenant count";
-  }
-  if (capacity.vcpuCapacity < host.vcpu_allocated) {
-    return "vCPU capacity is below the current reservation";
-  }
-  if (
-    host.ram_allocated_mb * HOST_RAM_OVERCOMMIT_DENOMINATOR >
-    (capacity.ramTotalMb - capacity.ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR
-  ) {
-    return "RAM capacity is below the current reservation";
   }
   if (capacity.diskTotalGb < host.disk_allocated_gb) {
     return "disk capacity is below the current reservation";
@@ -577,12 +575,9 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
       }
       if (
         host.tenant_count > host.max_tenants ||
-        host.vcpu_allocated > host.vcpu_capacity ||
-        host.ram_allocated_mb * HOST_RAM_OVERCOMMIT_DENOMINATOR >
-          (host.ram_total_mb - host.ram_reserve_mb) * HOST_RAM_OVERCOMMIT_NUMERATOR ||
         host.disk_allocated_gb > host.disk_total_gb
       ) {
-        return c.json({ error: "registered capacity does not cover existing reservations" }, 409);
+        return c.json({ error: "registered hard capacity is below existing reservations" }, 409);
       }
       const healthy =
         host.last_seen_at !== null &&
@@ -616,9 +611,6 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
            AND consecutive_failures = 0 AND daemon_version IS NOT NULL
            AND reported_ram_total_mb IS NOT NULL
            AND reported_cpu_logical IS NOT NULL
-           AND vcpu_allocated <= vcpu_capacity
-           AND ram_allocated_mb * ${HOST_RAM_OVERCOMMIT_DENOMINATOR} <=
-             (ram_total_mb - ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
            AND disk_allocated_gb <= disk_total_gb
            AND max_tenants >= (SELECT COUNT(*) FROM containers WHERE host_id = hosts.id)
            AND (host_type <> 'dedicated' OR dedicated_user_id IS NOT NULL)`,
@@ -724,7 +716,7 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
          WHERE id = ? AND host_id IS NULL`,
       ).bind(
         target.tier,
-        target.hostType,
+        target.placementClass,
         target.tenancyMode,
         targetTier.cpu,
         targetTier.ramMb,
@@ -765,7 +757,7 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
          AND status IN ('queued','running')
          AND op IN ('provision','rebuild','start','stop','destroy','resize')
      )`,
-  ).bind(target.tier, target.hostType, Date.now(), container.id, host.id).run();
+  ).bind(target.tier, target.placementClass, Date.now(), container.id, host.id).run();
   if (!claimed.meta.changes) {
     return c.json({ error: "container state changed concurrently; reload and retry" }, 409);
   }
@@ -775,7 +767,11 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
   try {
     const job = await enqueueJob(c.env, "destroy", container, host);
     return c.json({
-      container: { id: container.id, targetTier: target.tier, targetHostType: target.hostType },
+      container: {
+        id: container.id,
+        targetTier: target.tier,
+        targetHostType: target.placementClass,
+      },
       job: { id: job.id, status: job.status },
     }, 202);
   } catch (error) {
@@ -800,7 +796,6 @@ async function probeHost(c: Context<AppContext>): Promise<Response> {
     if (
       stats.hostType === undefined ||
       stats.tenancyMode === undefined ||
-      stats.capabilities === undefined ||
       stats.version === undefined ||
       stats.cpuLogical === undefined
     ) {
@@ -839,7 +834,7 @@ export const fleetAdminRoutes = new Hono<AppContext>()
          (SELECT COUNT(*)
           FROM jobs j JOIN containers ct ON ct.id = j.container_id
           WHERE ct.host_id = h.id AND j.status IN ('queued','running')) AS active_job_count
-       FROM hosts h
+       FROM host_availability h
        ORDER BY h.host_type, h.id`,
     ).all<FleetHostRow>();
     c.header("cache-control", "no-store");
