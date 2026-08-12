@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/account.tsx client/security.ts client/onboarding.ts client/dashboard.tsx client/cli-auth.ts --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
+    "build:client": "rm -f public/*.js public/*.wasm && esbuild client/ui.tsx client/landing.tsx client/account.tsx client/security.ts client/configure.ts client/dashboard.tsx client/cli-auth.ts --bundle --format=esm --jsx=automatic --jsx-import-source=react --minify --splitting --outdir=public",
     "predev": "npm run build:client",
     "dev": "wrangler dev",
     "predeploy": "npm run build:client",
@@ -31,7 +31,8 @@
     "motion": "^12.42.2",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

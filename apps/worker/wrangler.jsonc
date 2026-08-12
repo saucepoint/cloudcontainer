@@ -23,6 +23,9 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  // Billing remains disabled until the operator creates the primary and DLQ
+  // queues, adds BILLING_EVENTS as both producer and consumer, supplies the
+  // Stripe vars/secrets documented in README.md, and sets BILLING_ENABLED=1.
   "routes": [
     {
       "pattern": "usebench.dev",
@@ -50,7 +53,34 @@
     // Production and staging may share a physical host. Their independent D1
     // schedulers must never allocate from overlapping host-port ranges.
     "SSH_PORT_RANGE_START": "30000",
-    "SSH_PORT_RANGE_END": "39999"
+    "SSH_PORT_RANGE_END": "39999",
+    // Keep new sales closed while production Stripe resources and policy
+    // values are installed and validated through the admin readiness probe.
+    "BILLING_ENABLED": "0",
+    "STRIPE_LIVE_MODE": "1",
+    "STRIPE_PRICE_PAID_MONTHLY": "price_1U3f8wGembqEGAYvewRGeKeE",
+    "PAID_PLAN_MONTHLY_PRICE": "6",
+    "PAID_PLAN_CURRENCY": "USD",
+    "STRIPE_TAX_ENABLED": "1",
+    "BILLING_GRACE_DAYS": "0",
+    "BILLING_CHECKOUT_SESSION_MINUTES": "60"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "BILLING_EVENTS",
+        "queue": "usebench-billing-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "usebench-billing-events",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "usebench-billing-events-dlq"
+      }
+    ]
   },
   "env": {
     "staging": {
@@ -88,12 +118,41 @@
         "GITHUB_APP_SLUG": "",
         "AUTH_GOOGLE_CLIENT_ID": "",
         "AUTH_GITHUB_CLIENT_ID": "",
-        "WORLD_ID_APP_ID": "",
-        "WORLD_ID_RP_ID": "",
-        "WORLD_ID_ACTION": "verify-account-staging-1",
-        "WORLD_ID_ENVIRONMENT": "staging",
+        // Staging reuses the production World ID application and relying
+        // party. Only the action is separated between deployments.
+        "WORLD_ID_APP_ID": "app_a325185f8cba6187f4584698df50f19c",
+        "WORLD_ID_RP_ID": "rp_2cccf8f0f15eb633",
+        "WORLD_ID_ACTION": "verify-account-staging",
+        "WORLD_ID_ENVIRONMENT": "production",
         "SSH_PORT_RANGE_START": "40000",
-        "SSH_PORT_RANGE_END": "49999"
+        "SSH_PORT_RANGE_END": "49999",
+        // Billing is enabled once STRIPE_PRICE_PAID_MONTHLY is set to the
+        // matching Stripe sandbox recurring Price ID.
+        "BILLING_ENABLED": "1",
+        "STRIPE_LIVE_MODE": "0",
+        "STRIPE_PRICE_PAID_MONTHLY": "price_1U3PHkGR5QgQQ8VfOxsxUVuG",
+        "PAID_PLAN_MONTHLY_PRICE": "6",
+        "PAID_PLAN_CURRENCY": "USD",
+        "STRIPE_TAX_ENABLED": "0",
+        "BILLING_GRACE_DAYS": "0",
+        "BILLING_CHECKOUT_SESSION_MINUTES": "60"
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "BILLING_EVENTS",
+            "queue": "usebench-staging-billing-events"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "usebench-staging-billing-events",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 10,
+            "dead_letter_queue": "usebench-staging-billing-events-dlq"
+          }
+        ]
       }
     }
   }
@@ -110,4 +169,6 @@
   //   AUTH_GOOGLE_CLIENT_SECRET — Google OAuth secret (paired with client ID)
   //   AUTH_GITHUB_CLIENT_SECRET — GitHub OAuth secret (paired with client ID)
   //   WORLD_ID_SIGNING_KEY      — World ID 4.0 RP signing key
+  //   STRIPE_SECRET_KEY         — Stripe API key used only by server-side Billing calls
+  //   STRIPE_WEBHOOK_SECRET     — signing secret for /api/stripe/webhook
 }

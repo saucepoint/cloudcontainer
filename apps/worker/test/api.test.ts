@@ -9,6 +9,7 @@ import { encryptJsonAtRest, generateX25519Keypair } from "@workbench/contract";
 import { apiRoutes } from "../src/api.js";
 import { app as workerApp } from "../src/index.js";
 import { decryptLlmKeys, getCredentialsRow, upsertCredentials } from "../src/credentials.js";
+import { getContainerForUser } from "../src/jobs.js";
 import type { AppContext, Bindings, UserRow } from "../src/types.js";
 import { createTestSession, fakeDaemon, makeEnv, seedContainer, seedHost, seedUser, stubFetch } from "./helpers/env.js";
 
@@ -31,6 +32,22 @@ function json(body: unknown, headers: Record<string, string> = {}): RequestInit 
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   };
+}
+
+function putJson(body: unknown, headers: Record<string, string> = {}): RequestInit {
+  return { ...json(body, headers), method: "PUT" };
+}
+
+function saveConfiguration(
+  env: Bindings,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+) {
+  return app().request("/api/configuration", putJson(body, headers), env);
+}
+
+function deploy(env: Bindings, headers: Record<string, string>, tier: "free" | "paid" = "free") {
+  return app().request("/api/deploy", json({ tier }, headers), env);
 }
 
 describe("auth gating", () => {
@@ -166,8 +183,8 @@ describe("request limits", () => {
   it("rejects oversized streamed JSON before route handlers buffer it", async () => {
     const { env, headers } = await setup();
     const res = await workerApp.request(
-      "/api/provision",
-      json({ agents: ["claude"], padding: "x".repeat(300 * 1024) }, headers),
+      "/api/configuration",
+      putJson({ agents: ["claude"], padding: "x".repeat(300 * 1024) }, headers),
       env,
     );
 
@@ -180,9 +197,9 @@ describe("request limits", () => {
     const { env, headers } = await setup();
     const body = JSON.stringify({ agents: ["claude"], padding: "x".repeat(300 * 1024) });
     const res = await workerApp.request(
-      "/api/provision",
+      "/api/configuration",
       {
-        method: "POST",
+        method: "PUT",
         headers: {
           ...headers,
           "content-type": "application/json",
@@ -204,9 +221,9 @@ describe("request limits", () => {
     expect(body.length).toBe(256 * 1024);
 
     const res = await workerApp.request(
-      "/api/provision",
+      "/api/configuration",
       {
-        method: "POST",
+        method: "PUT",
         headers: {
           ...headers,
           "content-type": "application/json",
@@ -221,7 +238,7 @@ describe("request limits", () => {
   });
 });
 
-describe("POST /api/provision", () => {
+describe("workbench configuration and deployment", () => {
   async function setup() {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -240,7 +257,7 @@ describe("POST /api/provision", () => {
   it("requires at least one known agent", async () => {
     const { env, headers } = await setup();
     for (const agents of [[], ["emacs"], ["claude", "emacs"], undefined]) {
-      const res = await app().request("/api/provision", json({ agents }, headers), env);
+      const res = await saveConfiguration(env, headers, { agents });
       expect(res.status).toBe(400);
     }
   });
@@ -248,11 +265,7 @@ describe("POST /api/provision", () => {
   it("rejects a malformed SSH key without creating anything", async () => {
     const { env, headers } = await setup();
     for (const sshPubkey of ["not-a-key", 42]) {
-      const res = await app().request(
-        "/api/provision",
-        json({ agents: ["claude"], sshPubkey }, headers),
-        env,
-      );
+      const res = await saveConfiguration(env, headers, { agents: ["claude"], sshPubkey });
       expect(res.status).toBe(400);
     }
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
@@ -261,11 +274,10 @@ describe("POST /api/provision", () => {
   it("rejects colliding repository clone targets before placement", async () => {
     const { env, headers, daemon } = await setup();
 
-    const res = await app().request(
-      "/api/provision",
-      json({ agents: ["claude"], githubRepos: ["first/tools", "second/TOOLS"] }, headers),
-      env,
-    );
+    const res = await saveConfiguration(env, headers, {
+      agents: ["claude"],
+      githubRepos: ["first/tools", "second/TOOLS"],
+    });
 
     expect(res.status).toBe(400);
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
@@ -284,22 +296,22 @@ describe("POST /api/provision", () => {
       env,
     );
     expect(draft.status).toBe(200);
-    const res = await app().request(
-      "/api/provision",
-      json(
-        {
-          agents: ["codex", "claude"],
-          sshPubkey: PUBKEY,
-          sshKeyLabel: "main laptop",
-          llmKeys: { anthropic: "CANARY-llm" },
-          cloudflareToken: "cf-token",
-          supabaseToken: "CANARY-supabase",
-          convexToken: "CANARY-convex",
-        },
-        headers,
-      ),
-      env,
-    );
+    const saved = await saveConfiguration(env, headers, {
+      agents: ["codex", "claude"],
+      sshPubkey: PUBKEY,
+      sshKeyLabel: "main laptop",
+      llmKeys: { anthropic: "CANARY-llm" },
+      cloudflareToken: "cf-token",
+      supabaseToken: "CANARY-supabase",
+      convexToken: "CANARY-convex",
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({
+      configuration: { agents: ["codex", "claude"] },
+    });
+    expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
+
+    const res = await deploy(env, headers);
     expect(res.status).toBe(202);
     const body = (await res.json()) as { container: { status: string; agents: string[] } };
     expect(body.container.status).toBe("provisioning");
@@ -336,12 +348,12 @@ describe("POST /api/provision", () => {
       },
     );
 
-    const response = await app().request(
-      "/api/provision",
-      json({ agents: ["codex"], githubRepos: ["octocat/public"] }, headers),
-      env,
-    );
-    expect(response.status).toBe(202);
+    const response = await saveConfiguration(env, headers, {
+      agents: ["codex"],
+      githubRepos: ["octocat/public"],
+    });
+    expect(response.status).toBe(200);
+    expect((await deploy(env, headers)).status).toBe(202);
     expect(daemon.submitted[0]).toMatchObject({
       op: "provision",
       githubRepos: ["octocat/public"],
@@ -381,18 +393,12 @@ describe("POST /api/provision", () => {
         url.hostname === "api.cloudflare.com" ? Response.json({ success: true }) : null,
     );
 
-    const response = await app().request(
-      "/api/provision",
-      json(
-        {
-          agents: ["codex"],
-          githubRepos: ["octocat/hello-world", "acme/private"],
-        },
-        headers,
-      ),
-      env,
-    );
-    expect(response.status).toBe(202);
+    const response = await saveConfiguration(env, headers, {
+      agents: ["codex"],
+      githubRepos: ["octocat/hello-world", "acme/private"],
+    });
+    expect(response.status).toBe(200);
+    expect((await deploy(env, headers)).status).toBe(202);
     expect(daemon.submitted[0]).toMatchObject({
       op: "provision",
       githubRepos: ["octocat/hello-world", "acme/private"],
@@ -426,11 +432,10 @@ describe("POST /api/provision", () => {
           : null,
     );
 
-    const response = await app().request(
-      "/api/provision",
-      json({ agents: ["codex"], githubRepos: ["octocat/not-allowed"] }, headers),
-      env,
-    );
+    const response = await saveConfiguration(env, headers, {
+      agents: ["codex"],
+      githubRepos: ["octocat/not-allowed"],
+    });
     expect(response.status).toBe(400);
     expect((await response.json()) as { error: string }).toMatchObject({
       error: expect.stringContaining("no longer available"),
@@ -440,10 +445,89 @@ describe("POST /api/provision", () => {
 
   it("refuses a second workbench per account", async () => {
     const { env, headers } = await setup();
+    expect((await saveConfiguration(env, headers, { agents: ["claude"] })).status).toBe(200);
     await seedContainer(env);
-    const res = await app().request("/api/provision", json({ agents: ["claude"] }, headers), env);
+    const res = await deploy(env, headers);
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "A workbench already exists for this account." });
+  });
+
+  it("requires a saved configuration before deployment", async () => {
+    const { env, headers } = await setup();
+    const response = await deploy(env, headers);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Save your workbench configuration before creating an instance.",
+      redirect: "/configure",
+    });
+  });
+
+  it("lets unverified accounts configure but directs Free deployment to verification", async () => {
+    const { env, headers } = await setup();
+    await env.DB.prepare(
+      "UPDATE users SET verified_at = NULL, verification_method = NULL WHERE id = 'user-1'",
+    ).run();
+    expect((await saveConfiguration(env, headers, { agents: ["claude"] })).status).toBe(200);
+
+    const dashboard = await app().request("/api/dashboard", { headers }, env);
+    expect(await dashboard.json()).toMatchObject({
+      account: { state: "unverified", verified: false, premium: false },
+      configuration: { agents: ["claude"] },
+      container: null,
+    });
+    const response = await deploy(env, headers);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ redirect: "/verify" });
+  });
+
+  it("requires Premium for the larger tier and preserves Free choice for verified Premium accounts", async () => {
+    const freeEnv = await setup();
+    expect((await saveConfiguration(freeEnv.env, freeEnv.headers, { agents: ["claude"] })).status).toBe(200);
+    const denied = await deploy(freeEnv.env, freeEnv.headers, "paid");
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ redirect: "/account#billing" });
+
+    const premium = await setup();
+    const now = Date.now();
+    await premium.env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, source_ref, updated_at)
+       VALUES ('user-1', 'paid', 'manual', 'manual', 'test', ?)`,
+    ).bind(now).run();
+    await premium.env.DB.prepare(
+      "UPDATE users SET subscription_status = 'paid' WHERE id = 'user-1'",
+    ).run();
+    expect((await saveConfiguration(premium.env, premium.headers, { agents: ["codex"] })).status).toBe(200);
+    const dashboard = await app().request("/api/dashboard", { headers: premium.headers }, premium.env);
+    expect(await dashboard.json()).toMatchObject({
+      account: { state: "verified_premium", verified: true, premium: true },
+    });
+    const response = await deploy(premium.env, premium.headers, "free");
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ container: { tier: "free", cpu: 1, ramMb: 1536 } });
+  });
+
+  it("lets an unverified Premium account deploy only the Premium tier", async () => {
+    const { env, headers } = await setup();
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, source_ref, updated_at)
+       VALUES ('user-1', 'paid', 'manual', 'manual', 'test', ?)`,
+    ).bind(now).run();
+    await env.DB.prepare(
+      `UPDATE users SET subscription_status = 'paid', verified_at = NULL,
+         verification_method = NULL WHERE id = 'user-1'`,
+    ).run();
+    expect((await saveConfiguration(env, headers, { agents: ["codex"] })).status).toBe(200);
+    const dashboard = await app().request("/api/dashboard", { headers }, env);
+    expect(await dashboard.json()).toMatchObject({
+      account: { state: "premium", verified: false, premium: true },
+    });
+    expect((await deploy(env, headers, "free")).status).toBe(403);
+    const response = await deploy(env, headers, "paid");
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ container: { tier: "paid", cpu: 2, ramMb: 4096 } });
   });
 
   it("rejects an invalid Cloudflare token up front", async () => {
@@ -454,11 +538,10 @@ describe("POST /api/provision", () => {
     stubFetch((url) =>
       url.hostname === "api.cloudflare.com" ? Response.json({ success: false }) : null,
     );
-    const res = await app().request(
-      "/api/provision",
-      json({ agents: ["claude"], cloudflareToken: "bad" }, headers),
-      env,
-    );
+    const res = await saveConfiguration(env, headers, {
+      agents: ["claude"],
+      cloudflareToken: "bad",
+    });
     expect(res.status).toBe(400);
   });
 
@@ -474,11 +557,10 @@ describe("POST /api/provision", () => {
       stubFetch((url) =>
         url.hostname === hostname ? new Response(null, { status: 401 }) : null,
       );
-      const res = await app().request(
-        "/api/provision",
-        json({ agents: ["claude"], [field]: "bad" }, headers),
-        env,
-      );
+      const res = await saveConfiguration(env, headers, {
+        agents: ["claude"],
+        [field]: "bad",
+      });
       expect(res.status).toBe(400);
       expect((await res.json()) as { error: string }).toMatchObject({
         error: expect.stringContaining("failed validation"),
@@ -486,7 +568,7 @@ describe("POST /api/provision", () => {
     }
   });
 
-  it("explains that launch can continue without the token when Cloudflare is unavailable", async () => {
+  it("explains that setup can continue without the token when Cloudflare is unavailable", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await seedHost(env);
@@ -495,14 +577,13 @@ describe("POST /api/provision", () => {
       throw new Error("Cloudflare outage");
     });
 
-    const res = await app().request(
-      "/api/provision",
-      json({ agents: ["claude"], cloudflareToken: "valid-looking" }, headers),
-      env,
-    );
+    const res = await saveConfiguration(env, headers, {
+      agents: ["claude"],
+      cloudflareToken: "valid-looking",
+    });
     expect(res.status).toBe(503);
     expect((await res.json()) as { error: string }).toMatchObject({
-      error: expect.stringContaining("remove the token to launch now"),
+      error: expect.stringContaining("temporarily unavailable"),
     });
     expect((await env.DB.prepare("SELECT * FROM containers").all()).results).toHaveLength(0);
   });
@@ -611,6 +692,67 @@ describe("GET /api/dashboard", () => {
 });
 
 describe("POST /api/container/:op", () => {
+  it("upgrades a Free instance only after its Premium owner explicitly opts in", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env, "user-1", "paid");
+    await seedHost(env, {
+      daemon_pubkey: hostKeys.publicKey,
+      vcpu_capacity: 1,
+      vcpu_allocated: 1,
+      ram_allocated_mb: 1536,
+      disk_allocated_gb: 10,
+    });
+    await seedContainer(env, { tier: "free", status: "running" });
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+    const headers = await login(env, user);
+
+    expect((await env.DB.prepare("SELECT * FROM container_plan_transitions").all()).results)
+      .toEqual([]);
+    const response = await app().request(
+      "/api/container/upgrade",
+      { method: "POST", headers },
+      env,
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      result: "resizing",
+      container: { tier: "paid", status: "running" },
+    });
+    expect(await env.DB.prepare(
+      "SELECT from_tier, to_tier, state FROM container_plan_transitions",
+    ).first()).toEqual({
+      from_tier: "free",
+      to_tier: "paid",
+      state: "complete",
+    });
+    expect(await env.DB.prepare(
+      "SELECT vcpu_available FROM host_availability WHERE id = 'host-1'",
+    ).first()).toEqual({ vcpu_available: -1 });
+  });
+
+  it("rejects an instance upgrade without current Premium access", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedHost(env);
+    await seedContainer(env, { tier: "free", status: "running" });
+    const headers = await login(env, user);
+
+    const response = await app().request(
+      "/api/container/upgrade",
+      { method: "POST", headers },
+      env,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "An active Premium plan is required to upgrade this instance.",
+    });
+    expect((await env.DB.prepare("SELECT * FROM container_plan_transitions").all()).results)
+      .toEqual([]);
+  });
+
   it("refuses ops that the current status does not allow", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
@@ -651,6 +793,56 @@ describe("POST /api/container/:op", () => {
     expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
     const row = await env.DB.prepare("SELECT status FROM containers").first<{ status: string }>();
     expect(row?.status).toBe("destroying");
+  });
+
+  it("allows destroy to supersede a terminal failed resize", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env, "user-1", "paid");
+    await seedHost(env, {
+      daemon_pubkey: hostKeys.publicKey,
+      vcpu_allocated: 2,
+      ram_allocated_mb: 4096,
+      disk_allocated_gb: 16,
+    });
+    await seedContainer(env, { status: "upgrade_pending" });
+    await env.DB.prepare(
+      `INSERT INTO container_plan_transitions
+         (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+          reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at,
+          last_error_code)
+       VALUES ('container-1', 'free', 'paid', 8, 'running', 'failed_retryable',
+               1, 2560, 6, 1, 2, 'resize_failed')`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, container_id, op, status, error, created_at, updated_at)
+       VALUES ('failed-resize', 'container-1', 'resize', 'failed',
+               'The device already exists', 1, 2)`,
+    ).run();
+    const headers = await login(env, user);
+
+    const dashboard = await app().request("/api/dashboard", { headers }, env);
+    const view = await dashboard.json() as { container: { allowedOps: string[] } };
+    expect(view.container.allowedOps).toEqual(["destroy"]);
+
+    const daemon = fakeDaemon();
+    stubFetch(daemon.route);
+    const response = await app().request(
+      "/api/container/destroy",
+      { method: "POST", headers },
+      env,
+    );
+
+    expect(response.status).toBe(202);
+    expect(daemon.submitted).toMatchObject([{ op: "destroy" }]);
+    expect(await env.DB.prepare(
+      "SELECT state, reserved_cpu, reserved_ram_mb, reserved_disk_gb FROM container_plan_transitions",
+    ).first()).toEqual({
+      state: "cancelled",
+      reserved_cpu: 1,
+      reserved_ram_mb: 2560,
+      reserved_disk_gb: 6,
+    });
+    expect(await getContainerForUser(env, user.id)).toMatchObject({ status: "destroying" });
   });
 
   it("returns a conflict instead of enqueueing a second lifecycle operation", async () => {
@@ -709,6 +901,43 @@ describe("POST /api/container/:op", () => {
     const res = await app().request("/api/container/retry", { method: "POST", headers }, env);
     expect(res.status).toBe(202);
     expect(daemon.submitted).toMatchObject([{ op: "rebuild" }]);
+  });
+});
+
+describe("POST /api/container/cancel", () => {
+  it("withdraws a hostless waitlisted placement and removes its queue entry", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "waitlisted", host_id: null, ssh_port: null });
+    await env.DB.prepare("INSERT INTO waitlist (user_id, requested_at) VALUES (?, ?)")
+      .bind(user.id, Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/container/cancel", { method: "POST", headers }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?").bind(user.id).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT user_id FROM waitlist WHERE user_id = ?").bind(user.id).first()).toBeNull();
+  });
+
+  it("does not withdraw a placement after admission starts", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    await seedContainer(env, { status: "provisioning", host_id: null, ssh_port: null });
+    await env.DB.prepare("INSERT INTO waitlist (user_id, requested_at, admitted_at) VALUES (?, ?, ?)")
+      .bind(user.id, Date.now(), Date.now())
+      .run();
+    const headers = await login(env, user);
+
+    const response = await app().request("/api/container/cancel", { method: "POST", headers }, env);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Placement has already started; it cannot be withdrawn now.",
+    });
+    expect(await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?").bind(user.id).first()).not.toBeNull();
   });
 });
 
@@ -787,7 +1016,7 @@ describe("SSH key management", () => {
     expect(daemon.submitted).toMatchObject([{ op: "sync-keys" }]);
   });
 
-  it("provisions multiple imported keys with their optional names", async () => {
+  it("saves multiple imported keys and uses them when deploying", async () => {
     const { env } = makeEnv();
     const user = await seedUser(env);
     await seedHost(env, { daemon_pubkey: hostKeys.publicKey });
@@ -795,21 +1024,18 @@ describe("SSH key management", () => {
     const daemon = fakeDaemon();
     stubFetch(daemon.route);
 
-    const response = await app().request(
-      "/api/provision",
-      json({
-        agents: ["claude"],
-        sshKeys: [
-          { pubkey: PUBKEY, label: "laptop" },
-          { pubkey: "ssh-rsa AAAAB3NzaC1yc2E= desktop@home", label: "desktop" },
-        ],
-      }, headers),
-      env,
-    );
+    const response = await saveConfiguration(env, headers, {
+      agents: ["claude"],
+      sshKeys: [
+        { pubkey: PUBKEY, label: "laptop" },
+        { pubkey: "ssh-rsa AAAAB3NzaC1yc2E= desktop@home", label: "desktop" },
+      ],
+    });
 
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     const keys = await env.DB.prepare("SELECT label FROM ssh_keys ORDER BY id").all<{ label: string }>();
     expect(keys.results).toEqual([{ label: "laptop" }, { label: "desktop" }]);
+    expect((await deploy(env, headers)).status).toBe(202);
     expect(daemon.submitted).toMatchObject([{ op: "provision" }]);
   });
 

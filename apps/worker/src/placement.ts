@@ -1,10 +1,9 @@
 import {
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
   SERVICE_PLANS,
   TIERS,
   type Agent,
   type ServicePlan,
+  type Tier,
 } from "@workbench/contract";
 import { allocatePort, NoFreePortsError } from "./ports.js";
 import {
@@ -18,6 +17,7 @@ import {
   getContainerForUser,
   HostJobAdmissionError,
 } from "./jobs.js";
+import { accountAccess, effectiveEntitlementForUser } from "./entitlements.js";
 import type { Bindings, ContainerRow, UserRow } from "./types.js";
 
 interface ProvisionInput {
@@ -48,11 +48,23 @@ export async function startProvision(
   env: Bindings,
   user: UserRow,
   input: ProvisionInput,
+  requestedTier: Tier,
 ): Promise<ContainerRow> {
-  const servicePlan = servicePlanForSubscription(user.subscription_status);
+  const entitlement = await effectiveEntitlementForUser(env, user);
+  const access = accountAccess(user, entitlement);
+  if (
+    (requestedTier === "free" && !access.verified) ||
+    (requestedTier === "paid" && !access.premium)
+  ) {
+    throw new ProvisioningNotAllowedError(user.subscription_status);
+  }
+  const servicePlan = requestedTier === "free"
+    ? servicePlanForSubscription("free")
+    : servicePlanForSubscription(entitlement.plan ?? "");
   const tierName = servicePlan.tier;
   const tier = TIERS[tierName];
-  const placementClass = servicePlan.hostType;
+  const placementClass = servicePlan.placementClass;
+  const placementMode = servicePlan.tenancyMode;
   const containerId = crypto.randomUUID();
   const now = Date.now();
   const agents = JSON.stringify(input.agents);
@@ -71,7 +83,7 @@ export async function startProvision(
       env,
       {
         userId: user.id,
-        hostType: placementClass,
+        tenancyMode: placementMode,
         cpu: reservedCpu,
         ramMb: tier.ramMb,
         diskGb: reservedDiskGb,
@@ -94,27 +106,21 @@ export async function startProvision(
     try {
       results = (await env.DB.batch([
         env.DB.prepare(
-          `WITH request(cpu, ram_mb, disk_gb, ram_overcommit_num, ram_overcommit_den) AS (
-             VALUES (?, ?, ?, ?, ?)
+          `WITH request(cpu, ram_mb, disk_gb) AS (
+             VALUES (?, ?, ?)
            )
            INSERT INTO containers
              (id, user_id, host_id, ssh_port, agents, github_repos, tier,
-              placement_class, cpu, ram_mb, disk_gb, status, created_at)
-           SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
-           FROM hosts h, request r
+              placement_class, placement_mode, cpu, ram_mb, disk_gb, status, created_at)
+           SELECT ?, ?, h.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?
+           FROM host_availability h, request r
            WHERE h.id = ? AND h.status = 'active'
-             AND h.host_type = ?
-             AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?)
-             AND h.max_tenants > (
-               SELECT COUNT(*) FROM containers existing WHERE existing.host_id = h.id
-             )
-             AND h.vcpu_allocated + r.cpu <=
-               ((h.vcpu_capacity + r.cpu - 1) / r.cpu) * r.cpu
-             AND h.ram_allocated_mb + r.ram_mb <=
-               (((h.ram_total_mb - h.ram_reserve_mb) * r.ram_overcommit_num
-                 + (r.ram_overcommit_den * r.ram_mb) - 1)
-                / (r.ram_overcommit_den * r.ram_mb)) * r.ram_mb
-             AND h.disk_total_gb - h.disk_allocated_gb >= r.disk_gb
+             AND h.tenancy_mode = ?
+             AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = ?)
+             AND h.tenant_slots_available > 0
+             AND h.vcpu_available >= r.cpu
+             AND h.ram_available_mb >= r.ram_mb
+             AND h.disk_available_gb >= r.disk_gb
              AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?
              AND h.consecutive_failures = 0
              AND h.daemon_version IS NOT NULL
@@ -125,8 +131,6 @@ export async function startProvision(
           reservedCpu,
           tier.ramMb,
           reservedDiskGb,
-          HOST_RAM_OVERCOMMIT_NUMERATOR,
-          HOST_RAM_OVERCOMMIT_DENOMINATOR,
           containerId,
           user.id,
           port,
@@ -134,12 +138,13 @@ export async function startProvision(
           githubRepos,
           tierName,
           placementClass,
+          placementMode,
           tier.cpu,
           tier.ramMb,
           tier.diskGb,
           now,
           host.id,
-          placementClass,
+          placementMode,
           user.id,
           heartbeatCutoff,
         ),
@@ -197,9 +202,9 @@ export async function startProvision(
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO containers
-           (id, user_id, agents, github_repos, tier, placement_class, cpu,
-            ram_mb, disk_gb, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waitlisted', ?)`,
+           (id, user_id, agents, github_repos, tier, placement_class, placement_mode,
+            cpu, ram_mb, disk_gb, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waitlisted', ?)`,
       ).bind(
         containerId,
         user.id,
@@ -207,6 +212,7 @@ export async function startProvision(
         githubRepos,
         tierName,
         placementClass,
+        placementMode,
         tier.cpu,
         tier.ramMb,
         tier.diskGb,

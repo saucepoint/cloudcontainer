@@ -10,7 +10,7 @@ hardware size is assumed. The destructive isolation gate is
 Use these sources in this order:
 
 1. `SPEC.md` defines product behavior and release acceptance.
-2. `infra/host-policy.sh` defines the executable host-class resource policy.
+2. `infra/host-policy.sh` defines the executable host tenancy/resource policy.
 3. `infra/hostctl.sh` is the only normal host-registration and fleet-mutation
    client.
 4. `infra/configure-multitenant.sh` applies policy to a drained host, while
@@ -23,69 +23,68 @@ The fleet API validates transitions and the controller keeps failed hosts out
 of placement. Account billing and entitlement administration is separate from
 host registration.
 
-## Host classes and capacity
+## Host tenancy and capacity
 
-An account is placed only on its exact class. There is no fallback from one
-class to another.
+`budget` and `regular` remain legacy operational labels, but both map to shared
+tenancy and accept either Free or Paid. Dedicated remains account-bound.
 
-| Host class | Account plan | Advertised CPU | Incus/host reservation | RAM | Swap | Home + root disk | Maximum tenants |
+| Tenancy / plan | Advertised CPU | Incus/host reservation | RAM | Swap | Home + root disk | Maximum tenants |
 |---|---|---:|---:|---:|---:|---:|---:|
-| `budget` | `free` | 1 vCPU | 1 vCPU | 1536 MiB | 1024 MiB | 5 + 5 GiB | calculated |
-| `regular` | `paid` | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | calculated |
-| `dedicated` | `dedicated` paid account | 2 vCPU | 3 vCPU | 4096 MiB | disabled | 8 + 8 GiB | exactly 1 |
+| shared / Free | 1 vCPU | 1 vCPU | 1536 MiB | 1024 MiB | 5 + 5 GiB | host safety ceiling plus additive budgets |
+| shared / Paid | 2 vCPU | 2 vCPU | 4096 MiB | 1536 MiB | 8 + 8 GiB | host safety ceiling plus additive budgets |
+| dedicated / paid account | 2 vCPU | 2 vCPU | 4096 MiB | 1536 MiB | 8 + 8 GiB | exactly 1 |
 
 Bootstrap computes a conservative ceiling from the actual host:
 
-    vcpu_capacity = detected_online_vcpus * VCPU_OVERCOMMIT
+    vcpu_capacity = detected_online_vcpus * 4
     ram_reserve = max(3072 MiB, ceil(8% of total system RAM), HOST_RAM_RESERVE_MB)
     safe_disk = floor(storage_pool_bytes * DISK_CAPACITY_PERCENT / 100)
 
     max_tenants = min(
-      ceil(vcpu_capacity / class_provisioned_vcpu),
-      ceil((total_system_ram - ram_reserve) * 1.25 / class_ram),
-      floor(safe_disk / (class_home_disk + class_root_disk)),
-      floor(host_swap / class_swap) when class_swap is nonzero,
+      floor(vcpu_capacity / smallest_tenant_vcpu),
+      floor((total_system_ram - ram_reserve) * 1.25 / smallest_tenant_ram),
+      floor(safe_disk / smallest_tenant_home_and_root_disk),
+      floor(host_swap / largest_tenant_swap) when swap is nonzero,
       available isolated 65,536-ID maps after one image-build map
     )
 
-The CPU multiplier defaults to its supported maximum of 4; operators may lower
-it to any integer from 1 through 4. The default safe-disk fraction is 70%.
+The CPU oversubscription factor is fixed at 4x. The default safe-disk fraction is 70%.
 The script also caps capacity to the available isolated subordinate ID ranges.
-Dedicated hosts clamp the result to one. A host with no complete slot fails
-bootstrap; never override that failure merely to advertise capacity.
+Dedicated hosts clamp the result to one. A shared host's safety ceiling is
+derived from one class-neutral resource shape; the legacy label affects only a
+compatibility profile default. It is not an admission input. A host with no
+complete slot fails bootstrap; never override that failure merely to advertise
+capacity.
 
 `max_tenants` is an additional hard ceiling. Every placement also rechecks
-tenant count, vCPU, allocatable RAM, reserved disk, health, exact class, and a
-dedicated account assignment in the same D1 reservation transaction.
-Capacity belongs to the individual host row, not the class. For example,
-budget hosts registered with 4 vCPU/8 GiB and 8 vCPU/16 GiB are supported in
-the same pool and yield different ceilings. At the default 4x CPU policy, the
-4-vCPU budget host has 16 reservation units (16 CPU slots) and 5120 MiB of
-allocatable RAM (five 1.25x RAM slots), so RAM binds at five tenants. The
-8-vCPU/16-GiB budget host has 32 reservation units (32 CPU slots) and 13312 MiB
-of allocatable RAM (twelve 1.25x RAM slots), so RAM binds at twelve. An
-independent 8-vCPU/16-GiB regular host has eleven CPU slots and five RAM slots
-and therefore binds at five. These examples assume disk, swap, and ID maps do
-not impose a lower safety ceiling.
+tenant count, the requested container's actual 1/2-vCPU reservation, RAM,
+doubled disk quota, health, tenancy mode, and a dedicated
+account assignment in the same D1 reservation transaction. Capacity belongs to
+the individual host row. Shared Incus projects deliberately leave aggregate
+CPU/RAM limits unset so an in-place upgrade can cross a placement target; each
+instance retains its exact hard tier limits.
+Every shared host reserves enough physical swap for the worst case in which all
+tenant slots use the largest configured shared-tier allowance. The scheduler
+may admit any safe Free/Paid combination that fits; `max_tenants` is not a
+promise that every resource can be exhausted.
 
-CPU can bind instead: a 4-vCPU/16-GiB budget host configured with
-`--vcpu-overcommit 1` has four CPU slots but eleven RAM slots. The registered
-`max_tenants` is always the minimum, never a promise that every dimension will
-be exhausted equally.
+An in-place tier upgrade is allowed to exceed the CPU or RAM target. Such a
+host remains active and its calculated availability becomes negative, so it
+receives no new tenant until downgrades or destroys restore enough headroom.
 
-Higher RAM reserve, lower CPU overcommit, or lower disk fraction may be set with
-the onboarding options `--ram-reserve-mb`, `--vcpu-overcommit`, and
-`--disk-capacity-percent`. They are persisted as non-secret root-owned host
-policy so later audits and deployments use the same values. The file accepts
-only those three numeric keys and is not evaluated as shell code. Record every
-override in the host inventory. Do not change class or reduce limits on an
-active host.
+Higher RAM reserve, lower disk fraction, or a static tenant partition may be
+set with `--ram-reserve-mb`, `--disk-capacity-percent`, or `--tenant-limit`.
+They are persisted as non-secret root-owned host policy so later audits and
+deployments use the same values. The file accepts only those numeric keys plus
+the ignored legacy CPU-overcommit key, and is not evaluated as shell code.
+Record every override in the host inventory. Do not change class or reduce
+limits on an active host.
 
-Host class may change only through `hostctl reclass` while the host is drained,
-empty, and has no active job. The command updates the daemon and Incus policy,
-submits a fresh class-specific capacity report, audits, probes, and then
-restores prior active state when eligible. Never rewrite the class in D1 around
-existing tenants.
+Legacy host class or tenancy may change only through `hostctl reclass` while
+the host is drained, empty, and has no active job. The command updates both
+daemon class and tenancy mode, submits a fresh capacity report, audits, probes,
+and then restores prior active state when eligible. Never rewrite either field
+in D1 around existing tenants.
 
 After an intentional CPU, RAM, storage, swap, ID-map, or persisted policy
 change, reconcile and re-register the conservative values through the
@@ -103,7 +102,7 @@ leaves the host draining.
 | State | Meaning |
 |---|---|
 | `draining` | No new placement or daemon jobs; existing tenants remain and already-started jobs can finish; probes and releases are allowed. |
-| `active` | Eligible for exact-class placement after a recent signed probe reporting the exact class, daemon release, and hardware telemetry. |
+| `active` | Eligible for tenancy-compatible placement after a recent signed probe reporting class, tenancy mode, daemon release, and hardware telemetry. |
 | `unhealthy` | Automatically quarantined after repeated daemon failures; a valid reconciler probe recovers it. |
 | `dead` | Retired generation; cannot reactivate, but its empty ID may be replaced as a new generation or deregistered. |
 
@@ -138,7 +137,7 @@ On every host:
 - outbound package access and Incus kernel support;
 - a quota-capable ZFS pool; production storage must use native encryption and
   a rehearsed key-unlock procedure;
-- enough host swap for every budget slot; and
+- enough host swap for every shared tenant slot's worst-case Free allowance; and
 - DNS plus a publicly trusted daemon certificate usable by the Worker.
 
 Loop-backed ZFS (`--zfs-loop-gb`) and the bootstrap self-signed certificate
@@ -180,6 +179,16 @@ re-home targets, then repairs `vcpu_allocated` from the historical 2/3-vCPU tier
 reservations while leaving each container's advertised 1/2-vCPU value intact.
 It is expand-only; Worker rollback does not remove these fields.
 
+Migration `0019_monetization_foundation.sql` adds tenancy and rollout fields,
+backfills `budget` and `regular` to shared and `dedicated` to dedicated, and
+adds entitlement, Stripe event, and in-place transition state. Existing
+paid/dedicated users become explicit manual entitlements. Apply the migration
+and compatible Worker first. Migration `0024_host_availability.sql` adds the
+canonical availability projection and removes class/capability gating from
+current shared placement without rewriting existing reservations. Its legacy
+D1 capability column remains for expand-first compatibility but is not a
+current placement input; host identity resets clear stale evidence.
+
 Confirm the API and inventory without exposing the secret on a command line:
 
     read -rs FLEET_ADMIN_SECRET && export FLEET_ADMIN_SECRET
@@ -197,7 +206,7 @@ endpoint is strictly probed by the first fleet deployment:
       --management-user root \
       --yes
 
-The first daemon fleet deployment applies the canonical class policy to each
+The first daemon fleet deployment applies the canonical tenancy/resource policy to each
 drained host before auditing and restarting it:
 
     npm run hostctl -- deploy --all
@@ -208,6 +217,13 @@ audit and placement evidence, then run `hostctl probe` followed by `hostctl
 state HOST_ID active`. Existing tenants remain assigned while the host is
 draining. If an approximate legacy capacity backfill does not match the
 canonical host calculation, run `hostctl capacity HOST_ID` before activation.
+
+For the mixed-tier release, keep `BILLING_ENABLED` absent or `0`, deploy every
+shared daemon, and require a successful administrator probe showing
+`tenancyMode=shared`. The policy deployment must
+preserve each existing container's `user.workbench.tier`; Free may have 5 or
+grandfathered 8 GiB disks, while Paid must retain 8 GiB. Record a mixed
+Free/Paid staging placement and in-place resize before enabling new sales.
 
 ## Staging and shared physical hosts
 
@@ -248,7 +264,7 @@ the full physical host ceiling in both databases would permit overcommit even
 though each scheduler is internally correct. `HOST_TENANT_LIMIT` therefore
 caps each environment's Incus project and D1 host row. The sum of production
 and staging caps must not exceed the resource-derived ceiling for the shared
-host class.
+host allocation.
 
 Before adding one staging slot to a production host whose current safe ceiling
 is `N`:
@@ -339,8 +355,10 @@ From a clean repository root:
       --tls-key-path /etc/letsencrypt/live/daemon-fsn-1.example.com/privkey.pem \
       --activate
 
-Use `--type regular` for shared paid capacity. A dedicated account must
-already have the `dedicated` operator entitlement; then onboard with both:
+Both `--type budget` and `--type regular` create shared-tenancy daemons; the
+label selects only a compatibility profile default, not capacity or which plans
+the host can admit. A dedicated account must already have the
+`dedicated` operator entitlement; then onboard with both:
 
     npm run hostctl -- onboard \
       --id dedicated-fsn-2 \
@@ -359,7 +377,7 @@ Onboarding performs all of the following:
    explicit `--replace-dead`), then runs typecheck, lint, and all tests;
 2. copies source without Git metadata, dependencies, or local secrets;
 3. installs locked production dependencies and host services;
-4. applies the class policy and calculates this machine's capacity;
+4. applies the tenancy/resource policy and calculates this machine's capacity;
 5. builds `workbench-base`, unless `--skip-image` is explicit;
 6. runs the read-only host audit;
 7. registers only public metadata as `draining`;
@@ -373,8 +391,8 @@ checks.
 A failure after registration leaves the host draining. Inspect and fix the
 cause, then use `hostctl probe` and `hostctl state`; do not bypass the checks.
 Legacy reduced stats remain readable by the rolling reconciler, but an
-administrator probe rejects a daemon that omits class or release identity and
-cannot use it to activate a host.
+administrator probe rejects a daemon that omits class, tenancy mode, or release
+identity and cannot use it to activate a host.
 Bootstrap metadata is retained at `/etc/workbench/registration.json` for
 inspection, but the normal controller submits it.
 
@@ -392,10 +410,10 @@ the old port quarantine, and retains the retired generation for audit:
     npm run hostctl -- probe budget-fsn-1
     npm run hostctl -- audit budget-fsn-1
 
-Run the class-specific gates in `MULTITENANT_TESTING.md`. Do not accept a host
+Run the tenancy/resource gates in `MULTITENANT_TESTING.md`. Do not accept a host
 whose signed hardware report is lower than its registered conservative RAM or
 supported vCPU capacity, whose local CPU/RAM/disk/tenant ceiling falls below
-the D1 registration, whose daemon reports another ID/class, whose base image is
+the D1 registration, whose daemon reports another ID/class/tenancy mode, whose base image is
 missing, or whose Incus audit fails.
 
 ## Routine fleet operations
@@ -441,10 +459,19 @@ For an empty draining dedicated host, change its account assignment with:
 The API accepts only an active account with the dedicated paid entitlement.
 It rejects assignment changes while the host has a tenant or active job.
 
-When an entitlement changes, the existing environment remains deliberately on
-its persisted tier/class so ordinary lifecycle jobs do not diverge from the
-daemon. Apply the new plan explicitly; this destroys the old Incus container
-and its host-local home volume before returning the row to the matching FIFO:
+Paid entitlement makes an in-place upgrade available, but an existing Free
+container changes only after its owner opts in from the dashboard. Paid-to-Free
+remains automatic when access ends. Positive resource deltas are reserved
+before dispatch; no capacity leaves the current container usable and pending.
+A failed resize retains the delta for safe retry, and success restores the
+prior running/stopped state. Paid-to-Free retains the grown disk allocation.
+Inspect transition state in D1/support tooling and let the reconciler retry; do
+not release claimed capacity or rewrite the actual tier manually.
+
+Use the following explicit destructive operation only for a tenancy change,
+legacy recovery, or another reviewed case that cannot resize in place. It
+destroys the old Incus container and host-local home volume before returning
+the row to the matching FIFO:
 
     npm run hostctl -- rehome CONTAINER_ID --yes
 
@@ -466,6 +493,74 @@ to the registered host ID/class, clears old endpoint telemetry, and probes. If
 either endpoint cannot be verified, the host remains draining. Changing
 certificate files on the host is a separate SSH/TLS operation; update the
 endpoint only after the certificate is trusted and installed.
+
+## Paid billing rollout and incidents
+
+Never enable sales merely because Stripe secrets exist. The launch gate is
+open only when all of the following are complete:
+
+1. migrations through `0024` and the compatible Worker are deployed;
+2. every active shared daemon reports `tenancyMode=shared`, and a mixed
+   placement/resize staging run passed;
+3. the monthly Paid Price, currency, tax policy, supported payment methods,
+   Customer Portal cancellation-at-period-end behavior, Portal login link, and
+   Checkout redirect for Customers with an active subscription are approved;
+4. `usebench-billing-events` and its dead-letter Queue exist, with
+   `BILLING_EVENTS` configured as producer and consumer per `README.md`;
+5. the Stripe event destination points to `/api/stripe/webhook`, uses API
+   version `2026-07-29.dahlia`, the live account API version in Stripe
+   Workbench is also `2026-07-29.dahlia`, and the destination subscribes to the
+   event set in `MONETIZATION.md`;
+6. Stripe sandbox acceptance covers paid bypass, redirect non-grant, renewal,
+   seven-day trial activation, zero-value opening invoice, trial cancellation,
+   failed first charge, failed renewal, scheduled paid cancellation/undo,
+   expiry, resubscription, and running/stopped/over-target resize; and
+7. the on-call operator has reviewed Queue retry/DLQ visibility and capacity
+   headroom.
+
+Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` only with Wrangler secrets.
+`STRIPE_LIVE_MODE=1`, `STRIPE_PRICE_PAID_MONTHLY`,
+`PAID_PLAN_MONTHLY_PRICE`, `PAID_PLAN_CURRENCY`,
+`BILLING_CHECKOUT_SESSION_MINUTES`, `STRIPE_TAX_ENABLED`, `BILLING_GRACE_DAYS`,
+and `BILLING_EXPORT_WINDOW_DAYS` are non-secret policy configuration. Confirm
+the display amount and currency
+exactly match the configured Stripe Price before launch. Leave
+`BILLING_EXPORT_WINDOW_DAYS` absent until the export duration, notices, and
+destruction policy have been explicitly approved. Run the normal release gates
+and deploy first with `BILLING_ENABLED=0`. Verify authenticated
+`/api/billing/status`, webhook delivery, Queue consumption, and DLQ visibility
+in the target environment. Run `npm run hostctl -- billing-config` and require
+`ready: true`, `salesEnabled: false`, `expectedLiveMode: true`, plus
+`stripePrice.valid: true` before opening sales. For production, switch every
+Stripe resource and secret to live mode, then enable `BILLING_ENABLED=1` only
+for a controlled live canary using a real payment method. Do not use sandbox
+objects, test keys, or test payment methods in the production canary.
+
+To stop new sales, set `BILLING_ENABLED=0` and deploy. Do not disable the
+webhook, Queue consumer, scheduled canonical reconciliation, or Portal for
+existing subscribers. A webhook Queue publication failure intentionally
+returns non-2xx so Stripe retries. Consumer failures retain a sanitized D1
+event code and retry; investigate unsupported Price, Customer/user mismatch,
+duplicate live subscriptions, or Stripe availability before replaying a DLQ
+message. Replaying the same event ID is safe after the cause is fixed.
+
+For billing incidents, inspect non-secret IDs and deadlines only. Never log or
+copy webhook bodies, card/payment-method data, addresses, secret keys, or
+Customer emails. `invoice.paid` is the only event that may advance
+`service_until`, and only when the invoice is settled and the canonical
+subscription is `active`; the zero-value opening trial invoice must not advance
+it, while a legitimate settled renewal covered by credits or discounts may.
+Trial access is bounded
+by `trial_end`. Payment failure must not be repaired by manually extending a
+deadline.
+Use `GET /api/admin/billing/USER_ID` with the fleet bearer for the redacted
+support projection. After fixing capacity or daemon health, the scoped
+`POST /api/admin/billing/USER_ID/retry-transition` action safely requests the
+same idempotent transition. Do not edit claimed transition deltas or actual
+container tiers. If a paid
+bypass owner expires, keep the documented suspension/export path; automatic
+destruction is forbidden without an explicit configured deadline and required
+notice evidence.
 
 ## Daemon fleet releases
 
@@ -499,7 +594,7 @@ For each non-dead selected host, the controller:
 5. copies the clean checkout without credentials or local configuration;
 6. runs the locked production install and safely fills missing legacy fleet
    identity fields when no old-project tenant would be stranded;
-7. reapplies the registered class policy;
+7. reapplies the registered tenancy/resource policy;
 8. installs and restarts the systemd service with the Git release identity;
 9. audits the Incus policy, base image, exact host identity, and verifies the
    locally calculated capacity still covers every D1-advertised ceiling;
@@ -650,7 +745,7 @@ Marking a non-empty host dead requires `--force` and is deliberately noisy:
 
 Forced retirement performs control-plane evacuation, not storage recovery: it
 fails active jobs, detaches eligible desired rows, clears the old dedicated
-assignment, and queues destructive reprovisioning on healthy exact-class
+assignment, and queues destructive reprovisioning on healthy tenancy-compatible
 capacity. There is still no backup restore, replication, automatic failover,
 or live migration. Never force-retire a host that owns the only copy of user
 data unless that loss is explicitly accepted.

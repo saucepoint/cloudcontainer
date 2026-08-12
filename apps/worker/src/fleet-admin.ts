@@ -1,12 +1,7 @@
 import {
   ContainerRehomeSchema,
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
-  hostCpuRamTenantCeiling,
-  cpuReservationCeiling,
-  ramReservationCeiling,
   SERVICE_PLANS,
   TIERS,
   type HostCapacity,
@@ -25,6 +20,11 @@ import type { AppContext, ContainerRow, HostRow } from "./types.js";
 interface FleetHostRow extends HostRow {
   tenant_count: number;
   active_job_count: number;
+  vcpu_available: number;
+  ram_capacity_mb: number;
+  ram_available_mb: number;
+  disk_available_gb: number;
+  tenant_slots_available: number;
 }
 
 async function fleetAuthFailure(c: Context<AppContext>): Promise<Response | null> {
@@ -49,7 +49,7 @@ async function getFleetHost(env: AppContext["Bindings"], hostId: string): Promis
        (SELECT COUNT(*)
         FROM jobs j JOIN containers c ON c.id = j.container_id
         WHERE c.host_id = h.id AND j.status IN ('queued','running')) AS active_job_count
-     FROM hosts h
+     FROM host_availability h
      WHERE h.id = ?`,
   )
     .bind(hostId)
@@ -60,6 +60,7 @@ function fleetHostView(host: FleetHostRow) {
   return {
     id: host.id,
     hostType: host.host_type,
+    tenancyMode: host.tenancy_mode,
     status: host.status,
     sshHostname: host.ssh_hostname,
     daemonEndpoint: host.daemon_endpoint,
@@ -72,13 +73,18 @@ function fleetHostView(host: FleetHostRow) {
     activeJobCount: host.active_job_count,
     vcpuCapacity: host.vcpu_capacity,
     vcpuAllocated: host.vcpu_allocated,
+    vcpuAvailable: host.vcpu_available,
     reportedCpuLogical: host.reported_cpu_logical,
     ramTotalMb: host.ram_total_mb,
     ramReserveMb: host.ram_reserve_mb,
     ramAllocatedMb: host.ram_allocated_mb,
+    ramCapacityMb: host.ram_capacity_mb,
+    ramAvailableMb: host.ram_available_mb,
     reportedRamTotalMb: host.reported_ram_total_mb,
     diskTotalGb: host.disk_total_gb,
     diskAllocatedGb: host.disk_allocated_gb,
+    diskAvailableGb: host.disk_available_gb,
+    tenantSlotsAvailable: host.tenant_slots_available,
     daemonVersion: host.daemon_version,
     joinedAt: host.joined_at,
     lastSeenAt: host.last_seen_at,
@@ -93,10 +99,13 @@ async function dedicatedAccountIsEligible(
   userId: string,
 ): Promise<boolean> {
   const user = await env.DB.prepare(
-    `SELECT id FROM users
-     WHERE id = ? AND status = 'active' AND subscription_status = 'dedicated'`,
+    `SELECT u.id FROM users u
+     JOIN account_entitlements e ON e.user_id = u.id
+     WHERE u.id = ? AND u.status = 'active'
+       AND e.plan = 'dedicated' AND e.source = 'manual' AND e.state = 'manual'
+       AND (e.service_until IS NULL OR e.service_until > ?)`,
   )
-    .bind(userId)
+    .bind(userId, Date.now())
     .first<{ id: string }>();
   return user !== null;
 }
@@ -120,32 +129,11 @@ function capacityError(
   capacity: HostCapacity,
   hostType = host.host_type,
 ): string | null {
-  const tierName = hostType === "budget" ? "free" : "paid";
-  const tier = TIERS[tierName];
-  const resourceCeiling = Math.min(
-    hostCpuRamTenantCeiling(capacity, tierName),
-    Math.floor(capacity.diskTotalGb / (tier.diskGb * 2)),
-  );
-  if (capacity.maxTenants > resourceCeiling) {
-    return "tenant ceiling exceeds CPU, RAM, or disk capacity";
-  }
   if (hostType === "dedicated" && capacity.maxTenants !== 1) {
     return "dedicated hosts must have exactly one tenant slot";
   }
   if (capacity.maxTenants < host.tenant_count) {
     return "tenant ceiling is below the current tenant count";
-  }
-  if (cpuReservationCeiling(capacity.vcpuCapacity, tierName) < host.vcpu_allocated) {
-    return "vCPU capacity is below the current reservation";
-  }
-  if (
-    ramReservationCeiling(
-      capacity.ramTotalMb,
-      capacity.ramReserveMb,
-      tierName,
-    ) < host.ram_allocated_mb
-  ) {
-    return "RAM capacity is below the current reservation";
   }
   if (capacity.diskTotalGb < host.disk_allocated_gb) {
     return "disk capacity is below the current reservation";
@@ -266,6 +254,9 @@ async function retireHost(
            placement_class = CASE (
              SELECT u.subscription_status FROM users u WHERE u.id = containers.user_id
            ) WHEN 'free' THEN 'budget' WHEN 'paid' THEN 'regular' ELSE 'dedicated' END,
+           placement_mode = CASE (
+             SELECT u.subscription_status FROM users u WHERE u.id = containers.user_id
+           ) WHEN 'dedicated' THEN 'dedicated' ELSE 'shared' END,
            cpu = CASE (
              SELECT u.subscription_status FROM users u WHERE u.id = containers.user_id
            ) WHEN 'free' THEN 1 ELSE 2 END,
@@ -328,11 +319,11 @@ async function registerHost(c: Context<AppContext>): Promise<Response> {
        (id, ipv4, ipv6, ssh_hostname, daemon_endpoint, daemon_cert_fp,
         daemon_pubkey, ram_total_mb, ram_allocated_mb, ram_reserve_mb,
         vcpu_capacity, vcpu_allocated, disk_total_gb, disk_allocated_gb,
-        status, joined_at, last_seen_at, consecutive_failures, host_type,
+        status, joined_at, last_seen_at, consecutive_failures, host_type, tenancy_mode,
         max_tenants, dedicated_user_id, management_hostname, management_port,
         management_user, generation, retired_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, 0, 'draining', ?, NULL, 0,
-             ?, ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, ?, ?, ?,
              COALESCE((SELECT MAX(generation) + 1 FROM host_history WHERE host_id = ?), 1),
              NULL)
      ON CONFLICT DO NOTHING`,
@@ -351,6 +342,7 @@ async function registerHost(c: Context<AppContext>): Promise<Response> {
       host.diskTotalGb,
       Date.now(),
       host.hostType,
+      host.hostType === "dedicated" ? "dedicated" : "shared",
       host.maxTenants,
       host.dedicatedUserId ?? null,
       host.managementHostname,
@@ -404,9 +396,9 @@ async function replaceDeadHost(c: Context<AppContext>): Promise<Response> {
            ram_allocated_mb = 0, ram_reserve_mb = ?, vcpu_capacity = ?,
            vcpu_allocated = 0, disk_total_gb = ?, disk_allocated_gb = 0,
            status = 'draining', joined_at = ?, last_seen_at = NULL,
-           consecutive_failures = 0, host_type = ?, max_tenants = ?,
+           consecutive_failures = 0, host_type = ?, tenancy_mode = ?, max_tenants = ?,
            dedicated_user_id = ?, management_hostname = ?, management_port = ?,
-           management_user = ?, daemon_version = NULL,
+           management_user = ?, daemon_version = NULL, daemon_capabilities = NULL,
            reported_ram_total_mb = NULL, reported_cpu_logical = NULL,
            generation = generation + 1, retired_at = NULL
        WHERE id = ? AND status = 'dead'
@@ -424,6 +416,7 @@ async function replaceDeadHost(c: Context<AppContext>): Promise<Response> {
       registration.diskTotalGb,
       now,
       registration.hostType,
+      registration.hostType === "dedicated" ? "dedicated" : "shared",
       registration.maxTenants,
       registration.dedicatedUserId ?? null,
       registration.managementHostname,
@@ -504,8 +497,11 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
        WHERE id = ? AND status = 'draining'
          AND (? IS NULL OR EXISTS (
            SELECT 1 FROM users eligible
+           JOIN account_entitlements entitlement ON entitlement.user_id = eligible.id
            WHERE eligible.id = ? AND eligible.status = 'active'
-             AND eligible.subscription_status = 'dedicated'
+             AND entitlement.plan = 'dedicated'
+             AND entitlement.source = 'manual' AND entitlement.state = 'manual'
+             AND (entitlement.service_until IS NULL OR entitlement.service_until > ?)
          ))
          AND (? IS NULL OR NOT EXISTS (
            SELECT 1 FROM hosts assigned
@@ -517,6 +513,7 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
         host.id,
         parsed.data.dedicatedUserId,
         parsed.data.dedicatedUserId,
+        Date.now(),
         parsed.data.dedicatedUserId,
         parsed.data.dedicatedUserId,
         host.id,
@@ -542,15 +539,16 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
     const capacity = parsed.data.capacity;
     const changed = await c.env.DB.prepare(
       `UPDATE hosts
-       SET host_type = ?, ram_total_mb = ?, ram_reserve_mb = ?, vcpu_capacity = ?,
+       SET host_type = ?, tenancy_mode = ?, ram_total_mb = ?, ram_reserve_mb = ?, vcpu_capacity = ?,
            disk_total_gb = ?, max_tenants = ?, last_seen_at = NULL,
            consecutive_failures = 0, reported_ram_total_mb = NULL,
-           reported_cpu_logical = NULL, daemon_version = NULL,
+           reported_cpu_logical = NULL, daemon_version = NULL, daemon_capabilities = NULL,
            dedicated_user_id = CASE WHEN ? = 'dedicated' THEN dedicated_user_id ELSE NULL END
        WHERE id = ? AND status = 'draining'`,
     )
       .bind(
         targetHostType,
+        targetHostType === "dedicated" ? "dedicated" : "shared",
         capacity.ramTotalMb,
         capacity.ramReserveMb,
         capacity.vcpuCapacity,
@@ -572,21 +570,14 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
       return c.json({ error: "a dead host cannot be returned to service in place" }, 409);
     }
     if (requestedStatus === "active") {
-      const tierName = host.host_type === "budget" ? "free" : "paid";
       if (host.host_type === "dedicated" && !host.dedicated_user_id) {
         return c.json({ error: "assign a dedicated account before activation" }, 409);
       }
       if (
         host.tenant_count > host.max_tenants ||
-        host.vcpu_allocated > cpuReservationCeiling(host.vcpu_capacity, tierName) ||
-        host.ram_allocated_mb > ramReservationCeiling(
-          host.ram_total_mb,
-          host.ram_reserve_mb,
-          tierName,
-        ) ||
         host.disk_allocated_gb > host.disk_total_gb
       ) {
-        return c.json({ error: "registered capacity does not cover existing reservations" }, 409);
+        return c.json({ error: "registered hard capacity is below existing reservations" }, 409);
       }
       const healthy =
         host.last_seen_at !== null &&
@@ -620,15 +611,6 @@ async function updateHost(c: Context<AppContext>): Promise<Response> {
            AND consecutive_failures = 0 AND daemon_version IS NOT NULL
            AND reported_ram_total_mb IS NOT NULL
            AND reported_cpu_logical IS NOT NULL
-           AND vcpu_allocated <=
-             ((vcpu_capacity + CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END - 1)
-              / CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END)
-             * CASE WHEN host_type = 'budget' THEN 1 ELSE 3 END
-           AND ram_allocated_mb <=
-             ((((ram_total_mb - ram_reserve_mb) * ${HOST_RAM_OVERCOMMIT_NUMERATOR}
-                + (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END) - 1)
-               / (${HOST_RAM_OVERCOMMIT_DENOMINATOR} * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END))
-              * CASE WHEN host_type = 'budget' THEN 1536 ELSE 4096 END)
            AND disk_allocated_gb <= disk_total_gb
            AND max_tenants >= (SELECT COUNT(*) FROM containers WHERE host_id = hosts.id)
            AND (host_type <> 'dedicated' OR dedicated_user_id IS NOT NULL)`,
@@ -726,14 +708,16 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
     await c.env.DB.batch([
       c.env.DB.prepare(
         `UPDATE containers
-         SET tier = ?, placement_class = ?, cpu = ?, ram_mb = ?, disk_gb = ?,
+         SET tier = ?, placement_class = ?, placement_mode = ?,
+             cpu = ?, ram_mb = ?, disk_gb = ?,
              status = 'waitlisted', status_detail = 'plan change awaiting placement',
              host_key_fingerprints = NULL, rehome_tier = NULL,
              rehome_placement_class = NULL, rehome_requested_at = NULL
          WHERE id = ? AND host_id IS NULL`,
       ).bind(
         target.tier,
-        target.hostType,
+        target.placementClass,
+        target.tenancyMode,
         targetTier.cpu,
         targetTier.ramMb,
         targetTier.diskGb,
@@ -773,7 +757,7 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
          AND status IN ('queued','running')
          AND op IN ('provision','rebuild','start','stop','destroy','resize')
      )`,
-  ).bind(target.tier, target.hostType, Date.now(), container.id, host.id).run();
+  ).bind(target.tier, target.placementClass, Date.now(), container.id, host.id).run();
   if (!claimed.meta.changes) {
     return c.json({ error: "container state changed concurrently; reload and retry" }, 409);
   }
@@ -783,7 +767,11 @@ async function rehomeContainer(c: Context<AppContext>): Promise<Response> {
   try {
     const job = await enqueueJob(c.env, "destroy", container, host);
     return c.json({
-      container: { id: container.id, targetTier: target.tier, targetHostType: target.hostType },
+      container: {
+        id: container.id,
+        targetTier: target.tier,
+        targetHostType: target.placementClass,
+      },
       job: { id: job.id, status: job.status },
     }, 202);
   } catch (error) {
@@ -807,12 +795,13 @@ async function probeHost(c: Context<AppContext>): Promise<Response> {
     stats = await daemonStats(c.env, host);
     if (
       stats.hostType === undefined ||
+      stats.tenancyMode === undefined ||
       stats.version === undefined ||
       stats.cpuLogical === undefined
     ) {
       await c.env.DB.prepare(
         `UPDATE hosts
-         SET last_seen_at = NULL, daemon_version = NULL,
+         SET last_seen_at = NULL, daemon_version = NULL, daemon_capabilities = NULL,
              reported_ram_total_mb = NULL, reported_cpu_logical = NULL
          WHERE id = ? AND status IN ('active','draining','unhealthy')`,
       )
@@ -845,7 +834,7 @@ export const fleetAdminRoutes = new Hono<AppContext>()
          (SELECT COUNT(*)
           FROM jobs j JOIN containers ct ON ct.id = j.container_id
           WHERE ct.host_id = h.id AND j.status IN ('queued','running')) AS active_job_count
-       FROM hosts h
+       FROM host_availability h
        ORDER BY h.host_type, h.id`,
     ).all<FleetHostRow>();
     c.header("cache-control", "no-store");

@@ -14,7 +14,7 @@ export const TS_HEADER = "x-cs-timestamp";
 export const NONCE_HEADER = "x-cs-nonce";
 
 /** Max allowed clock skew between signer and verifier, seconds. */
-export const TIMESTAMP_WINDOW_SEC = 300;
+const TIMESTAMP_WINDOW_SEC = 300;
 
 export function generateEd25519Keypair(): { publicKey: string; privateKey: string } {
   const priv = ed25519.utils.randomPrivateKey();
@@ -22,7 +22,7 @@ export function generateEd25519Keypair(): { publicKey: string; privateKey: strin
   return { publicKey: toB64(pub), privateKey: toB64(priv) };
 }
 
-export function canonicalString(
+function canonicalString(
   method: string,
   path: string,
   timestamp: string,

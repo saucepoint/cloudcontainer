@@ -7,6 +7,7 @@ import {
   type LlmProvider,
 } from "@workbench/contract";
 import type { NotificationView } from "../notifications.js";
+import { formatMonthlyPrice } from "../price.js";
 import { AgentLogo, AgentLogoItem, ExternalLinkIcon, GitHubLogoIcon } from "./icons.js";
 import { Layout } from "./layout.js";
 
@@ -55,7 +56,10 @@ const LandingTerminalFallback: FC = () => (
   </div>
 );
 
-export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
+export const LandingPage: FC<{
+  devAuth: boolean;
+  paidPlan?: { price: string; currency: string; interval: "month" } | null;
+}> = ({ devAuth, paidPlan = null }) => (
   <Layout>
     <div class="landing-hero">
       <h1 class="landing-title">Your <i>free</i> cloud terminal</h1>
@@ -85,7 +89,9 @@ export const LandingPage: FC<{ devAuth: boolean }> = ({ devAuth }) => (
         </li>
         <li>
           <span class="landing-copy">2 vCPU · 4.0 GB RAM · <span class="landing-only-desktop">Storage for 8-10 projects</span><span class="landing-only-mobile">8-10 projects</span></span>
-          <span class="muted tier-label">coming soon</span>
+          <span class="tier-label">
+            {paidPlan ? formatMonthlyPrice(paidPlan.price, paidPlan.currency) : "coming soon"}
+          </span>
         </li>
         <li>
           Debian 13, ssh, tmux, git, bash, curl, and more
@@ -130,9 +136,7 @@ export const VerificationPage: FC<{
   >
     <h1>Verify your account.</h1>
     <p class="lead">
-      The free tier is limited to one account per person. {worldIdAvailable
-        ? "Verify with World ID or redeem a single-use invite"
-        : "Redeem a single-use invite"} before creating your workbench.
+      The free tier is limited to one account per person and requires account verification.
     </p>
     <div
       id="account-verification-root"
@@ -173,6 +177,41 @@ export const AccountPage: FC<{
   worldIdVerified?: boolean;
   notifications?: NotificationView[];
   unreadNotificationCount?: number;
+  billing?: {
+    configured: boolean;
+    trialEligible?: boolean;
+    paidPlan: {
+      price: string;
+      currency: string;
+      interval: "month";
+      trialDays: number;
+      display: string;
+    } | null;
+    entitlement: {
+      eligible: boolean;
+      plan: string | null;
+      source: string | null;
+      state: string;
+      accessUntil: number | null;
+    };
+    billing: {
+      plan: string;
+      source: string;
+      state: string;
+      trialUntil: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+    subscription: {
+      status: string;
+      cancelAtPeriodEnd: boolean;
+      cancelAt: number | null;
+      trialStart: number | null;
+      trialEnd: number | null;
+      serviceUntil: number | null;
+      graceUntil: number | null;
+    } | null;
+  };
 }> = ({
   passkeyCount,
   continueHref,
@@ -182,12 +221,13 @@ export const AccountPage: FC<{
   worldIdVerified = false,
   notifications = [],
   unreadNotificationCount = notifications.filter((notification) => notification.readAt === null).length,
+  billing,
 }) => {
   const containerMustBeDestroyed = containerStatus !== null && containerStatus !== "waitlisted";
   return (
     <Layout title="Account" loggedIn notificationCount={unreadNotificationCount}>
       <h1>{welcome ? "Your account is ready." : "Account."}</h1>
-      <p class="lead">Manage passkeys, credentials, and notifications for your account.</p>
+      <p class="lead">Manage your plan, passkeys, credentials, and notifications.</p>
       <section id="notifications" class="card" aria-labelledby="notifications-heading" data-unread-count={unreadNotificationCount}>
         <div class="card-head">
           <h2 id="notifications-heading">Notifications</h2>
@@ -237,6 +277,50 @@ export const AccountPage: FC<{
         ) : null}
         <p id="notifications-status" class="muted" role="status" aria-live="polite"></p>
       </section>
+      {billing ? (
+        <section id="billing" class="card" aria-labelledby="billing-heading">
+          <div class="card-head">
+            <h2 id="billing-heading">Plan</h2>
+            <span class={`badge ${billing.entitlement.plan === "paid" ? "running" : "stopped"}`}>
+              {billing.entitlement.plan === "paid" ? "Premium" : billing.entitlement.plan ?? "No active plan"}
+            </span>
+          </div>
+          {billing.billing?.source === "stripe" && billing.subscription &&
+          !["canceled", "incomplete_expired"].includes(billing.subscription.status) ? (
+            <>
+              <p>
+                {billing.billing.state === "trialing" && billing.billing.trialUntil
+                  ? `Trial ends ${new Date(billing.billing.trialUntil).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                  : billing.billing.state === "expired" && billing.subscription.trialEnd
+                  ? "Trial access ended"
+                  : billing.billing.serviceUntil
+                  ? `${billing.subscription.cancelAtPeriodEnd ? "Paid until" : "Current period ends"} ${new Date(billing.billing.serviceUntil).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                  : "Confirming payment…"}
+              </p>
+              <p class="muted">
+                When Premium access ends, your workbench is stopped before its machine limits change. Save active work first. Unsaved progress may be lost. Files already on the persistent disk are retained, including storage above the standard Free allocation.
+              </p>
+              <button id="billing-portal-btn" class="btn secondary" type="button">
+                {billing.subscription.cancelAtPeriodEnd ? "Undo cancellation in billing" : "Manage billing"} →
+              </button>
+            </>
+          ) : billing.billing?.source === "manual" ? (
+            <p>Operator-managed {billing.billing.plan} entitlement.</p>
+          ) : billing.configured && billing.paidPlan ? (
+            <>
+              <p>
+                Upgrade to 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(billing.paidPlan.price, billing.paidPlan.currency)}.
+              </p>
+              <button id="billing-checkout-btn" class="btn primary" type="button">
+                {billing.trialEligible === false
+                  ? "Subscribe to Premium →"
+                  : "Start 7-day Premium trial →"}
+              </button>
+            </>
+          ) : <p class="muted">Premium subscriptions are not available yet.</p>}
+          <p id="billing-status" class="muted" role="status" aria-live="polite"></p>
+        </section>
+      ) : null}
       <section class="card" aria-labelledby="passkeys-heading">
         <div class="card-head">
           <h2 id="passkeys-heading">Passkeys</h2>
@@ -464,10 +548,9 @@ export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
         virtual machine. We may change, suspend, or discontinue features, limits, images, or infrastructure.
       </p>
       <p>
-        As of the effective date, there is no self-service paid subscription or automatic recurring billing.
-        Free access and operator-entitled paid or dedicated access may be offered under
-        separate plan information. If self-service subscriptions are introduced, the checkout flow and the
-        subscription terms below will apply.
+        Free access, self-service Premium subscriptions, and operator-entitled service may be offered under
+        separate plan information. When Premium checkout is available, the checkout flow and the subscription
+        terms below apply.
       </p>
 
       <h2>2. Accounts</h2>
@@ -545,9 +628,9 @@ export const TermsPage: FC<{ loggedIn?: boolean }> = ({ loggedIn = false }) => (
         export anything you need first. Sections that should reasonably survive termination continue to apply.
       </p>
 
-      <h2>7. Future subscriptions</h2>
+      <h2>7. Subscriptions</h2>
       <p>
-        If we offer a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
+        If you start a paid subscription, the price, billing interval, renewal date, taxes, and cancellation
         method will be shown before purchase. Unless the checkout terms say otherwise, a cancellation prevents
         the next renewal and does not automatically refund the current period.
       </p>
@@ -629,7 +712,7 @@ export const NotFoundPage: FC = () => (
   </Layout>
 );
 
-export const OnboardingPage: FC<{
+export const ConfigurePage: FC<{
   githubAvailable?: boolean;
   notificationCount?: number;
 }> = ({ githubAvailable = false, notificationCount = 0 }) => (
@@ -664,7 +747,7 @@ export const OnboardingPage: FC<{
             ))}
           </div>
         </fieldset>
-        <details class="onboarding-api-keys">
+        <details class="configuration-api-keys">
           <summary>Add API keys</summary>
           <SigninProvider
             id="copilot"
@@ -705,7 +788,7 @@ export const OnboardingPage: FC<{
             <a
               id="github-connect"
               class="btn secondary"
-              href="/auth/github?return_to=/onboarding"
+              href="/auth/github?return_to=/configure"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -849,20 +932,20 @@ export const OnboardingPage: FC<{
       <section id="setup-review" class="card" hidden aria-labelledby="setup-review-heading">
         <h2 id="setup-review-heading" tabindex={-1}>Review your setup</h2>
         <p class="muted">
-          Confirm the choices below before provisioning. Secret values are never shown here or stored in the setup draft.
+          Confirm the choices below before saving. Secret values are never shown here or stored in the setup draft.
         </p>
         <ul id="setup-review-items" class="check"></ul>
         <div class="row">
           <button id="review-back" class="btn secondary" type="button">Back to editing</button>
-          <button id="review-confirm" class="btn primary" type="button">Create workbench →</button>
+          <button id="review-confirm" class="btn primary" type="button">Save</button>
         </div>
       </section>
 
       <button id="go" class="btn primary create-workbench-btn" type="submit">
-        Create workbench →
+        Save
       </button>
       <div id="err" class="err" role="alert" aria-live="assertive" tabindex={-1}></div>
     </form>
-    <script type="module" src="/onboarding.js"></script>
+    <script type="module" src="/configure.js"></script>
   </Layout>
 );

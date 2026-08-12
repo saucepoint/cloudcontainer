@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
-import { HOST_TYPES, type HostType } from "@workbench/contract";
+import { HOST_TYPES, TENANCY_MODES, type HostType, type TenancyMode } from "@workbench/contract";
 
 export interface DaemonConfig {
   hostId: string;
   hostType: HostType;
+  /** Optional in old config files; budget/regular derive shared, dedicated derives dedicated. */
+  tenancyMode?: TenancyMode;
   listenPort: number;
   /** Ed25519 public key (base64) of the control-plane Worker; verifies signed RPCs. */
   workerRpcPublicKey: string;
@@ -41,6 +43,13 @@ export function loadConfig(path = process.env.WB_DAEMON_CONFIG ?? DEFAULT_PATH):
   }
   const hostType = raw.hostType ?? "budget";
   if (!HOST_TYPES.includes(hostType)) throw new Error(`invalid daemon host type: ${hostType}`);
+  const tenancyMode = raw.tenancyMode ?? (hostType === "dedicated" ? "dedicated" : "shared");
+  if (!TENANCY_MODES.includes(tenancyMode)) {
+    throw new Error(`invalid daemon tenancy mode: ${tenancyMode}`);
+  }
+  if ((hostType === "dedicated") !== (tenancyMode === "dedicated")) {
+    throw new Error("daemon host type and tenancy mode conflict");
+  }
   const listenPort = raw.listenPort ?? 8443;
   if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
     throw new Error("invalid daemon listenPort");
@@ -67,6 +76,7 @@ export function loadConfig(path = process.env.WB_DAEMON_CONFIG ?? DEFAULT_PATH):
   return {
     hostId: raw.hostId!,
     hostType,
+    tenancyMode,
     listenPort,
     workerRpcPublicKey: raw.workerRpcPublicKey!,
     x25519PrivateKey: raw.x25519PrivateKey!,

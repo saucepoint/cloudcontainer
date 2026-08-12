@@ -18,21 +18,18 @@ import {
   GithubReposSchema,
   HostFleetUpdateSchema,
   HostRegistrationSchema,
-  HOST_RAM_OVERCOMMIT,
   HOST_RAM_OVERCOMMIT_DENOMINATOR,
   HOST_RAM_OVERCOMMIT_NUMERATOR,
   HOST_RAM_RESERVE_PERCENT,
   HOST_TYPES,
+  TENANCY_MODES,
   LLM_PROVIDERS,
   LlmKeysSchema,
-  MAX_HOST_VCPU_OVERCOMMIT,
+  HOST_VCPU_OVERCOMMIT,
   MIN_HOST_RAM_RESERVE_MB,
   TIERS,
   SERVICE_PLANS,
-  cpuTenantCeiling,
-  hostCpuRamTenantCeiling,
   minimumHostRamReserveMb,
-  ramTenantCeiling,
 } from "../src/types.js";
 
 const spec = {
@@ -54,19 +51,20 @@ describe("tier capacities", () => {
     expect(TIERS.free.diskGb).toBe(5);
   });
 
-  it("keeps the paid tier at 8 GiB disk without swap", () => {
+  it("gives the paid tier 1.5 GiB swap and 8 GiB disk", () => {
     expect(TIERS.paid.cpu).toBe(2);
-    expect(TIERS.paid.provisionedCpu).toBe(3);
-    expect(TIERS.paid.swapMb).toBe(0);
+    expect(TIERS.paid.provisionedCpu).toBe(2);
+    expect(TIERS.paid.swapMb).toBe(1536);
     expect(TIERS.paid.diskGb).toBe(8);
   });
 
-  it("maps free, paid, and dedicated service plans to isolated host pools", () => {
+  it("maps free and paid plans to shared tenancy while keeping dedicated isolated", () => {
     expect(HOST_TYPES).toEqual(["budget", "regular", "dedicated"]);
+    expect(TENANCY_MODES).toEqual(["shared", "dedicated"]);
     expect(SERVICE_PLANS).toEqual({
-      free: { tier: "free", hostType: "budget" },
-      paid: { tier: "paid", hostType: "regular" },
-      dedicated: { tier: "paid", hostType: "dedicated" },
+      free: { tier: "free", tenancyMode: "shared", placementClass: "budget" },
+      paid: { tier: "paid", tenancyMode: "shared", placementClass: "regular" },
+      dedicated: { tier: "paid", tenancyMode: "dedicated", placementClass: "dedicated" },
     });
   });
 
@@ -77,20 +75,9 @@ describe("tier capacities", () => {
     expect(minimumHostRamReserveMb(38400)).toBe(3072);
     expect(minimumHostRamReserveMb(38401)).toBe(3073);
     expect(minimumHostRamReserveMb(65536)).toBe(5243);
-    expect(MAX_HOST_VCPU_OVERCOMMIT).toBe(4);
-    expect(HOST_RAM_OVERCOMMIT).toBe(1.25);
+    expect(HOST_VCPU_OVERCOMMIT).toBe(4);
     expect(HOST_RAM_OVERCOMMIT_NUMERATOR).toBe(5);
     expect(HOST_RAM_OVERCOMMIT_DENOMINATOR).toBe(4);
-  });
-
-  it("rounds up CPU and 1.25x RAM tenant ceilings", () => {
-    expect(cpuTenantCeiling(16, "paid")).toBe(6);
-    expect(ramTenantCeiling(8192, 3072, "free")).toBe(5);
-    expect(hostCpuRamTenantCeiling({
-      ramTotalMb: 8192,
-      ramReserveMb: 3072,
-      vcpuCapacity: 16,
-    }, "free")).toBe(5);
   });
 });
 
@@ -134,7 +121,7 @@ describe("HostRegistrationSchema", () => {
       ...host,
       daemonPublicKey: "c2hvcnQ=",
     }).success).toBe(false);
-    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 25 }).success).toBe(false);
+    expect(HostRegistrationSchema.safeParse({ ...host, maxTenants: 25 }).success).toBe(true);
     expect(HostRegistrationSchema.safeParse({
       ...host,
       ramTotalMb: 65536,
@@ -142,7 +129,7 @@ describe("HostRegistrationSchema", () => {
     }).success).toBe(false);
   });
 
-  it("allows either RAM or vCPU to determine a shared host tenant ceiling", () => {
+  it("keeps the operational tenant ceiling independent of mixed resource admission", () => {
     const ramConstrained = {
       ...host,
       ramTotalMb: 8192,
@@ -155,7 +142,7 @@ describe("HostRegistrationSchema", () => {
     expect(HostRegistrationSchema.safeParse({
       ...ramConstrained,
       maxTenants: 6,
-    }).success).toBe(false);
+    }).success).toBe(true);
 
     const cpuConstrained = {
       ...host,
@@ -169,7 +156,7 @@ describe("HostRegistrationSchema", () => {
     expect(HostRegistrationSchema.safeParse({
       ...cpuConstrained,
       maxTenants: 5,
-    }).success).toBe(false);
+    }).success).toBe(true);
   });
 
   it("requires dedicated hosts to have exactly one slot and rejects assignments on shared hosts", () => {

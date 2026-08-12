@@ -119,65 +119,30 @@ const JOB_OPS = [
 ] as const;
 export type JobOp = (typeof JOB_OPS)[number];
 
-export const JOB_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
+const JOB_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
 export const TIERS = {
   // `cpu` is the public plan value. `provisionedCpu` is both the Incus limit
   // and the amount reserved from a host's independently registered capacity.
   free: { cpu: 1, provisionedCpu: 1, ramMb: 1536, swapMb: 1024, diskGb: 5 },
-  paid: { cpu: 2, provisionedCpu: 3, ramMb: 4096, swapMb: 0, diskGb: 8 },
+  paid: { cpu: 2, provisionedCpu: 2, ramMb: 4096, swapMb: 1536, diskGb: 8 },
 } as const;
 export type Tier = keyof typeof TIERS;
 
 export const HOST_TYPES = ["budget", "regular", "dedicated"] as const;
-export const HostTypeSchema = z.enum(HOST_TYPES);
+const HostTypeSchema = z.enum(HOST_TYPES);
 export type HostType = z.infer<typeof HostTypeSchema>;
+
+export const TENANCY_MODES = ["shared", "dedicated"] as const;
+const TenancyModeSchema = z.enum(TENANCY_MODES);
+export type TenancyMode = z.infer<typeof TenancyModeSchema>;
 
 export const MIN_HOST_RAM_RESERVE_MB = 3072;
 export const HOST_RAM_RESERVE_PERCENT = 8;
-export const MAX_HOST_VCPU_OVERCOMMIT = 4;
-export const HOST_RAM_OVERCOMMIT = 1.25;
+export const HOST_VCPU_OVERCOMMIT = 4;
 export const HOST_RAM_OVERCOMMIT_NUMERATOR = 5;
 export const HOST_RAM_OVERCOMMIT_DENOMINATOR = 4;
-
-export function cpuTenantCeiling(vcpuCapacity: number, tier: Tier): number {
-  return Math.ceil(vcpuCapacity / TIERS[tier].provisionedCpu);
-}
-
-export function ramTenantCeiling(
-  ramTotalMb: number,
-  ramReserveMb: number,
-  tier: Tier,
-): number {
-  return Math.ceil(
-    ((ramTotalMb - ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR) /
-      (HOST_RAM_OVERCOMMIT_DENOMINATOR * TIERS[tier].ramMb),
-  );
-}
-
-export function hostCpuRamTenantCeiling(
-  capacity: { ramTotalMb: number; ramReserveMb: number; vcpuCapacity: number },
-  tier: Tier,
-): number {
-  return Math.min(
-    cpuTenantCeiling(capacity.vcpuCapacity, tier),
-    ramTenantCeiling(capacity.ramTotalMb, capacity.ramReserveMb, tier),
-  );
-}
-
-/** Logical resource reservations allowed by the rounded tenant ceilings. */
-export function cpuReservationCeiling(vcpuCapacity: number, tier: Tier): number {
-  return cpuTenantCeiling(vcpuCapacity, tier) * TIERS[tier].provisionedCpu;
-}
-
-export function ramReservationCeiling(
-  ramTotalMb: number,
-  ramReserveMb: number,
-  tier: Tier,
-): number {
-  return ramTenantCeiling(ramTotalMb, ramReserveMb, tier) * TIERS[tier].ramMb;
-}
 
 export function minimumHostRamReserveMb(ramTotalMb: number): number {
   return Math.max(
@@ -192,29 +157,34 @@ export function minimumHostRamReserveMb(ramTotalMb: number): number {
  * than the shared regular pool.
  */
 export const SERVICE_PLANS = {
-  free: { tier: "free", hostType: "budget" },
-  paid: { tier: "paid", hostType: "regular" },
-  dedicated: { tier: "paid", hostType: "dedicated" },
-} as const satisfies Record<string, { tier: Tier; hostType: HostType }>;
+  // placementClass is persisted for backward-compatible container/rehome rows.
+  // It is never an input to shared-host scheduling, which keys on tenancyMode.
+  free: { tier: "free", tenancyMode: "shared", placementClass: "budget" },
+  paid: { tier: "paid", tenancyMode: "shared", placementClass: "regular" },
+  dedicated: { tier: "paid", tenancyMode: "dedicated", placementClass: "dedicated" },
+} as const satisfies Record<
+  string,
+  { tier: Tier; tenancyMode: TenancyMode; placementClass: HostType }
+>;
 export type ServicePlan = keyof typeof SERVICE_PLANS;
 
-export const HOST_STATUSES = ["active", "draining", "unhealthy", "dead"] as const;
-export const HostStatusSchema = z.enum(HOST_STATUSES);
+const HOST_STATUSES = ["active", "draining", "unhealthy", "dead"] as const;
+const HostStatusSchema = z.enum(HOST_STATUSES);
 export type HostStatus = z.infer<typeof HostStatusSchema>;
 
-export const ManagementHostnameSchema = z
+const ManagementHostnameSchema = z
   .string()
   .min(1)
   .max(253)
   .regex(/^[A-Za-z0-9._:-]+$/, "invalid management hostname");
 
-export const HostSshHostnameSchema = z
+const HostSshHostnameSchema = z
   .string()
   .min(1)
   .max(253)
   .regex(/^[A-Za-z0-9._:-]+$/, "invalid tenant SSH hostname");
 
-export const DaemonEndpointSchema = z
+const DaemonEndpointSchema = z
   .string()
   .url()
   .max(2048)
@@ -249,7 +219,7 @@ function validateHostRamReserve(
   }
 }
 
-export const HostCapacitySchema = z
+const HostCapacitySchema = z
   .object({
     ramTotalMb: z.number().int().positive(),
     ramReserveMb: z.number().int().nonnegative(),
@@ -301,22 +271,18 @@ export const HostRegistrationSchema = z
         message: "only dedicated hosts can be assigned to one account",
       });
     }
-    const tierName = host.hostType === "budget" ? "free" : "paid";
-    const tier = TIERS[tierName];
-    const resourceCeiling = Math.min(
-      hostCpuRamTenantCeiling(host, tierName),
-      Math.floor(host.diskTotalGb / (tier.diskGb * 2)),
-    );
-    if (host.maxTenants > resourceCeiling) {
+    const dedicatedFitsPaid = host.vcpuCapacity >= TIERS.paid.provisionedCpu &&
+      (host.ramTotalMb - host.ramReserveMb) * HOST_RAM_OVERCOMMIT_NUMERATOR >=
+        TIERS.paid.ramMb * HOST_RAM_OVERCOMMIT_DENOMINATOR &&
+      host.diskTotalGb >= TIERS.paid.diskGb * 2;
+    if (host.hostType === "dedicated" && !dedicatedFitsPaid) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["maxTenants"],
-        message: "tenant ceiling exceeds registered CPU, RAM, or disk capacity",
+        message: "dedicated host cannot fit the paid resource reservation",
       });
     }
   });
-export type HostRegistration = z.infer<typeof HostRegistrationSchema>;
-
 /** Validated host mutations accepted by the secret-authenticated fleet API. */
 export const HostFleetUpdateSchema = z
   .object({
@@ -383,14 +349,10 @@ export const HostFleetUpdateSchema = z
       });
     }
   });
-export type HostFleetUpdate = z.infer<typeof HostFleetUpdateSchema>;
-
 /** An orderly re-home destroys the old Incus container before re-provisioning. */
 export const ContainerRehomeSchema = z
   .object({ confirmDataLoss: z.literal(true) })
   .strict();
-export type ContainerRehome = z.infer<typeof ContainerRehomeSchema>;
-
 export const INPUT_LIMITS = {
   sshKeyBytes: 4096,
   sshKeysPerAccount: 64,
@@ -640,6 +602,9 @@ export const StatsResponseSchema = z
     hostId: z.string(),
     // Optional while a rolling fleet contains mixed daemon versions.
     hostType: HostTypeSchema.optional(),
+    tenancyMode: TenancyModeSchema.optional(),
+    /** Accepted from the previous daemon release; current placement ignores it. */
+    capabilities: z.array(z.string().min(1).max(128)).max(32).optional(),
     version: z.string().min(1).max(128).optional(),
     containers: z.array(ContainerStatSchema),
     ramTotalMb: z.number(),
@@ -657,6 +622,9 @@ export const HealthResponseSchema = z
     ok: z.boolean(),
     hostId: z.string(),
     hostType: HostTypeSchema.optional(),
+    tenancyMode: TenancyModeSchema.optional(),
+    /** Accepted from the previous daemon release; current placement ignores it. */
+    capabilities: z.array(z.string().min(1).max(128)).max(32).optional(),
     version: z.string(),
   })
   .strict();

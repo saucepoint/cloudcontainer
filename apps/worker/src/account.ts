@@ -20,10 +20,10 @@ export const accountRoutes = new Hono<AppContext>()
   .get("/account/continue", requireAccount, async (c) =>
     c.redirect(await postLoginPath(c.env, c.get("user").id)))
   .get("/verify", requireAccount, async (c) => {
-    if (c.get("user").verified_at) {
-      return c.redirect(await postLoginPath(c.env, c.get("user").id));
-    }
-    return c.html(String(VerificationPage({ worldIdAvailable: worldIdConfigured(c.env) })));
+    if (c.get("user").verified_at) return c.redirect("/dashboard");
+    return c.html(String(VerificationPage({
+      worldIdAvailable: worldIdConfigured(c.env),
+    })));
   })
   .post("/api/account/invite/verify", requireAccount, async (c) => {
     const user = c.get("user");
@@ -58,7 +58,7 @@ export const accountRoutes = new Hono<AppContext>()
     } catch {
       return c.json({ error: "That invite code is invalid or has already been used." }, 409);
     }
-    return c.json({ redirect: "/onboarding" });
+    return c.json({ redirect: await postLoginPath(c.env, user.id) });
   })
   .post("/api/account/world-id/request", requireAccount, async (c) => {
     const request = createWorldIdRequest(c.env, c.get("user").id);
@@ -100,9 +100,11 @@ export const accountRoutes = new Hono<AppContext>()
            )`,
       ).bind(now, now, user.id, c.env.WORLD_ID_ACTION, nullifier, user.id),
     ]) as Array<{ meta: { changes?: number } }>;
-    if (results[1]?.meta.changes) return c.json({ redirect: "/onboarding" });
+    if (results[1]?.meta.changes) return c.json({ redirect: await postLoginPath(c.env, user.id) });
 
-    const redirect = await postLoginPath(c.env, user.id);
-    if (redirect !== "/verify") return c.json({ redirect });
+    const refreshed = await c.env.DB.prepare("SELECT verified_at FROM users WHERE id = ?")
+      .bind(user.id)
+      .first<{ verified_at: number | null }>();
+    if (refreshed?.verified_at) return c.json({ redirect: await postLoginPath(c.env, user.id) });
     return c.json({ error: "This World ID has already verified an account." }, 409);
   });

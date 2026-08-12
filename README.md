@@ -7,11 +7,13 @@ learning VPS administration.
 
 Public signup is free with World ID or administrator-invite eligibility
 verification: one Incus system container per account, reached over public-key
-SSH. Operator-entitled paid and dedicated accounts are placement-ready, but
-Stripe, self-service upgrades, email, backups, and automatic failover are not
-current features. Environments are intentionally described as cloud containers
-rather than hardware-isolated VMs. See [SPEC.md](./SPEC.md) for the normative
-release contract.
+SSH. Paid Checkout, Portal, webhook reconciliation, and in-place resource
+transitions are implemented behind the disabled `BILLING_ENABLED` launch gate;
+they remain unavailable until Stripe, a Cloudflare Queue, and the corresponding
+Worker configuration are supplied. Dedicated service remains operator-managed.
+Email, backups, and automatic failover are not current features. Environments
+are intentionally described as cloud containers rather than hardware-isolated
+VMs. See [SPEC.md](./SPEC.md) for the normative release contract.
 
 ## Repository layout
 
@@ -34,18 +36,25 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    new passkey-first account through Better Auth. The same flow is available
    from a terminal with `npx usebench`: the CLI opens Google or GitHub in the
    browser, receives a one-time loopback callback, and resumes onboarding in
-   the terminal.
-2. A new or previously unverified account proves one-person eligibility with
-   World ID or redeems an eight-character, single-use administrator invite.
-   Existing verified accounts skip this step.
-3. Onboarding requires only one choice: one or more coding agents. SSH and all
+   the terminal. Browser authentication continues to `/configure` until a
+   workbench configuration is saved, then returns to `/dashboard`.
+2. Configuration requires only one choice: one or more coding agents. SSH and all
    model/developer credentials are optional, but model, GitHub, and Cloudflare
-   credentials must be selected before creating the server. Later credential
+   credentials must be selected before creating the instance. Saving returns
+   to the dashboard without allocating capacity. Later credential
    changes require manual terminal commands. When GitHub is configured, users
    can authorize the GitHub App and select repositories to clone automatically
    into `~/repos/<repo-name>`.
-4. The Worker maps the account to its enforced host class, reserves capacity
-   and an SSH port on an eligible healthy host, stores state in D1, seals
+3. The dashboard shows an expandable configuration summary and two instance
+   choices. The `1 vCPU 1.5GB RAM` Free choice requires permanent World ID or
+   invite verification. The `2 vCPU 4GB RAM` Premium choice requires a current
+   Premium subscription; verification and Premium are independent account
+   properties, so the four displayed states are Unverified, Verified, Premium,
+   and Verified premium.
+4. The Worker validates the selected tier against current account state, maps
+   the account to shared or dedicated tenancy, reserves the
+   requested container's exact CPU, RAM, disk, tenant slot, and an SSH port on
+   an eligible healthy host, stores state in D1, seals
    any credentials to the selected host, signs the request, and returns HTTP
    202 immediately.
 5. The daemon clones workbench-base inside a restricted Incus project,
@@ -57,13 +66,14 @@ There is no separate Pages application. One Worker serves the HTML and APIs.
    set drives dashboard and MOTD guidance even though every binary is available.
 6. The dashboard displays clear waiting/building/ready/error states. It reveals
    the SSH command and host-key fingerprints only after an SSH key is added. If
-   its matching capacity pool is full, that pool's FIFO waitlist is admitted
-   automatically by the reconciler without blocking independent host classes.
+   shared capacity is full, one Free/Paid FIFO uses bounded smaller-request
+   backfill with a starvation cap. Dedicated account-bound placement remains
+   independent.
 7. After the server is ready, a user without a key can copy an enrollment prompt
    to a local coding agent. The agent creates a local keypair, sends only the
    public key with a single-use one-hour token, and configures ssh workbench.
 
-The CLI mirrors the web onboarding choices: it can render a World ID QR code or
+The CLI mirrors the web configuration choices: it can render a World ID QR code or
 accept an invite, select and authenticate agents, connect GitHub and choose
 repositories, configure model/developer tools, and provision the environment.
 It reuses `~/.ssh/id_ed25519.pub` when requested or can create
@@ -161,6 +171,110 @@ Optional secrets:
   `AUTH_*_CLIENT_ID` variables.
 - WORLD_ID_SIGNING_KEY, paired with `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
   `WORLD_ID_ACTION`. Invite verification remains available without World ID.
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. These have no effect on new
+  sales until the Price, display amount/currency, Queue, and `BILLING_ENABLED=1`
+  are also configured.
+
+### Paid billing setup
+
+Billing is fail-closed and remains hidden unless all of these are present:
+
+- `BILLING_ENABLED=1`, set only after sandbox acceptance and a shared-fleet
+  capacity review;
+- `STRIPE_PRICE_PAID_MONTHLY`, containing the one supported recurring Price ID;
+- `STRIPE_LIVE_MODE=1` in production (`0` only in an isolated Stripe sandbox);
+- `PAID_PLAN_MONTHLY_PRICE` (a decimal such as `20.00`) and
+  `PAID_PLAN_CURRENCY` (an uppercase ISO code such as `USD`), matching that
+  Stripe Price and supplying the server-rendered price disclosure;
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as Worker secrets; and
+- a `BILLING_EVENTS` Cloudflare Queue bound as both producer and consumer.
+
+Optional non-secret policy variables are `STRIPE_TAX_ENABLED` (`0` until tax
+readiness is approved), `BILLING_GRACE_DAYS`, `BILLING_CHECKOUT_SESSION_MINUTES`
+(31–1440, default 60), and
+`BILLING_EXPORT_WINDOW_DAYS`. Omitting the export-window value disables
+automatic billing destruction; it is intentionally not given an implicit
+deadline. Omitted optional values use only the documented defaults; malformed
+explicit values fail billing configuration instead of silently changing policy.
+
+The production bindings are declared in `apps/worker/wrangler.jsonc`. Create
+their Queue and dead-letter Queue once before the first gated deployment:
+
+```sh
+cd apps/worker
+npx wrangler queues create usebench-billing-events
+npx wrangler queues create usebench-billing-events-dlq
+```
+
+The checked-in binding shape is:
+
+```jsonc
+"queues": {
+  "producers": [
+    { "binding": "BILLING_EVENTS", "queue": "usebench-billing-events" }
+  ],
+  "consumers": [
+    {
+      "queue": "usebench-billing-events",
+      "max_batch_size": 10,
+      "max_batch_timeout": 5,
+      "max_retries": 10,
+      "dead_letter_queue": "usebench-billing-events-dlq"
+    }
+  ]
+}
+```
+
+In Stripe, create one live monthly Paid Price, enable the Customer Portal for
+payment-method and invoice management, permit cancellation at period end, and
+leave arbitrary product/quantity switching disabled. Keep the Portal login link
+enabled and turn on Checkout's redirect for Customers that already have an
+active subscription; the Worker always passes the stored Customer ID. Upgrade
+the live account API version in Stripe Workbench to `2026-07-29.dahlia`, then
+register `https://YOUR_BASE_URL/api/stripe/webhook` as an account event
+destination with API version `2026-07-29.dahlia` and the event set listed in
+[MONETIZATION.md](./MONETIZATION.md#97-events-to-subscribe-to). Store the
+resulting signing secret with `wrangler secret put STRIPE_WEBHOOK_SECRET`.
+Restrict the webhook route at the Cloudflare edge to Stripe's published webhook
+IP ranges while retaining signature verification in the Worker.
+Under **Billing > Subscriptions and emails**, enable Stripe's trial-ending
+reminder, failed-payment emails, and a Stripe-hosted customer-management link;
+configure the cancellation-policy URL for the staging or production account as
+appropriate. These settings are part of card-network trial compliance and are
+separate for Stripe sandboxes and live mode. Configure Smart Retries according
+to the approved recovery policy; the application never infers a fixed retry
+schedule from Stripe events.
+
+Install the live credentials without placing values on the command line or in
+the repository:
+
+```sh
+cd apps/worker
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+Prefer a live restricted API key (`rk_live_...`). It needs Customers
+create/read, Checkout Sessions create, Billing Portal Sessions create, and
+Events, Prices, Subscriptions, Products, Invoices, and Charges read. With
+`BILLING_ENABLED=0`, deploy the compatible Worker and inspect the redacted
+preflight using `npm run hostctl -- billing-config`. Do not open sales until it
+reports `ready: true`, `salesEnabled: false`, `expectedLiveMode: true`, and a
+valid live Price. After the controlled live canary is ready, changing
+`BILLING_ENABLED` to `1` and redeploying is the final new-sales switch.
+
+Checkout always selects the configured Price server-side and confirms that its
+active Product, recurring interval, amount, currency, quantity model, and tax
+metadata match the published offer; its success redirect does not grant access.
+Only an account's first self-service Paid subscription receives the fixed
+seven-day trial. Checkout explicitly collects a payment method and asks Stripe
+to cancel if none is present at trial end. One local Checkout attempt remains
+active per account and supplies a stable Stripe idempotency key until completion
+or expiry. Before starting another Session, the Worker also checks the
+Customer's canonical Stripe subscription list, preventing an unsynced webhook
+from creating a duplicate or repeating an older trial. A canceled trial or
+failed first charge removes Paid access; verified
+owners return to Free resources, while paid-bypass owners are billing-suspended.
 
 Generate service keys with:
 
@@ -204,9 +318,19 @@ keys. Deploy and migrate it without touching production:
 Wrangler secrets are not inherited. Configure them with `--env staging`; never
 reuse `BETTER_AUTH_SECRET`, `CREDENTIAL_MASTER_KEY`, `WORKER_RPC_PRIVATE_KEY`,
 `INVITE_ADMIN_SECRET`, or `FLEET_ADMIN_SECRET` from production. Provider IDs
-are intentionally empty in the checked-in staging configuration. Before
-enabling a provider, register the staging callback URLs and then set both its
-public ID and its staging secret.
+are intentionally empty in the checked-in staging configuration, except for
+World ID. Staging reuses the production World ID app and relying party in the
+production environment, with the separate `verify-account-staging` action.
+Browser QA may use `/auth/staging-bypass` only when the staging Worker has a
+`STAGING_AUTH_BYPASS_SECRET`. The route is additionally hard-gated to the
+staging base URL and can create isolated QA accounts in each of the four account
+states. Never configure this secret in production or pass it in a URL.
+Store the same RP signing key in the staging Worker separately:
+
+    npx wrangler secret put WORLD_ID_SIGNING_KEY --env staging
+
+Before enabling another provider, register the staging callback URLs and then
+set both its public ID and its staging secret.
 
 Fleet commands are also environment-scoped:
 
@@ -267,6 +391,8 @@ For World ID, create or migrate an application in the World Developer Portal,
 register its relying party, and set `WORLD_ID_APP_ID`, `WORLD_ID_RP_ID`, and
 `WORLD_ID_ACTION`. Store the RP signing key only as `WORLD_ID_SIGNING_KEY`.
 Production accepts only signed World ID 4 Proof of Human uniqueness requests.
+Staging uses the same app, relying party, environment, and signing key, but
+must use the separate `verify-account-staging` action.
 The Worker binds each proof signal to the authenticated account,
 forwards the unchanged result to the Developer Portal, and persists the
 returned nullifier so one person cannot verify multiple accounts.
@@ -290,6 +416,15 @@ shell history:
 
 The script targets `https://usebench.dev` by default. Pass `-- --url
 https://YOUR_BASE_URL` after the command to target another deployment.
+For staging, use the dedicated command so the target cannot be mistyped:
+
+    npm run create:invite:staging
+
+This command targets `https://staging.usebench.dev` and reads
+`INVITE_ADMIN_SECRET` from `~/.config/usebench/staging.env`, overriding any
+production value exported in the current shell. Set
+`USEBENCH_STAGING_ENV_FILE` to use another environment file. The command fails
+before making a request if that staging credential file is unavailable.
 
 The script prints one eight-character uppercase alphanumeric code. Send it to
 its intended recipient through a private channel. The recipient first signs in
@@ -379,14 +514,29 @@ host draining until its class policy and daemon have been deployed, audited,
 probed, and explicitly reactivated through the fleet controller. See the
 control-plane rollout in the runbook before applying it.
 `0015_host_lifecycle.sql` adds generation history and orderly re-home state.
-`0016_free_tier_cpu.sql` repairs host CPU accounting to the actual 1/3-vCPU
-reservations.
+`0016_free_tier_cpu.sql` repairs free-tier host CPU accounting to 1 vCPU.
 `0017_cli_auth.sql` adds expiring, one-time browser-to-terminal authentication
 handoffs for the `usebench` CLI. Apply the Worker migration and deploy the
 compatible Worker before publishing a CLI version that uses it.
 `0018_setup_drafts.sql` adds expiring, non-secret onboarding checkpoints so the
 browser and CLI can resume setup without storing pasted credentials or SSH key
 material. Apply the Worker migration before publishing a client that uses it.
+`0019_monetization_foundation.sql` is expand-first: it backfills shared versus
+dedicated tenancy, preserves existing paid/dedicated accounts as explicit
+manual entitlements, and adds trial/billing/event/transition state. Deploy the mixed
+shared-daemon release fleet-wide before setting `BILLING_ENABLED=1`.
+`0020_workbench_configurations.sql` separates durable, completed workbench
+configuration from expiring wizard drafts and backfills existing containers.
+`0021_paid_tier_cpu.sql` aligns existing Paid host accounting with its 2-vCPU
+reservation.
+`0022_billing_checkout_hardening.sql` records whether a Stripe Customer has
+already consumed the account-level trial so cancellation and resubscription
+cannot create another free-service period.
+`0023_paid_upgrade_opt_in.sql` retires legacy, unreserved Free-to-Paid resize
+intents so Premium owners explicitly choose when to resize an existing machine.
+`0024_host_availability.sql` adds the canonical availability projection. The
+legacy capability column remains in D1 for expand-first compatibility but no
+longer participates in current placement; identity resets clear stale evidence.
 
 The CLI package can be built and inspected without publishing:
 
@@ -436,25 +586,24 @@ also follow [infra/MULTITENANT_TESTING.md](./infra/MULTITENANT_TESTING.md).
 `hostctl` is the supported registration and mutation path; do not construct a
 hosts row with ad hoc SQL.
 
-Host classes are enforced end to end:
+Tenancy mode is enforced end to end. `budget` and `regular` remain legacy
+operational labels, but neither constrains shared placement:
 
-| Host class | Eligible account | Advertised / enforced shape | Tenant ceiling |
+| Tenancy | Eligible account | Advertised / enforced shape | Tenant ceiling |
 |---|---|---|---|
-| budget | free only | 1 / 1 vCPU, 1536 MiB RAM, 1 GiB swap, 5+5 GiB disk | calculated per host |
-| regular | paid only | 2 / 3 vCPU, 4096 MiB RAM, swap disabled, 8+8 GiB disk | calculated per host |
-| dedicated | one assigned paid account | paid shape | exactly one |
+| shared | free and paid | per-container Free or Paid shape | configured safety ceiling plus additive resource budgets |
+| dedicated | one assigned paid account | Paid shape | exactly one |
 
 Each host reserves `max(3072 MiB, ceil(8% of total system RAM))`; only the
-remainder is tenant RAM. Its CPU reservation capacity defaults to four times
-the detected online vCPU count, and an operator may select a lower multiplier
-from 1 through 4. CPU tenant capacity is rounded up after dividing by the
-class reservation, while RAM permits 1.25x oversubscription and is also rounded
-up. The calculated tenant ceiling is the minimum of those CPU/RAM limits plus
-safe disk, swap where required, and available isolated ID maps.
-The scheduler rechecks that ceiling and all resource counters transactionally.
-Every host registers its own numbers, so two budget hosts (for example 4
-vCPU/8 GiB and 8 vCPU/16 GiB) can have different ceilings, independent of an
-8-vCPU/16-GiB regular host.
+remainder is tenant RAM. Its CPU reservation target is four times the detected
+online vCPU count. Every admission adds that container's actual 1-vCPU Free or
+2-vCPU Paid reservation, hard RAM, and doubled home/root disk reservation.
+RAM permits 1.25x oversubscription. `max_tenants` remains a separate isolation
+and operational safety ceiling. Selection and the authoritative D1 write use
+the same live availability projection and recheck resource, health, tenancy,
+tenant, and port predicates. In-place upgrades may take availability below
+zero; the host remains active but receives no new tenant until later downgrades
+or destroys restore enough headroom.
 After a deliberate hardware or host-policy change,
 `npm run hostctl -- capacity HOST_ID` drains, recalculates, safely re-registers,
 audits, and probes the new ceiling before restoring prior active state.
@@ -480,9 +629,10 @@ image, audits the host, registers it as draining, probes the signed daemon, and
 activates only when explicitly requested. Existing-host updates use `hostctl
 deploy`; never rerun bootstrap as an update mechanism.
 
-`hostctl rehome` applies a changed account plan by destroying the old instance
-before waitlisting it on the new class. `hostctl reclass` safely repurposes an
-empty host. Forced dead-host retirement evacuates desired rows and frees a
+Ordinary Free/Paid plan changes resize in place and never invoke destructive
+re-home. `hostctl rehome` remains an explicit administrative, destructive path
+for tenancy changes and legacy recovery. `hostctl reclass` safely repurposes
+an empty host. Forced dead-host retirement evacuates desired rows and frees a
 dedicated assignment after the failed hardware is isolated; `onboard
 --replace-dead`, `history`, and `remove` provide the replacement and
 deregistration lifecycle without raw D1 edits. These are destructive
@@ -490,8 +640,9 @@ reprovisioning paths, not backup or live-migration features.
 
 ## Current limitations
 
-- Public signup is free; paid/dedicated entitlements are administrative until
-  Stripe, paid upgrade, email, and dunning UI exist.
+- Self-service Paid is launch-gated and unavailable until Stripe, Queue, policy,
+  capacity, tax, and sandbox acceptance are configured. Dedicated remains
+  operator-managed.
 - A development budget host may use file-backed ZFS, but every such host is
   explicitly non-production and contributes only its calculated safe capacity.
 - Development storage is file-backed ZFS without encryption. Production must

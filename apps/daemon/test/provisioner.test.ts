@@ -99,7 +99,7 @@ describe("naming", () => {
 });
 
 describe("provision command construction", () => {
-  it("rejects a tier that does not match the daemon host class", async () => {
+  it("accepts both tiers on shared hosts and rejects free jobs on dedicated hosts", async () => {
     const incus = new Incus(fakeExec([]));
     const budget = new Provisioner(incus, makeConfig());
     const freeRequest = provisionRequest();
@@ -107,10 +107,17 @@ describe("provision command construction", () => {
       ...freeRequest,
       spec: { ...freeRequest.spec, tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8 },
     };
-    await expect(budget.run(paidRequest)).rejects.toThrow("not allowed on a budget host");
+    await expect(budget.run(paidRequest)).resolves.toMatchObject({ hostKeyFingerprints: [] });
 
     const regular = new Provisioner(incus, { ...makeConfig(), hostType: "regular" });
-    await expect(regular.run(freeRequest)).rejects.toThrow("not allowed on a regular host");
+    await expect(regular.run(freeRequest)).resolves.toMatchObject({ hostKeyFingerprints: [] });
+
+    const dedicated = new Provisioner(incus, {
+      ...makeConfig(),
+      hostType: "dedicated",
+      tenancyMode: "dedicated",
+    });
+    await expect(dedicated.run(freeRequest)).rejects.toThrow("not allowed on a dedicated host");
   });
 
   it("creates volume, init with limits, home + ssh proxy devices, and starts", async () => {
@@ -1125,14 +1132,44 @@ describe("resize / destroy", () => {
       spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
     });
     const flat = calls.map((c) => c.args.join(" "));
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=3");
-    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=300%");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu=2");
+    expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=200%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory=4096MiB");
-    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=false");
-    expect(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"))
-      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=false"));
+    expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1536MiB");
+    expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1536MiB"))
+      .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=4096MiB"));
     expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
     expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=paid");
+    expect(flat.some((command) => command.startsWith("delete "))).toBe(false);
+    expect(flat.some((command) => command.startsWith("storage volume delete "))).toBe(false);
+    expect(flat.some((command) => command.startsWith("init "))).toBe(false);
+  });
+
+  it("updates an existing root disk override when retrying resize", async () => {
+    const calls: Call[] = [];
+    const fallback = fakeExec(calls);
+    const exec: ExecFn = async (cmd, args, stdin) => {
+      if (args.slice(0, 3).join(" ") === "config device override") {
+        calls.push({ args, ...(stdin !== undefined ? { stdin } : {}) });
+        throw new Error("incus config device override… failed: Error: The device already exists");
+      }
+      return fallback(cmd, args, stdin);
+    };
+    const provisioner = new Provisioner(new Incus(exec), makeConfig());
+
+    await expect(provisioner.run({
+      op: "resize",
+      jobId: "retry-resize",
+      containerId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      spec: { agents: ["claude"], tier: "paid", cpu: 2, ramMb: 4096, diskGb: 8, sshPort: 30500 },
+    })).resolves.toBeNull();
+
+    const flat = calls.map((call) => call.args.join(" "));
+    expect(flat).toContain("config device override workbench-aaaaaa root size=8GiB");
+    expect(flat).toContain("config device set workbench-aaaaaa root size=8GiB");
+    expect(flat).toContain("storage volume set default home-workbench-aaaaaa size=8GiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=paid");
   });
 
   it("keeps the Incus CPU limit equal to the scheduler reservation", async () => {
@@ -1148,6 +1185,7 @@ describe("resize / destroy", () => {
     expect(flat).toContain("config set workbench-aaaaaa limits.cpu=1");
     expect(flat).toContain("config set workbench-aaaaaa limits.cpu.allowance=100%");
     expect(flat).toContain("config set workbench-aaaaaa limits.memory.swap=1024MiB");
+    expect(flat).toContain("config set workbench-aaaaaa user.workbench.tier=free");
     expect(flat.indexOf("config set workbench-aaaaaa limits.memory.swap=1024MiB"))
       .toBeLessThan(flat.indexOf("config set workbench-aaaaaa limits.memory=1536MiB"));
   });

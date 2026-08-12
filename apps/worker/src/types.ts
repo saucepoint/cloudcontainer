@@ -4,8 +4,19 @@ import type {
   HostType,
   JobOp,
   JobStatus,
+  TenancyMode,
   Tier,
 } from "@workbench/contract";
+
+export interface BillingEventMessage {
+  eventId: string;
+  eventType: string;
+  eventCreated: number;
+}
+
+export interface BillingEventQueue {
+  send(message: BillingEventMessage): Promise<void>;
+}
 
 /**
  * Bindings = generated Cloudflare.Env (vars + D1 bindings from wrangler.jsonc)
@@ -23,6 +34,16 @@ export type Bindings = Omit<
   | "WORLD_ID_RP_ID"
   | "WORLD_ID_ACTION"
   | "WORLD_ID_ENVIRONMENT"
+  | "STRIPE_PRICE_PAID_MONTHLY"
+  | "STRIPE_LIVE_MODE"
+  | "PAID_PLAN_MONTHLY_PRICE"
+  | "PAID_PLAN_CURRENCY"
+  | "STRIPE_TAX_ENABLED"
+  | "BILLING_ENABLED"
+  | "BILLING_GRACE_DAYS"
+  | "BILLING_EXPORT_WINDOW_DAYS"
+  | "BILLING_CHECKOUT_SESSION_MINUTES"
+  | "BILLING_EVENTS"
   | "SSH_PORT_RANGE_START"
   | "SSH_PORT_RANGE_END"
 > & {
@@ -37,6 +58,15 @@ export type Bindings = Omit<
   WORLD_ID_RP_ID: string;
   WORLD_ID_ACTION: string;
   WORLD_ID_ENVIRONMENT: "production" | "staging";
+  STRIPE_PRICE_PAID_MONTHLY?: string;
+  STRIPE_LIVE_MODE?: string;
+  PAID_PLAN_MONTHLY_PRICE?: string;
+  PAID_PLAN_CURRENCY?: string;
+  STRIPE_TAX_ENABLED?: string;
+  BILLING_ENABLED?: string;
+  BILLING_GRACE_DAYS?: string;
+  BILLING_EXPORT_WINDOW_DAYS?: string;
+  BILLING_CHECKOUT_SESSION_MINUTES?: string;
   SSH_PORT_RANGE_START: string;
   SSH_PORT_RANGE_END: string;
   // secrets
@@ -47,10 +77,15 @@ export type Bindings = Omit<
   AUTH_GITHUB_CLIENT_SECRET?: string;
   WORLD_ID_SIGNING_KEY?: string;
   GITHUB_APP_CLIENT_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  BILLING_EVENTS?: BillingEventQueue;
   /** Protects the admin-only invite generation endpoint. Set with `wrangler secret put`. */
   INVITE_ADMIN_SECRET?: string;
   /** Protects host registration, health probes, and fleet state changes. */
   FLEET_ADMIN_SECRET?: string;
+  /** Enables the secret-gated QA login only on staging.usebench.dev. */
+  STAGING_AUTH_BYPASS_SECRET?: string;
 };
 
 export interface UserRow {
@@ -87,6 +122,7 @@ export interface HostRow {
   last_seen_at: number | null;
   consecutive_failures: number;
   host_type: HostType;
+  tenancy_mode: TenancyMode;
   max_tenants: number;
   dedicated_user_id: string | null;
   management_hostname: string | null;
@@ -108,6 +144,7 @@ export interface ContainerRow {
   github_repos: string; // JSON array of owner/name repositories cloned on provision
   tier: Tier;
   placement_class: HostType;
+  placement_mode: TenancyMode;
   cpu: number;
   ram_mb: number;
   disk_gb: number;
@@ -120,6 +157,87 @@ export interface ContainerRow {
   rehome_tier: Tier | null;
   rehome_placement_class: HostType | null;
   rehome_requested_at: number | null;
+  storage_grandfathered: 0 | 1;
+  suspension_reason: "billing" | null;
+  billing_suspended_at: number | null;
+  destroy_after: number | null;
+}
+
+export type EntitlementPlan = "paid" | "dedicated";
+export type EntitlementSource = "stripe" | "manual";
+export type EntitlementState =
+  | "pending"
+  | "trialing"
+  | "active"
+  | "cancel_scheduled"
+  | "past_due"
+  | "grace"
+  | "expired"
+  | "manual";
+
+export interface AccountEntitlementRow {
+  user_id: string;
+  plan: EntitlementPlan;
+  source: EntitlementSource;
+  state: EntitlementState;
+  trial_until: number | null;
+  service_until: number | null;
+  grace_until: number | null;
+  source_ref: string | null;
+  updated_at: number;
+}
+
+export interface StripeCustomerRow {
+  user_id: string;
+  stripe_customer_id: string;
+  trial_used_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface StripeSubscriptionRow {
+  stripe_subscription_id: string;
+  user_id: string;
+  stripe_customer_id: string;
+  price_id: string;
+  plan: "paid";
+  stripe_status: string;
+  cancel_at_period_end: 0 | 1;
+  cancel_at: number | null;
+  trial_start: number | null;
+  trial_end: number | null;
+  service_until: number | null;
+  grace_until: number | null;
+  ended_at: number | null;
+  last_paid_invoice_id: string | null;
+  last_event_created: number;
+  last_synced_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export type PlanTransitionState =
+  | "requested"
+  | "reserving"
+  | "resizing"
+  | "waiting_capacity"
+  | "failed_retryable"
+  | "complete"
+  | "cancelled";
+
+export interface ContainerPlanTransitionRow {
+  container_id: string;
+  from_tier: Tier;
+  to_tier: Tier;
+  target_disk_gb: number;
+  prior_status: "running" | "stopped";
+  state: PlanTransitionState;
+  reserved_cpu: number;
+  reserved_ram_mb: number;
+  reserved_disk_gb: number;
+  requested_at: number;
+  updated_at: number;
+  last_error_code: string | null;
 }
 
 export interface CredentialsRow {

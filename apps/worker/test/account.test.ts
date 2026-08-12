@@ -4,6 +4,7 @@ import { hashSignal } from "@worldcoin/idkit-core/hashing";
 import { accountRoutes } from "../src/account.js";
 import { adminRoutes } from "../src/admin.js";
 import { hashInviteCode } from "../src/invites.js";
+import { putWorkbenchConfiguration } from "../src/workbench-configuration.js";
 import type { AppContext, Bindings } from "../src/types.js";
 import { createTestSession, makeEnv, seedUser, stubFetch } from "./helpers/env.js";
 
@@ -12,6 +13,12 @@ const WORLD_ID_CONFIG = {
   WORLD_ID_RP_ID: "rp_test",
   WORLD_ID_ACTION: "verify-account-1",
   WORLD_ID_SIGNING_KEY: `0x${"11".repeat(32)}`,
+} satisfies Partial<Bindings>;
+
+const STAGING_WORLD_ID_CONFIG = {
+  ...WORLD_ID_CONFIG,
+  WORLD_ID_ACTION: "verify-account-staging",
+  WORLD_ID_ENVIRONMENT: "production",
 } satisfies Partial<Bindings>;
 
 function app() {
@@ -58,6 +65,21 @@ afterEach(() => {
 });
 
 describe("account verification", () => {
+  it("continues new sessions to configuration and configured sessions to the dashboard", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const cookie = await createTestSession(env, user.id);
+
+    const setup = await app().request("/account/continue", { headers: { cookie } }, env);
+    expect(setup.status).toBe(302);
+    expect(setup.headers.get("location")).toBe("/configure");
+
+    await putWorkbenchConfiguration(env, user.id, { agents: ["claude"], githubRepos: [] });
+    const dashboard = await app().request("/account/continue", { headers: { cookie } }, env);
+    expect(dashboard.status).toBe(302);
+    expect(dashboard.headers.get("location")).toBe("/dashboard");
+  });
+
   it("issues only signed, short-lived passkey registration contexts", async () => {
     const { env } = makeEnv();
     const response = await app().request("/account/passkey/context", {}, env);
@@ -207,6 +229,25 @@ describe("account verification", () => {
     expect(await response.json()).toEqual({
       error: "World ID could not verify this proof.",
       code: "verifier_http_400",
+    });
+  });
+
+  it("supports the staging action while reusing the production World ID environment", async () => {
+    const { env } = makeEnv(STAGING_WORLD_ID_CONFIG);
+    const { user, cookie } = await unverifiedAccount(env);
+
+    const response = await app().request(
+      "/api/account/world-id/request",
+      { method: "POST", headers: { cookie } },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      app_id: "app_test",
+      action: "verify-account-staging",
+      environment: "production",
+      signal: user.id,
     });
   });
 

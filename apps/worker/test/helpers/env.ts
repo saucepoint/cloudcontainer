@@ -133,6 +133,13 @@ export async function seedUser(
         verification_method, created_at, updated_at)
      VALUES (?, 'Test user', ?, 1, ?, ?, 'development', ?, ?)`,
   ).bind(id, `${id}@example.test`, subscriptionStatus, now, now, now).run();
+  if (subscriptionStatus === "paid" || subscriptionStatus === "dedicated") {
+    await env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, source_ref, updated_at)
+       VALUES (?, ?, 'manual', 'manual', 'test-operator', ?)`,
+    ).bind(id, subscriptionStatus, now).run();
+  }
   const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
   if (!row) throw new Error("seedUser failed");
   return row;
@@ -169,6 +176,8 @@ export async function seedHost(
     last_seen_at: Date.now(),
     consecutive_failures: 0,
     host_type: "budget",
+    tenancy_mode: overrides.tenancy_mode ??
+      (overrides.host_type === "dedicated" ? "dedicated" : "shared"),
     max_tenants: 32,
     dedicated_user_id: null,
     management_hostname: "host-1.workbench.test",
@@ -185,17 +194,19 @@ export async function seedHost(
     `INSERT INTO hosts (id, ipv4, ipv6, ssh_hostname, daemon_endpoint, daemon_cert_fp, daemon_pubkey,
        ram_total_mb, ram_allocated_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
        disk_total_gb, disk_allocated_gb, status, joined_at, last_seen_at, consecutive_failures,
-       host_type, max_tenants, dedicated_user_id, management_hostname, management_port,
+       host_type, tenancy_mode, max_tenants, dedicated_user_id,
+       management_hostname, management_port,
        management_user, daemon_version, reported_ram_total_mb, reported_cpu_logical,
        generation, retired_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       host.id, host.ipv4, host.ipv6, host.ssh_hostname, host.daemon_endpoint,
       host.daemon_cert_fp, host.daemon_pubkey, host.ram_total_mb, host.ram_allocated_mb,
       host.ram_reserve_mb, host.vcpu_capacity, host.vcpu_allocated, host.disk_total_gb,
       host.disk_allocated_gb, host.status, host.joined_at, host.last_seen_at,
-      host.consecutive_failures, host.host_type, host.max_tenants, host.dedicated_user_id,
+      host.consecutive_failures, host.host_type, host.tenancy_mode,
+      host.max_tenants, host.dedicated_user_id,
       host.management_hostname, host.management_port, host.management_user, host.daemon_version,
       host.reported_ram_total_mb, host.reported_cpu_logical,
       host.generation, host.retired_at,
@@ -217,6 +228,8 @@ export async function seedContainer(
     github_repos: "[]",
     tier: "free",
     placement_class: "budget",
+    placement_mode: overrides.placement_mode ??
+      (overrides.placement_class === "dedicated" ? "dedicated" : "shared"),
     cpu: 1,
     ram_mb: 1536,
     disk_gb: 5,
@@ -229,18 +242,22 @@ export async function seedContainer(
     rehome_tier: null,
     rehome_placement_class: null,
     rehome_requested_at: null,
+    storage_grandfathered: 0,
+    suspension_reason: null,
+    billing_suspended_at: null,
+    destroy_after: null,
     ...overrides,
   };
   await env.DB.prepare(
-    `INSERT INTO containers (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+    `INSERT INTO containers (id, user_id, host_id, ssh_port, agents, tier, placement_class, placement_mode,
        cpu, ram_mb, disk_gb, status, status_detail, host_key_fingerprints, suspended_at,
        created_at, last_upgraded_at, rehome_tier, rehome_placement_class,
        rehome_requested_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       container.id, container.user_id, container.host_id, container.ssh_port,
-      container.agents, container.tier, container.placement_class, container.cpu,
+      container.agents, container.tier, container.placement_class, container.placement_mode, container.cpu,
       container.ram_mb, container.disk_gb,
       container.status, container.status_detail, container.host_key_fingerprints,
       container.suspended_at, container.created_at, container.last_upgraded_at,

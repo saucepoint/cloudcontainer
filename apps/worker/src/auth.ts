@@ -1,5 +1,7 @@
 import { Hono, type MiddlewareHandler } from "hono";
+import { secretMatches } from "./admin-auth.js";
 import { createAuth, signedSessionCookie } from "./better-auth.js";
+import { getWorkbenchConfiguration } from "./workbench-configuration.js";
 import type { AppContext, Bindings, UserRow } from "./types.js";
 
 export const CREDENTIALS_LOCKED_ERROR =
@@ -16,13 +18,8 @@ async function getUser(env: Bindings, userId: string): Promise<UserRow | null> {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
 }
 
-export async function postLoginPath(env: Bindings, userId: string): Promise<string> {
-  const user = await getUser(env, userId);
-  if (!user?.verified_at) return "/verify";
-  const container = await env.DB.prepare("SELECT id FROM containers WHERE user_id = ?")
-    .bind(userId)
-    .first();
-  return container ? "/dashboard" : "/onboarding";
+export async function postLoginPath(env: Bindings, userId: string): Promise<"/configure" | "/dashboard"> {
+  return (await getWorkbenchConfiguration(env, userId)) ? "/dashboard" : "/configure";
 }
 
 async function loadAccount(c: Parameters<MiddlewareHandler<AppContext>>[0]) {
@@ -47,18 +44,6 @@ export const requireAccount: MiddlewareHandler<AppContext> = async (c, next) => 
   return next();
 };
 
-/** Require both a valid Better Auth session and World ID/invite verification. */
-export const requireUser: MiddlewareHandler<AppContext> = async (c, next) => {
-  const user = await loadAccount(c);
-  if (!user) return deny(c);
-  if (!user.verified_at) {
-    return c.req.path.startsWith("/api")
-      ? c.json({ error: "account verification required", redirect: "/verify" }, 403)
-      : c.redirect("/verify");
-  }
-  return next();
-};
-
 async function findOrCreateDevelopmentUser(env: Bindings, subject: string): Promise<UserRow> {
   const digest = new Uint8Array(await crypto.subtle.digest(
     "SHA-256",
@@ -77,22 +62,98 @@ async function findOrCreateDevelopmentUser(env: Bindings, subject: string): Prom
   return user;
 }
 
+const STAGING_ACCOUNT_STATES = [
+  "unverified",
+  "verified",
+  "premium",
+  "verified_premium",
+] as const;
+type StagingAccountState = (typeof STAGING_ACCOUNT_STATES)[number];
+
+async function configureStagingUser(
+  env: Bindings,
+  subject: string,
+  state: StagingAccountState,
+): Promise<UserRow> {
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(subject),
+  ));
+  const suffix = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const id = `staging-${suffix}`;
+  const now = Date.now();
+  const verified = state === "verified" || state === "verified_premium";
+  const premium = state === "premium" || state === "verified_premium";
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO users
+         (id, name, email, email_verified, created_at, updated_at)
+       VALUES (?, 'Staging QA account', ?, 1, ?, ?)`,
+    ).bind(id, `${id}@accounts.usebench.invalid`, now, now),
+    env.DB.prepare(
+      `UPDATE users SET verified_at = ?, verification_method = ?,
+         subscription_status = ?, updated_at = ? WHERE id = ?`,
+    ).bind(verified ? now : null, verified ? "development" : null, premium ? "paid" : "free", now, id),
+    env.DB.prepare(
+      "DELETE FROM account_entitlements WHERE user_id = ?",
+    ).bind(id),
+    env.DB.prepare(
+      `INSERT INTO account_entitlements
+         (user_id, plan, source, state, source_ref, updated_at)
+       SELECT ?, 'paid', 'manual', 'manual', 'staging-bypass', ?
+       WHERE ? = 1`,
+    ).bind(id, now, premium ? 1 : 0),
+  ]);
+  const user = await getUser(env, id);
+  if (!user) throw new Error("Staging QA account could not be created.");
+  return user;
+}
+
+async function sessionRedirect(env: Bindings, requestUrl: string, user: UserRow): Promise<Response> {
+  const context = await createAuth(env, requestUrl).$context;
+  const session = await context.internalAdapter.createSession(user.id);
+  if (!session) return new Response("Login failed.", { status: 500 });
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: await postLoginPath(env, user.id),
+      "set-cookie": await signedSessionCookie(env, session.token, requestUrl),
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function stagingBypassEnabled(env: Bindings): env is Bindings & { STAGING_AUTH_BYPASS_SECRET: string } {
+  return env.BASE_URL === "https://staging.usebench.dev" && Boolean(env.STAGING_AUTH_BYPASS_SECRET);
+}
+
 export const authRoutes = new Hono<AppContext>()
   .get("/auth/dev", async (c) => {
     if (c.env.DEV_AUTH !== "1") return c.notFound();
     const user = await findOrCreateDevelopmentUser(c.env, c.req.query("sub") ?? "dev-user");
-    const auth = createAuth(c.env, c.req.url);
-    const context = await auth.$context;
-    const session = await context.internalAdapter.createSession(user.id);
-    if (!session) return c.text("Development login failed.", 500);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: await postLoginPath(c.env, user.id),
-        "set-cookie": await signedSessionCookie(c.env, session.token, c.req.url),
-        "cache-control": "no-store",
-      },
-    });
+    return sessionRedirect(c.env, c.req.url, user);
+  })
+  .get("/auth/staging-bypass", (c) => {
+    if (!stagingBypassEnabled(c.env)) return c.notFound();
+    c.header("cache-control", "no-store");
+    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Staging QA login</title></head><body><main><h1>Staging QA login</h1><form method="post"><label>Secret <input name="secret" type="password" required autocomplete="off"></label><label>Account <input name="subject" value="qa" maxlength="64" required autocomplete="off"></label><label>State <select name="state"><option value="unverified">Unverified</option><option value="verified">Verified</option><option value="premium">Premium</option><option value="verified_premium">Verified premium</option></select></label><button type="submit">Sign in</button></form></main></body></html>`);
+  })
+  .post("/auth/staging-bypass", async (c) => {
+    if (!stagingBypassEnabled(c.env)) return c.notFound();
+    const body = await c.req.parseBody();
+    const provided = typeof body.secret === "string" ? body.secret : "";
+    if (!(await secretMatches(provided, c.env.STAGING_AUTH_BYPASS_SECRET))) {
+      return c.text("Unauthorized", 401);
+    }
+    const subject = typeof body.subject === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(body.subject)
+      ? body.subject
+      : "qa";
+    const state = typeof body.state === "string" &&
+        (STAGING_ACCOUNT_STATES as readonly string[]).includes(body.state)
+      ? body.state as StagingAccountState
+      : "unverified";
+    const user = await configureStagingUser(c.env, subject, state);
+    return sessionRedirect(c.env, c.req.url, user);
   })
   .post("/auth/logout", async (c) => {
     const auth = createAuth(c.env, c.req.url);

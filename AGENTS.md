@@ -34,7 +34,7 @@ Read only the source of truth needed for the task:
 | `packages/contract/src/` | Shared Zod wire schemas, resource/tier rules, Ed25519 signing, X25519 sealing, and crypto helpers |
 | `apps/worker/src/` | Hono router, Better Auth, D1 access, placement/jobs/reconciliation, integrations, and SSR pages |
 | `apps/worker/client/` | Browser bundles for landing, onboarding, dashboard, account, and security flows |
-| `apps/worker/migrations/` | Ordered D1 migrations; the current highest migration is `0016_free_tier_cpu.sql` |
+| `apps/worker/migrations/` | Ordered D1 migrations; the current highest migration is `0022_billing_checkout_hardening.sql` |
 | `apps/worker/test/` | Worker tests with an in-memory database, real migrations, and mocked fetches |
 | `apps/daemon/src/` | Node/Hono RPC server, in-memory job runner, provisioning, credential installation, and Incus adapter |
 | `apps/daemon/test/` | Daemon tests with injected command execution; no real Incus required |
@@ -131,7 +131,7 @@ or generated secrets. Keep credential values out of job records and error
 messages. `apps/worker/worker-configuration.d.ts` and Wrangler state are
 generated/ignored; do not hand-edit them.
 
-Add D1 migrations in numeric order (the next migration after `0016` is the
+Add D1 migrations in numeric order (the next migration after `0022` is the
 current starting point), and use expand-first, backward-compatible changes:
 D1 migrations do not roll back automatically. A contract change can affect the
 Worker, daemon, and infrastructure release order; update schemas/tests first,

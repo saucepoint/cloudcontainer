@@ -1,10 +1,4 @@
-import {
-  HOST_RAM_OVERCOMMIT_DENOMINATOR,
-  HOST_RAM_OVERCOMMIT_NUMERATOR,
-  TIERS,
-  type HostType,
-  type Tier,
-} from "@workbench/contract";
+import { TIERS, type TenancyMode, type Tier } from "@workbench/contract";
 import type { Bindings, HostRow } from "./types.js";
 
 /** Home and disposable rootfs each receive the advertised disk cap. */
@@ -25,17 +19,19 @@ export const HOST_FAILURE_THRESHOLD = 3;
 
 export interface PlacementRequest {
   userId: string;
-  hostType: HostType;
+  tenancyMode: TenancyMode;
   cpu: number;
   ramMb: number;
   diskGb: number;
 }
 
 /**
- * Select an eligible host with the most complete placements still available
- * across its tenant, rounded CPU/RAM, and disk ceilings. Dedicated hosts
- * additionally require an explicit account assignment. The caller must repeat
- * every check in its write transaction before reserving the host.
+ * Select the host with the greatest post-placement availability. CPU, RAM,
+ * disk, and tenant-slot headroom are normalized independently so a large value
+ * in one dimension cannot hide a hotspot in another. Shared hosts accept both
+ * resource tiers; dedicated hosts additionally require an account assignment.
+ * The caller repeats every predicate in its write transaction before reserving
+ * the host.
  */
 export async function pickHost(
   env: Bindings,
@@ -44,16 +40,14 @@ export async function pickHost(
   excludedHostIds: readonly string[] = [],
 ): Promise<HostRow | null> {
   return env.DB.prepare(
-    `SELECT h.* FROM hosts h
+    `SELECT h.* FROM host_availability h
      WHERE h.status = 'active'
-       AND h.host_type = ?1
-       AND (h.host_type <> 'dedicated' OR h.dedicated_user_id = ?2)
-       AND h.vcpu_allocated + ?3 <=
-         ((h.vcpu_capacity + ?3 - 1) / ?3) * ?3
-       AND h.ram_allocated_mb + ?4 <=
-         (((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
-       AND h.disk_total_gb - h.disk_allocated_gb >= ?5
-       AND h.max_tenants > (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id)
+       AND h.tenancy_mode = ?1
+       AND (h.tenancy_mode <> 'dedicated' OR h.dedicated_user_id = ?2)
+       AND h.vcpu_available >= ?3
+       AND h.ram_available_mb >= ?4
+       AND h.disk_available_gb >= ?5
+       AND h.tenant_slots_available > 0
        AND h.last_seen_at IS NOT NULL AND h.last_seen_at >= ?6
        AND h.consecutive_failures = 0
        AND h.daemon_version IS NOT NULL
@@ -61,30 +55,36 @@ export async function pickHost(
        AND h.reported_cpu_logical IS NOT NULL
        AND h.id NOT IN (SELECT value FROM json_each(?7))
      ORDER BY MIN(
-                h.max_tenants - (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
-                CAST((
-                  (((h.vcpu_capacity + ?3 - 1) / ?3) * ?3 - h.vcpu_allocated) / ?3
-                ) AS INTEGER),
-                CAST((
-                  ((((h.ram_total_mb - h.ram_reserve_mb) * ?8 + (?9 * ?4) - 1) / (?9 * ?4)) * ?4
-                    - h.ram_allocated_mb) / ?4
-                ) AS INTEGER),
-                CAST((h.disk_total_gb - h.disk_allocated_gb) / ?5 AS INTEGER)
+                CAST((h.vcpu_available - ?3) * 100000 /
+                  h.vcpu_capacity AS INTEGER),
+                CAST((h.ram_available_mb - ?4) * 100000 /
+                  h.ram_capacity_mb AS INTEGER),
+                CAST((h.disk_available_gb - ?5) * 100000 /
+                  h.disk_total_gb AS INTEGER),
+                CAST((h.tenant_slots_available - 1) * 100000 /
+                  h.max_tenants AS INTEGER)
               ) DESC,
-              (SELECT COUNT(*) FROM containers c WHERE c.host_id = h.id),
+              (
+                CAST((h.vcpu_available - ?3) * 100000 /
+                  h.vcpu_capacity AS INTEGER) +
+                CAST((h.ram_available_mb - ?4) * 100000 /
+                  h.ram_capacity_mb AS INTEGER) +
+                CAST((h.disk_available_gb - ?5) * 100000 /
+                  h.disk_total_gb AS INTEGER) +
+                CAST((h.tenant_slots_available - 1) * 100000 /
+                  h.max_tenants AS INTEGER)
+              ) DESC,
               h.id
      LIMIT 1`,
   )
     .bind(
-      request.hostType,
+      request.tenancyMode,
       request.userId,
       request.cpu,
       request.ramMb,
       request.diskGb,
       now() - HOST_HEARTBEAT_MAX_AGE_MS,
       JSON.stringify(excludedHostIds),
-      HOST_RAM_OVERCOMMIT_NUMERATOR,
-      HOST_RAM_OVERCOMMIT_DENOMINATOR,
     )
     .first<HostRow>();
 }

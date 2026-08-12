@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { adminRoutes } from "../src/admin.js";
 import { apiRoutes } from "../src/api.js";
 import { app as workerApp } from "../src/index.js";
+import { createUserNotification } from "../src/notifications.js";
 import type { AppContext } from "../src/types.js";
 import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
 
@@ -22,6 +23,33 @@ function adminJson(value: unknown): RequestInit {
 }
 
 describe("account notifications", () => {
+  it("keeps billing notices scoped to their owning account", async () => {
+    const { env } = makeEnv();
+    const user = await seedUser(env);
+    const cookie = await createTestSession(env, user.id);
+    const otherUser = await seedUser(env, "user-2");
+    const otherCookie = await createTestSession(env, otherUser.id);
+    await createUserNotification(env, {
+      id: "billing:payment:user-1",
+      userId: user.id,
+      title: "Payment confirmed",
+      message: "Your Paid plan is active.",
+      severity: "info",
+    });
+
+    const owner = await app().request("/api/notifications", { headers: { cookie } }, env);
+    expect(await owner.json()).toMatchObject({
+      unreadCount: 1,
+      notifications: [{ title: "Payment confirmed" }],
+    });
+    const other = await app().request(
+      "/api/notifications",
+      { headers: { cookie: otherCookie } },
+      env,
+    );
+    expect(await other.json()).toEqual({ notifications: [], unreadCount: 0 });
+  });
+
   it("publishes a global notification and tracks each user's read state", async () => {
     const { env } = makeEnv({ INVITE_ADMIN_SECRET: "admin-secret" });
     const user = await seedUser(env);

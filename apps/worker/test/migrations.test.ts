@@ -447,3 +447,352 @@ describe("0015 host lifecycle migration", () => {
       .toEqual({ vcpu_allocated: 4 });
   });
 });
+
+describe("0019 monetization foundation migration", () => {
+  it("backfills tenancy modes and preserves operator-managed paid access", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('free-user', 'Free', 'free@example.test', 1, 'free', 1, 1),
+        ('paid-user', 'Paid', 'paid@example.test', 1, 'paid', 1, 10),
+        ('dedicated-user', 'Dedicated', 'dedicated@example.test', 1, 'dedicated', 1, 20);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, disk_total_gb,
+         status, joined_at, host_type, max_tenants)
+      VALUES
+        ('shared-host', '192.0.2.10', 'shared.test', 'https://shared.test', 'pub',
+         16384, 3072, 16, 200, 'draining', 1, 'regular', 4),
+        ('dedicated-host', '192.0.2.11', 'dedicated.test', 'https://dedicated.test', 'pub',
+         16384, 3072, 16, 200, 'draining', 1, 'dedicated', 1);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('shared-container', 'free-user', 'shared-host', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'running', 1),
+        ('dedicated-container', 'dedicated-user', 'dedicated-host', 30501, '["codex"]',
+         'paid', 'dedicated', 2, 4096, 8, 'running', 1);
+      INSERT INTO waitlist (user_id, requested_at) VALUES ('paid-user', 30);
+    `);
+
+    db.exec(migration("0019_monetization_foundation.sql"));
+
+    expect(db.prepare("SELECT id, tenancy_mode FROM hosts ORDER BY id").all()).toEqual([
+      { id: "dedicated-host", tenancy_mode: "dedicated" },
+      { id: "shared-host", tenancy_mode: "shared" },
+    ]);
+    expect(db.prepare("SELECT id, placement_mode FROM containers ORDER BY id").all()).toEqual([
+      { id: "dedicated-container", placement_mode: "dedicated" },
+      { id: "shared-container", placement_mode: "shared" },
+    ]);
+    expect(db.prepare(
+      "SELECT user_id, plan, source, state, source_ref FROM account_entitlements ORDER BY user_id",
+    ).all()).toEqual([
+      {
+        user_id: "dedicated-user",
+        plan: "dedicated",
+        source: "manual",
+        state: "manual",
+        source_ref: "legacy-operator",
+      },
+      {
+        user_id: "paid-user",
+        plan: "paid",
+        source: "manual",
+        state: "manual",
+        source_ref: "legacy-operator",
+      },
+    ]);
+    expect(db.prepare("SELECT skip_count FROM waitlist WHERE user_id = 'paid-user'").get())
+      .toEqual({ skip_count: 0 });
+    expect((db.prepare("PRAGMA table_info(account_entitlements)").all() as Array<{ name: string }>)
+      .map((column) => column.name)).toContain("trial_until");
+    expect((db.prepare("PRAGMA table_info(stripe_subscriptions)").all() as Array<{ name: string }>)
+      .map((column) => column.name)).toEqual(expect.arrayContaining(["trial_start", "trial_end"]));
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+
+    db.exec(migration("0020_workbench_configurations.sql"));
+    expect(db.prepare(
+      "SELECT user_id, agents, github_repos FROM workbench_configurations ORDER BY user_id",
+    ).all()).toEqual([
+      { user_id: "dedicated-user", agents: '["codex"]', github_repos: "[]" },
+      { user_id: "free-user", agents: '["claude"]', github_repos: "[]" },
+    ]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
+describe("0021 paid-tier CPU migration", () => {
+  it("reduces existing paid host reservations to two vCPUs", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('free-user', 'Free', 'free@example.test', 1, 'free', 1, 1),
+        ('paid-user', 'Paid', 'paid@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
+         disk_total_gb, status, joined_at, host_type, max_tenants)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         16384, 3072, 16, 0, 200, 'draining', 1, 'regular', 4);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('free-container', 'free-user', 'host-1', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'running', 1),
+        ('paid-container', 'paid-user', 'host-1', 30501, '["codex"]',
+         'paid', 'regular', 2, 4096, 8, 'running', 1);
+    `);
+
+    db.exec(migration("0016_free_tier_cpu.sql"));
+    expect(db.prepare("SELECT vcpu_allocated FROM hosts WHERE id = 'host-1'").get())
+      .toEqual({ vcpu_allocated: 4 });
+
+    db.exec(migration("0021_paid_tier_cpu.sql"));
+    expect(db.prepare("SELECT vcpu_allocated FROM hosts WHERE id = 'host-1'").get())
+      .toEqual({ vcpu_allocated: 3 });
+  });
+});
+
+describe("0022 billing Checkout hardening migration", () => {
+  it("backfills account-level trial consumption from subscription history", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 'free', 1, 1);
+      INSERT INTO stripe_customers
+        (user_id, stripe_customer_id, created_at, updated_at)
+      VALUES ('user-1', 'cus_user', 1, 1);
+      INSERT INTO stripe_subscriptions
+        (stripe_subscription_id, user_id, stripe_customer_id, price_id, plan,
+         stripe_status, trial_start, trial_end, last_synced_at, created_at, updated_at)
+      VALUES ('sub_old', 'user-1', 'cus_user', 'price_paid', 'paid',
+              'canceled', 1000, 2000, 3, 1, 3);
+    `);
+
+    db.exec(migration("0022_billing_checkout_hardening.sql"));
+
+    expect(db.prepare(
+      "SELECT stripe_customer_id, trial_used_at FROM stripe_customers WHERE user_id = 'user-1'",
+    ).get()).toEqual({ stripe_customer_id: "cus_user", trial_used_at: 1000 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
+describe("0023 Paid upgrade opt-in migration", () => {
+  it("cancels only legacy Paid upgrades that have not reached the host", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+      "0022_billing_checkout_hardening.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('waiting-user', 'Waiting', 'waiting@example.test', 1, 'paid', 1, 1),
+        ('reserved-user', 'Reserved', 'reserved@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
+         disk_total_gb, status, joined_at, host_type, max_tenants)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         16384, 3072, 16, 3, 200, 'active', 1, 'regular', 4);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, status_detail, created_at)
+      VALUES
+        ('waiting-container', 'waiting-user', 'host-1', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'upgrade_pending', 'waiting', 1),
+        ('reserved-container', 'reserved-user', 'host-1', 30501, '["codex"]',
+         'free', 'budget', 1, 1536, 5, 'upgrade_pending', 'resizing', 1);
+      INSERT INTO container_plan_transitions
+        (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+         reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at)
+      VALUES
+        ('waiting-container', 'free', 'paid', 8, 'running', 'waiting_capacity',
+         0, 0, 0, 1, 1),
+        ('reserved-container', 'free', 'paid', 8, 'running', 'resizing',
+         1, 2560, 6, 1, 1);
+    `);
+
+    db.exec(migration("0023_paid_upgrade_opt_in.sql"));
+
+    expect(db.prepare(
+      "SELECT id, status, status_detail FROM containers ORDER BY id",
+    ).all()).toEqual([
+      { id: "reserved-container", status: "upgrade_pending", status_detail: "resizing" },
+      { id: "waiting-container", status: "running", status_detail: null },
+    ]);
+    expect(db.prepare(
+      "SELECT container_id, state FROM container_plan_transitions ORDER BY container_id",
+    ).all()).toEqual([
+      { container_id: "reserved-container", state: "resizing" },
+      { container_id: "waiting-container", state: "cancelled" },
+    ]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
+describe("0024 host availability migration", () => {
+  it("projects negative CPU and RAM availability without mutating reservations", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+      "0022_billing_checkout_hardening.sql",
+      "0023_paid_upgrade_opt_in.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES ('user-1', 'Test', 'test@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_allocated_mb, ram_reserve_mb,
+         vcpu_capacity, vcpu_allocated, disk_total_gb, disk_allocated_gb,
+         status, joined_at, host_type, max_tenants, reported_cpu_logical)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         5120, 3072, 3072, 4, 9, 40, 30, 'active', 1, 'regular', 1, 2);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, created_at)
+      VALUES
+        ('container-1', 'user-1', 'host-1', 30500, '["codex"]',
+         'paid', 'regular', 2, 4096, 8, 'running', 1);
+    `);
+
+    db.exec(migration("0024_host_availability.sql"));
+
+    expect(db.prepare(
+      `SELECT vcpu_available, ram_capacity_mb, ram_available_mb,
+              disk_available_gb, tenant_slots_available
+       FROM host_availability WHERE id = 'host-1'`,
+    ).get()).toEqual({
+      vcpu_available: -1,
+      ram_capacity_mb: 2560,
+      ram_available_mb: -512,
+      disk_available_gb: 10,
+      tenant_slots_available: 0,
+    });
+    expect(db.prepare(
+      `SELECT vcpu_capacity, vcpu_allocated, ram_allocated_mb, disk_allocated_gb
+       FROM hosts WHERE id = 'host-1'`,
+    ).get()).toEqual({
+      vcpu_capacity: 8,
+      vcpu_allocated: 9,
+      ram_allocated_mb: 3072,
+      disk_allocated_gb: 30,
+    });
+  });
+});

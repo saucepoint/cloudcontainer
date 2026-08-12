@@ -43,7 +43,7 @@ type CredentialsPresence = {
   github: string | null;
 };
 
-type ProvisionBody = {
+type ConfigurationBody = {
   agents: string[];
   sshPubkey: string;
   sshKeyLabel?: string;
@@ -61,7 +61,7 @@ function element<T extends HTMLElement>(id: string): T | null {
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const found = element<T>(id);
-  if (!found) throw new Error(`missing required onboarding element: ${id}`);
+  if (!found) throw new Error(`missing required configuration element: ${id}`);
   return found;
 }
 
@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const form = requiredElement<HTMLFormElement>("wizard");
 let credentialsPresence: CredentialsPresence | null = null;
 let setupDraft: SetupDraft | null = null;
-let pendingProvision: ProvisionBody | null = null;
+let pendingConfiguration: ConfigurationBody | null = null;
 let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 type SetupSshKey = {
@@ -89,7 +89,7 @@ function hasSelectedGithubKeys(): boolean {
   return [...importedGithubKeys.values()].some((key) => key.selected);
 }
 
-function collectProvisionBody(): ProvisionBody {
+function collectConfigurationBody(): ConfigurationBody {
   const data = new FormData(form);
   const llmKeys: Record<string, string> = {};
   for (const provider of PASTEABLE_PROVIDERS) {
@@ -146,7 +146,7 @@ function scheduleDraftSave(): void {
   }, 350);
 }
 
-function reviewItems(body: ProvisionBody): string[] {
+function reviewItems(body: ConfigurationBody): string[] {
   const newKeyCount = body.sshKeys.length + (body.sshPubkey ? 1 : 0);
   const items = [
     `Agents: ${body.agents.map((agent) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent).join(", ")}`,
@@ -170,7 +170,7 @@ function reviewItems(body: ProvisionBody): string[] {
   return items;
 }
 
-function showReview(body: ProvisionBody): void {
+function showReview(body: ConfigurationBody): void {
   const review = requiredElement<HTMLElement>("setup-review");
   const items = requiredElement<HTMLElement>("setup-review-items");
   items.replaceChildren(...reviewItems(body).map((item) => {
@@ -178,13 +178,13 @@ function showReview(body: ProvisionBody): void {
     li.textContent = item;
     return li;
   }));
-  pendingProvision = body;
+  pendingConfiguration = body;
   review.hidden = false;
   requiredElement<HTMLButtonElement>("go").hidden = true;
   review.querySelector<HTMLElement>("h2")?.focus();
 }
 
-async function provision(body: ProvisionBody): Promise<void> {
+async function saveConfiguration(body: ConfigurationBody): Promise<void> {
   const button = requiredElement<HTMLButtonElement>("review-confirm");
   const errorElement = requiredElement<HTMLElement>("err");
   errorElement.textContent = "";
@@ -192,26 +192,26 @@ async function provision(body: ProvisionBody): Promise<void> {
   const spinner = document.createElement("span");
   spinner.className = "spinner";
   spinner.setAttribute("aria-hidden", "true");
-  button.replaceChildren(spinner, "Starting…");
+  button.replaceChildren(spinner, "Saving…");
   try {
     await saveDraft("review");
-    await requestJson("/api/provision", {
-      method: "POST",
+    await requestJson("/api/configuration", {
+      method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-    }, "provisioning failed");
+    }, "configuration could not be saved");
     location.href = "/dashboard";
   } catch (error) {
     errorElement.textContent = errorMessage(error);
     errorElement.focus();
     button.disabled = false;
-    button.textContent = "Create workbench →";
+    button.textContent = "Save";
   }
 }
 
 form.addEventListener("submit", (event: SubmitEvent) => {
   event.preventDefault();
-  const body = collectProvisionBody();
+  const body = collectConfigurationBody();
   const errorElement = requiredElement<HTMLElement>("err");
   errorElement.textContent = "";
   if (body.agents.length === 0) {
@@ -230,7 +230,7 @@ requiredElement<HTMLButtonElement>("review-back").addEventListener("click", () =
 });
 
 requiredElement<HTMLButtonElement>("review-confirm").addEventListener("click", () => {
-  if (pendingProvision) void provision(pendingProvision);
+  if (pendingConfiguration) void saveConfiguration(pendingConfiguration);
 });
 
 form.addEventListener("change", scheduleDraftSave);
@@ -323,7 +323,7 @@ async function loadGithubSshKeys(): Promise<void> {
     }
     renderGithubSshKeys();
     status.textContent = importedGithubKeys.size
-      ? `Select the keys to add when you create the workbench.`
+      ? `Select the keys to save with this workbench configuration.`
       : "That GitHub account has no usable public SSH keys.";
     scheduleDraftSave();
   } catch (error) {
@@ -758,8 +758,15 @@ element<HTMLButtonElement>("clear-tools-credentials")?.addEventListener("click",
 });
 
 async function restoreSetupState(): Promise<void> {
-  const [draftResult, presenceResult, keysResult] = await Promise.all([
+  const [draftResult, configurationResult, presenceResult, keysResult] = await Promise.all([
     requestJson<{ draft: SetupDraft | null }>("/api/setup-draft").catch(() => ({ draft: null })),
+    requestJson<{
+      configuration: null | {
+        agents: string[];
+        githubRepos: string[];
+        updatedAt: number;
+      };
+    }>("/api/configuration").catch(() => ({ configuration: null })),
     requestJson<CredentialsPresence>("/api/credentials").catch(() => null),
     requestJson<{ keys?: unknown[] }>("/api/keys").catch(() => ({ keys: [] })),
   ]);
@@ -772,7 +779,18 @@ async function restoreSetupState(): Promise<void> {
       && typeof key.created_at === "number",
   );
   renderStoredSshKeys(storedKeys);
-  if (draftResult.draft) restoreDraft(draftResult.draft);
+  if (draftResult.draft) {
+    restoreDraft(draftResult.draft);
+  } else if (configurationResult.configuration) {
+    restoreDraft({
+      step: "review",
+      agents: configurationResult.configuration.agents,
+      githubRepos: configurationResult.configuration.githubRepos,
+      sshKeyChoice: "none",
+      updatedAt: configurationResult.configuration.updatedAt,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    });
+  }
 }
 
 void restoreSetupState();

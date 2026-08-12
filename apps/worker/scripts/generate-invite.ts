@@ -11,20 +11,17 @@
  * invite is printed once; the Worker stores only its keyed HMAC-SHA-256.
  */
 import { argv, env, exit } from "node:process";
+import { resolveInviteCommand } from "./invite-command.js";
 
-const PRODUCTION_URL = "https://usebench.dev";
-
-function argument(name: string): string | undefined {
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] : undefined;
+let command: ReturnType<typeof resolveInviteCommand>;
+try {
+  command = resolveInviteCommand(argv.slice(2), env);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Could not resolve invite credentials.");
+  exit(1);
 }
 
-const baseUrl = (argument("--url")
-  ?? env.USEBENCH_URL
-  ?? env.WORKBENCH_URL
-  ?? env.CODESTATION_URL
-  ?? PRODUCTION_URL).replace(/\/$/, "");
-const secret = env.INVITE_ADMIN_SECRET;
+const { baseUrl, deployment, secret, secretSource } = command;
 let target: URL | null = null;
 try {
   if (baseUrl) target = new URL(baseUrl);
@@ -39,7 +36,7 @@ if (!target || (target.protocol !== "https:" && !localHttp)) {
   exit(1);
 }
 if (!secret) {
-  console.error("Set INVITE_ADMIN_SECRET to the same value stored as the Worker secret.");
+  console.error(`Set ${secretSource} to the same value stored as the ${deployment} Worker secret.`);
   exit(1);
 }
 
@@ -56,7 +53,10 @@ const code = typeof (body as { code?: unknown } | null)?.code === "string"
   : null;
 
 if (!response.ok || !code) {
-  console.error(`Invite generation failed (${response.status}).`);
+  const credentialHint = response.status === 401
+    ? ` The secret from ${secretSource} does not match the ${deployment} Worker secret.`
+    : "";
+  console.error(`Invite generation failed (${response.status}).${credentialHint}`);
   exit(1);
 }
 

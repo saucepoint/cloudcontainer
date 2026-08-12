@@ -339,24 +339,17 @@ describe("waitlist admission", () => {
     expect(daemon.submitted).toHaveLength(1);
   });
 
-  it("does not let a full budget pool block the independent paid FIFO", async () => {
+  it("backfills a later free request when the oldest paid shape cannot fit", async () => {
     const { env } = makeEnv();
-    const freeUser = await seedUser(env, "free-user", "free");
     const paidUser = await seedUser(env, "paid-user", "paid");
+    const freeUser = await seedUser(env, "free-user", "free");
     await seedHost(env, {
-      id: "regular-host",
-      host_type: "regular",
-      daemon_endpoint: "https://regular-host.test:8443",
+      id: "shared-host",
+      vcpu_capacity: 4,
+      vcpu_allocated: 3,
+      disk_total_gb: 10,
+      daemon_endpoint: "https://shared-host.test:8443",
       daemon_pubkey: generateX25519Keypair().publicKey,
-    });
-    await seedContainer(env, {
-      id: "free-container",
-      user_id: freeUser.id,
-      host_id: null,
-      ssh_port: null,
-      placement_class: "budget",
-      status: "waitlisted",
-      created_at: 1000,
     });
     await seedContainer(env, {
       id: "paid-container",
@@ -369,23 +362,31 @@ describe("waitlist admission", () => {
       ram_mb: 4096,
       disk_gb: 8,
       status: "waitlisted",
+      created_at: 1000,
+    });
+    await seedContainer(env, {
+      id: "free-container",
+      user_id: freeUser.id,
+      host_id: null,
+      ssh_port: null,
+      status: "waitlisted",
       created_at: 2000,
     });
     await env.DB.prepare(
       `INSERT INTO waitlist (user_id, requested_at)
-       VALUES ('free-user', 1000), ('paid-user', 2000)`,
+       VALUES ('paid-user', 1000), ('free-user', 2000)`,
     ).run();
     const daemon = fakeDaemon();
     stubFetch(
       daemon.route,
       (url) => url.pathname === "/stats"
         ? Response.json({
-            hostId: "regular-host",
-            hostType: "regular",
+            hostId: "shared-host",
+            hostType: "budget",
             version: "test-release",
             containers: [],
             ramTotalMb: 65536,
-            cpuLogical: 16,
+            cpuLogical: 1,
             uptimeSec: 100,
           })
         : null,
@@ -397,22 +398,27 @@ describe("waitlist admission", () => {
       "SELECT id, host_id, status FROM containers ORDER BY created_at",
     ).all<{ id: string; host_id: string | null; status: string }>();
     expect(rows.results).toEqual([
-      { id: "free-container", host_id: null, status: "waitlisted" },
-      { id: "paid-container", host_id: "regular-host", status: "provisioning" },
+      { id: "paid-container", host_id: null, status: "waitlisted" },
+      { id: "free-container", host_id: "shared-host", status: "provisioning" },
     ]);
-    expect(daemon.submitted).toMatchObject([{ containerId: "paid-container", op: "provision" }]);
+    expect(daemon.submitted).toMatchObject([{ containerId: "free-container", op: "provision" }]);
   });
 
-  it("checks paid capacity even when more than one batch of free users is older", async () => {
+  it("does not bypass the bounded shared FIFO scan for a much later free request", async () => {
     const { env } = makeEnv();
     for (let index = 0; index < 21; index += 1) {
-      const userId = `free-${index}`;
-      await seedUser(env, userId, "free");
+      const userId = `paid-${index}`;
+      await seedUser(env, userId, "paid");
       await seedContainer(env, {
-        id: `free-container-${index}`,
+        id: `paid-container-${index}`,
         user_id: userId,
         host_id: null,
         ssh_port: null,
+        tier: "paid",
+        placement_class: "regular",
+        cpu: 2,
+        ram_mb: 4096,
+        disk_gb: 8,
         status: "waitlisted",
         created_at: 1000 + index,
       });
@@ -420,40 +426,37 @@ describe("waitlist admission", () => {
         "INSERT INTO waitlist (user_id, requested_at) VALUES (?, ?)",
       ).bind(userId, 1000 + index).run();
     }
-    const paidUser = await seedUser(env, "paid-user", "paid");
+    const freeUser = await seedUser(env, "free-user", "free");
     await seedHost(env, {
-      id: "regular-host",
-      host_type: "regular",
-      daemon_endpoint: "https://regular-host.test:8443",
+      id: "shared-host",
+      vcpu_capacity: 4,
+      vcpu_allocated: 3,
+      disk_total_gb: 10,
+      daemon_endpoint: "https://shared-host.test:8443",
       daemon_pubkey: generateX25519Keypair().publicKey,
     });
     await seedContainer(env, {
-      id: "paid-container",
-      user_id: paidUser.id,
+      id: "free-container",
+      user_id: freeUser.id,
       host_id: null,
       ssh_port: null,
-      tier: "paid",
-      placement_class: "regular",
-      cpu: 2,
-      ram_mb: 4096,
-      disk_gb: 8,
       status: "waitlisted",
       created_at: 5000,
     });
     await env.DB.prepare(
-      "INSERT INTO waitlist (user_id, requested_at) VALUES ('paid-user', 5000)",
+      "INSERT INTO waitlist (user_id, requested_at) VALUES ('free-user', 5000)",
     ).run();
     const daemon = fakeDaemon();
     stubFetch(
       daemon.route,
       (url) => url.pathname === "/stats"
         ? Response.json({
-            hostId: "regular-host",
-            hostType: "regular",
+            hostId: "shared-host",
+            hostType: "budget",
             version: "test-release",
             containers: [],
             ramTotalMb: 65536,
-            cpuLogical: 16,
+            cpuLogical: 1,
             uptimeSec: 100,
           })
         : null,
@@ -462,9 +465,12 @@ describe("waitlist admission", () => {
     await reconcile(env, () => 10_000);
 
     expect(await env.DB.prepare(
-      "SELECT host_id, status FROM containers WHERE id = 'paid-container'",
-    ).first()).toEqual({ host_id: "regular-host", status: "provisioning" });
-    expect(daemon.submitted).toMatchObject([{ containerId: "paid-container", op: "provision" }]);
+      "SELECT host_id, status FROM containers WHERE id = 'paid-container-0'",
+    ).first()).toEqual({ host_id: null, status: "waitlisted" });
+    expect(await env.DB.prepare(
+      "SELECT host_id, status FROM containers WHERE id = 'free-container'",
+    ).first()).toEqual({ host_id: null, status: "waitlisted" });
+    expect(daemon.submitted).toEqual([]);
   });
 
   it("marks an admitted container as error when its provision job cannot be queued", async () => {
@@ -636,7 +642,7 @@ describe("drift correction (D1 <-> incus)", () => {
     await seedUser(env, "user-1", "paid");
     await seedHost(env, {
       host_type: "regular",
-      vcpu_allocated: 3,
+      vcpu_allocated: 2,
       ram_allocated_mb: 4096,
       disk_allocated_gb: 32,
     });
@@ -660,7 +666,7 @@ describe("drift correction (D1 <-> incus)", () => {
     const host = await env.DB.prepare(
       "SELECT vcpu_allocated, ram_allocated_mb, disk_allocated_gb FROM hosts WHERE id = 'host-1'",
     ).first<{ vcpu_allocated: number; ram_allocated_mb: number; disk_allocated_gb: number }>();
-    expect(host).toEqual({ vcpu_allocated: 3, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
+    expect(host).toEqual({ vcpu_allocated: 2, ram_allocated_mb: 4096, disk_allocated_gb: 32 });
   });
 
   it("reuses the preserved reservation when retrying a missing container", async () => {

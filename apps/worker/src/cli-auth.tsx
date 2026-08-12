@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { githubConfigured } from "./github.js";
 import { getContainerForUser } from "./jobs.js";
 import { CliAuthPage } from "./pages/views.js";
-import { requireAccount } from "./auth.js";
+import { postLoginPath, requireAccount } from "./auth.js";
+import { effectiveEntitlementForUser } from "./entitlements.js";
 import { signedSessionCookie, createAuth } from "./better-auth.js";
 import { readJsonBody } from "./http.js";
 import { worldIdConfigured } from "./world-id.js";
@@ -187,14 +188,15 @@ export const cliAuthRoutes = new Hono<AppContext>()
     });
   })
   .get("/api/cli/session", requireAccount, async (c) => {
-    const container = await getContainerForUser(c.env, c.get("user").id);
-    const redirect = !c.get("user").verified_at
-      ? "/verify"
-      : container
-        ? "/dashboard"
-        : "/onboarding";
+    const user = c.get("user");
+    const [container, entitlement, redirect] = await Promise.all([
+      getContainerForUser(c.env, user.id),
+      effectiveEntitlementForUser(c.env, user),
+      postLoginPath(c.env, user.id),
+    ]);
     return c.json({
-      verified: Boolean(c.get("user").verified_at),
+      verified: Boolean(user.verified_at),
+      eligible: entitlement.eligible,
       worldIdAvailable: worldIdConfigured(c.env),
       githubAvailable: githubConfigured(c.env),
       hasWorkbench: Boolean(container),

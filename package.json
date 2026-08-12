@@ -12,11 +12,13 @@
     "dev:worker": "npm run dev -w apps/worker",
     "dev:daemon": "npm run dev -w apps/daemon",
     "create:invite": "npm run invite:create -w apps/worker --",
+    "create:invite:staging": "npm run invite:create -w apps/worker -- --environment staging",
     "hostctl": "bash ./infra/hostctl.sh",
     "hostctl:staging": "WORKBENCH_ENVIRONMENT=staging bash ./infra/hostctl.sh",
     "deploy": "bash ./deploy.sh",
     "deploy:staging": "bash ./deploy.sh --environment staging",
     "deploy:worker": "npm run deploy -w apps/worker",
+    "deploy:worker:staging": "npm run deploy:staging -w apps/worker",
     "deploy:dry-run": "bash ./deploy.sh --dry-run"
   },
   "devDependencies": {

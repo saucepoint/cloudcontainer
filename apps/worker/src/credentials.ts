@@ -51,7 +51,7 @@ export async function deleteStoredCredentials(env: Bindings, userId: string): Pr
   ]);
 }
 
-/** Remove only the credentials belonging to one onboarding category. */
+/** Remove only the credentials belonging to one configuration category. */
 export async function deleteStoredCredentialCategory(
   env: Bindings,
   userId: string,

@@ -1,3 +1,4 @@
+import { OTPField } from "@base-ui/react/otp-field";
 import type { IDKitNamespace, IDKitRequestConfig } from "@worldcoin/idkit-core";
 import { toDataURL } from "qrcode";
 import * as React from "react";
@@ -70,7 +71,9 @@ function usesMobileWorldAppFlow(): boolean {
   return window.matchMedia("(max-width: 700px)").matches;
 }
 
-function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }): React.JSX.Element {
+function AccountVerification({ worldIdAvailable }: {
+  worldIdAvailable: boolean;
+}): React.JSX.Element {
   const [pending, setPending] = React.useState(false);
   const [worldStatus, setWorldStatus] = React.useState("");
   const [worldError, setWorldError] = React.useState(false);
@@ -174,9 +177,29 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
       ) : null}
       <section className="card verification-option" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Use an invite code</h2>
-        <p>Enter a single-use invite from the usebench.dev administrator.</p>
+        <p>Have an invite code?</p>
         <form className="auth-code-row" onSubmit={(event) => void useInvite(event)}>
-          <input aria-label="Invite code" autoComplete="one-time-code" disabled={pending} maxLength={8} minLength={8} pattern="[A-Za-z0-9]{8}" required value={code} onChange={(event) => setCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())} />
+          <label className="sr-only" htmlFor="invite-code">Invite code</label>
+          <OTPField.Root
+            id="invite-code"
+            className="otp-field"
+            autoComplete="one-time-code"
+            disabled={pending}
+            inputMode="text"
+            length={8}
+            normalizeValue={(value) => value.toUpperCase()}
+            required
+            validationType="alphanumeric"
+            value={code}
+            onValueChange={(value) => setCode(value)}
+          >
+            {Array.from({ length: 8 }, (_, index) => (
+              <OTPField.Input
+                key={index}
+                aria-label={index === 0 ? "Invite code" : `Invite code character ${index + 1}`}
+              />
+            ))}
+          </OTPField.Root>
           <button className="btn secondary" type="submit" disabled={pending}>Verify invite →</button>
         </form>
         <p className="muted verification-status" role="status" aria-live="polite">{inviteStatus}</p>
@@ -188,5 +211,7 @@ function AccountVerification({ worldIdAvailable }: { worldIdAvailable: boolean }
 const root = document.getElementById("account-verification-root");
 if (root) {
   const worldIdAvailable = root.dataset.worldIdAvailable === "true";
-  createRoot(root).render(<AccountVerification worldIdAvailable={worldIdAvailable} />);
+  createRoot(root).render(
+    <AccountVerification worldIdAvailable={worldIdAvailable} />,
+  );
 }

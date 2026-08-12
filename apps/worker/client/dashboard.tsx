@@ -1,4 +1,4 @@
-import { AGENT_LABELS } from "@workbench/contract";
+import { AGENT_LABELS, LLM_PROVIDER_LABELS, type Tier } from "@workbench/contract";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { BusyLabel } from "./busy-label.js";
@@ -8,7 +8,9 @@ import {
   displayError,
   formatRamGb,
   isBusy,
+  planAdjustmentLabel,
   pollDelay,
+  type BillingStatus,
   type ContainerAction,
   type ContainerView,
   type DashboardSnapshot,
@@ -16,6 +18,15 @@ import {
 } from "./dashboard-model.js";
 import { Connection, SshKeys } from "./dashboard-ssh.js";
 import { isUnauthorized, requestJson as api } from "./http.js";
+import { formatMonthlyPrice } from "../src/price.js";
+
+const CHECKOUT_POLL_INTERVAL_MS = 1_000;
+const CHECKOUT_POLL_MAX_ATTEMPTS = 30;
+
+type CheckoutStatus = "idle" | "confirming" | "confirmed" | "timed_out";
+type PremiumUpgradeOffer = NonNullable<DashboardSnapshot["billing"]["paidPlan"]> & {
+  trialEligible: boolean;
+};
 
 function redirectIfSignedOut(error: unknown): boolean {
   if (!isUnauthorized(error)) return false;
@@ -23,30 +34,80 @@ function redirectIfSignedOut(error: unknown): boolean {
   return true;
 }
 
+function PlanChangeProgress({
+  container,
+  billingSource,
+}: {
+  container: ContainerView;
+  billingSource: string | null;
+}) {
+  const downgrading = container.planTransition?.desiredTier === "free";
+  const adjustment = planAdjustmentLabel(container) ?? "Preparing the instance adjustment…";
+  return (
+    <div className="notice warning" role="status" aria-live="polite" aria-busy="true">
+      <p><strong>{downgrading ? "Downgrading to Free" : "Upgrading to Premium"}</strong></p>
+      {billingSource === "stripe" ? (
+        <p>✓ {downgrading ? "Stripe plan update received." : "Premium access confirmed by Stripe."}</p>
+      ) : null}
+      <p><BusyLabel busy>{adjustment}</BusyLabel></p>
+      <p className="muted">
+        {downgrading
+          ? "Premium access ended. The workbench is stopped before Free limits are applied. Unsaved progress in active sessions may be lost; files on the persistent disk will be retained, including data above the Free storage allocation."
+          : "Your existing workbench remains available while we adjust its machine resources. Persistent files stay on the same disk."}
+      </p>
+    </div>
+  );
+}
+
 function ContainerCard({
   container,
   action,
+  cancelPlacement,
+  upgradeOffer,
+  openUpgradeCheckout,
+  premiumUpgradeAvailable,
+  upgradeInstance,
   actionBusy,
+  billingBusy,
+  instanceUpgradeBusy,
+  billingSource,
 }: {
-  container: ContainerView | null;
+  container: ContainerView;
   action: (operation: ContainerAction) => void;
+  cancelPlacement: () => void;
+  upgradeOffer: PremiumUpgradeOffer | null;
+  openUpgradeCheckout: () => void;
+  premiumUpgradeAvailable: boolean;
+  upgradeInstance: () => void;
   actionBusy: boolean;
+  billingBusy: boolean;
+  instanceUpgradeBusy: boolean;
+  billingSource: string | null;
 }) {
-  if (!container) {
-    return <div className="card"><h2>No workbench yet</h2><a className="btn primary" href="/onboarding">Set up a workbench →</a></div>;
-  }
-
   const busy = isBusy(container);
+  const canOfferUpgrade = container.tier === "free" &&
+    (container.status === "running" || container.status === "stopped") &&
+    (upgradeOffer !== null || premiumUpgradeAvailable);
   const runAction = (operation: ContainerAction) => {
-    if (operation === "destroy" || operation === "rebuild") {
+    if (operation === "destroy" || operation === "rebuild" || operation === "stop") {
       askConfirmation(
-        operation === "destroy" ? "Destroy workbench?" : "Rebuild workbench?",
+        operation === "destroy"
+          ? "Destroy workbench?"
+          : operation === "rebuild"
+          ? "Rebuild workbench?"
+          : "Stop workbench?",
         operation === "destroy"
           ? "Destroy the workbench and ALL its data? This cannot be undone."
-          : "Rebuild resets everything outside /home/dev. Continue?",
-        operation === "destroy" ? "Destroy workbench" : "Rebuild workbench",
+          : operation === "rebuild"
+          ? "Rebuild resets everything outside /home/dev. Continue?"
+          : "Stopping disconnects active sessions. Unsaved progress may be lost, but files already written to disk are preserved.",
+        operation === "destroy"
+          ? "Destroy workbench"
+          : operation === "rebuild"
+          ? "Rebuild workbench"
+          : "Stop workbench",
         () => action(operation),
-        true,
+        operation !== "stop",
       );
       return;
     }
@@ -61,12 +122,67 @@ function ContainerCard({
           <BusyLabel busy={busy}>{STATUS_LABELS[container.status]}</BusyLabel>
         </span>
       </div>
-      <p className="muted">{container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.diskGb} GB Storage · {container.tier}</p>
+      <p className="muted">
+        {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.tier === "paid" ? "premium" : "free"}
+      </p>
+      {canOfferUpgrade ? (
+        <div className="premium-upgrade-cta">
+          <p>
+            <strong>{premiumUpgradeAvailable ? "Premium is active. Upgrade this instance when you are ready." : "Upgrade this workbench in place."}</strong><br />
+            {premiumUpgradeAvailable
+              ? "Apply 2 vCPU, 4 GB RAM, and more storage without replacing its persistent disk."
+              : <>Get 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(upgradeOffer!.price, upgradeOffer!.currency)}. Your persistent files stay on the same disk.</>}
+          </p>
+          <button
+            className="btn primary"
+            type="button"
+            disabled={actionBusy}
+            aria-busy={premiumUpgradeAvailable ? instanceUpgradeBusy : billingBusy}
+            onClick={premiumUpgradeAvailable ? upgradeInstance : openUpgradeCheckout}
+          >
+            <BusyLabel busy={premiumUpgradeAvailable ? instanceUpgradeBusy : billingBusy}>
+              {instanceUpgradeBusy
+                ? "Requesting Premium resources…"
+                : premiumUpgradeAvailable
+                ? "Upgrade instance →"
+                : billingBusy
+                ? "Opening Stripe checkout…"
+                : upgradeOffer!.trialEligible
+                ? "Start 7-day Premium trial →"
+                : "Upgrade to Premium →"}
+            </BusyLabel>
+          </button>
+        </div>
+      ) : null}
       {container.status === "provisioning" ? <p><BusyLabel busy>Building. Usually under 3 minutes.</BusyLabel></p> : null}
-      {container.status === "waitlisted" ? <p>All hosts are full. Your place is saved.</p> : null}
+      {container.status === "waitlisted" ? (
+        <>
+          <p>All hosts are full. Your place is saved.</p>
+          <button
+            type="button"
+            className="btn secondary"
+            disabled={actionBusy}
+            onClick={() => askConfirmation(
+              "Withdraw placement?",
+              "Remove this workbench from the capacity queue? You can start a new placement later.",
+              "Withdraw placement",
+              cancelPlacement,
+              true,
+            )}
+          >
+            Withdraw placement
+          </button>
+        </>
+      ) : null}
       {container.status === "stopped" ? <p>Files are safe. Start the workbench to use SSH.</p> : null}
-      {container.status === "suspended" ? <p className="notice error">This workbench is suspended. Your files are not currently accessible.</p> : null}
-      {container.status === "upgrade_pending" ? <p className="notice warning">Your upgrade is waiting for host capacity. No action is needed.</p> : null}
+      {container.status === "suspended" ? (
+        <p className="notice error">
+          This workbench is suspended and your files are not currently accessible. Resubscribe or complete Free verification to restore access; contact support for export help before any displayed deadline.
+        </p>
+      ) : null}
+      {container.status === "upgrade_pending" ? (
+        <PlanChangeProgress container={container} billingSource={billingSource} />
+      ) : null}
       {container.status === "destroying" ? <p><BusyLabel busy>Deleting…</BusyLabel></p> : null}
       {container.status === "error" ? (
         <>
@@ -97,15 +213,114 @@ function ContainerCard({
   );
 }
 
+const ACCOUNT_STATE_LABELS: Record<DashboardSnapshot["account"]["state"], string> = {
+  unverified: "Unverified",
+  verified: "Verified",
+  premium: "Premium",
+  verified_premium: "Verified premium",
+};
+
+const MACHINE_SPECS: Record<Tier, string> = {
+  free: "1 vCPU · 1.5 GB RAM",
+  paid: "2 vCPU · 4.0 GB RAM",
+};
+
+const CHATGPT_SUBSCRIPTION_PROVIDERS = new Set([
+  "codex_subscription_token",
+  "pi_codex_subscription_token",
+  "opencode_codex_subscription_token",
+]);
+const CLAUDE_SUBSCRIPTION_PROVIDERS = new Set([
+  "claude_subscription_token",
+  "pi_claude_subscription_token",
+  "opencode_claude_subscription_token",
+]);
+
+function configuredModelProviders(credentials: DashboardSnapshot["credentials"]): string[] {
+  const providers = new Set<string>();
+  const configured = Object.keys(credentials.llm).filter((provider) => credentials.llm[provider]);
+  if (configured.some((provider) => CHATGPT_SUBSCRIPTION_PROVIDERS.has(provider))) {
+    providers.add("ChatGPT");
+  }
+  if (configured.some((provider) => CLAUDE_SUBSCRIPTION_PROVIDERS.has(provider))) {
+    providers.add("Claude");
+  }
+  for (const provider of configured) {
+    if (CHATGPT_SUBSCRIPTION_PROVIDERS.has(provider) || CLAUDE_SUBSCRIPTION_PROVIDERS.has(provider)) continue;
+    if (provider === "github_copilot") {
+      providers.add("GitHub Copilot");
+      continue;
+    }
+    const label = LLM_PROVIDER_LABELS[provider as keyof typeof LLM_PROVIDER_LABELS] ?? provider;
+    providers.add(label);
+  }
+  return [...providers];
+}
+
+function configuredIntegrations(credentials: DashboardSnapshot["credentials"]): string[] {
+  const integrations: string[] = [];
+  if (credentials.github) integrations.push(`GitHub (${credentials.github})`);
+  if (credentials.cloudflare) integrations.push("Cloudflare API");
+  if (credentials.wrangler) integrations.push("Cloudflare Wrangler");
+  if (credentials.supabase) integrations.push("Supabase");
+  if (credentials.convex) integrations.push("Convex");
+  return integrations;
+}
+
+function ConfigurationSummary({
+  configuration,
+  credentials,
+  sshKeyCount,
+  selectedTier,
+  editable,
+}: {
+  configuration: NonNullable<DashboardSnapshot["configuration"]>;
+  credentials: DashboardSnapshot["credentials"];
+  sshKeyCount: number;
+  selectedTier: Tier;
+  editable: boolean;
+}) {
+  const modelProviders = configuredModelProviders(credentials);
+  const integrations = configuredIntegrations(credentials);
+  return (
+    <details className="card configuration-summary" open={editable}>
+      <summary><strong>Workbench configuration</strong><span className="muted">View setup</span></summary>
+      <dl className="configuration-facts">
+        <div><dt>Agents</dt><dd>{configuration.agents.map((agent) => AGENT_LABELS[agent]).join(", ")}</dd></div>
+        <div><dt>Model Provider</dt><dd>{modelProviders.length ? modelProviders.join(", ") : "None"}</dd></div>
+        <div><dt>Integrations</dt><dd>{integrations.length ? integrations.join(", ") : "None"}</dd></div>
+        <div><dt>Repositories</dt><dd>{configuration.githubRepos.length ? configuration.githubRepos.join(", ") : "None"}</dd></div>
+        <div><dt>Machine</dt><dd>{MACHINE_SPECS[selectedTier]}</dd></div>
+        <div><dt>SSH keys</dt><dd>{sshKeyCount}</dd></div>
+      </dl>
+      {editable ? <a className="btn secondary" href="/configure">Edit configuration</a> : null}
+    </details>
+  );
+}
+
 function DashboardApp() {
+  const [checkoutSuccess] = React.useState(
+    () => new URLSearchParams(window.location.search).get("checkout") === "success",
+  );
+  const [checkoutStatus, setCheckoutStatus] = React.useState<CheckoutStatus>(
+    checkoutSuccess ? "confirming" : "idle",
+  );
   const [loaded, setLoaded] = React.useState(false);
   const [container, setContainer] = React.useState<ContainerView | null>(null);
+  const [configuration, setConfiguration] = React.useState<DashboardSnapshot["configuration"]>(null);
   const [keys, setKeys] = React.useState<SshKey[]>([]);
+  const [credentials, setCredentials] = React.useState<DashboardSnapshot["credentials"] | null>(null);
+  const [billing, setBilling] = React.useState<DashboardSnapshot["billing"] | null>(null);
+  const [account, setAccount] = React.useState<DashboardSnapshot["account"] | null>(null);
+  const [selectedTier, setSelectedTier] = React.useState<Tier>("free");
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [actionBusy, setActionBusy] = React.useState(false);
+  const [billingAction, setBillingAction] = React.useState<"checkout" | "portal" | null>(null);
+  const [instanceUpgradeBusy, setInstanceUpgradeBusy] = React.useState(false);
   const [pollVersion, setPollVersion] = React.useState(0);
   const pollInFlight = React.useRef(false);
+  const checkoutPollInFlight = React.useRef(false);
   const refreshNeeded = React.useRef(false);
   const containerRef = React.useRef<ContainerView | null>(null);
 
@@ -114,6 +329,14 @@ function DashboardApp() {
     setContainer(next);
   }, []);
 
+  const completeCheckout = React.useCallback(() => {
+    setCheckoutStatus("confirmed");
+    if (!checkoutSuccess) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("checkout");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [checkoutSuccess]);
+
   const loadDashboard = React.useCallback(async () => {
     setPageError("");
     setActionError("");
@@ -121,7 +344,12 @@ function DashboardApp() {
       const snapshot = await api<DashboardSnapshot>("/api/dashboard");
       refreshNeeded.current = false;
       applyContainer(snapshot.container);
+      setConfiguration(snapshot.configuration);
       setKeys(snapshot.keys);
+      setCredentials(snapshot.credentials);
+      setBilling(snapshot.billing);
+      setAccount(snapshot.account);
+      if (checkoutSuccess && snapshot.account.premium) completeCheckout();
       setLoaded(true);
     } catch (error) {
       if (!redirectIfSignedOut(error)) {
@@ -129,9 +357,62 @@ function DashboardApp() {
       }
       setLoaded(true);
     }
-  }, [applyContainer]);
+  }, [applyContainer, checkoutSuccess, completeCheckout]);
 
   React.useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+
+  React.useEffect(() => {
+    if (!checkoutSuccess || !loaded || account?.premium || checkoutStatus === "confirmed") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    let disposed = false;
+
+    const schedule = () => {
+      if (!disposed && !document.hidden) {
+        timer = setTimeout(() => void pollBilling(), CHECKOUT_POLL_INTERVAL_MS);
+      }
+    };
+    const pollBilling = async () => {
+      if (disposed || document.hidden || checkoutPollInFlight.current) return;
+      checkoutPollInFlight.current = true;
+      let confirmed = false;
+      try {
+        const result = await api<BillingStatus>("/api/billing/status");
+        if (disposed) return;
+        setBilling(result);
+        setAccount(result.account);
+        confirmed = result.account.premium;
+        if (confirmed) completeCheckout();
+      } catch (error) {
+        if (!disposed) redirectIfSignedOut(error);
+      } finally {
+        checkoutPollInFlight.current = false;
+        if (!disposed && !confirmed) {
+          attempts += 1;
+          if (attempts >= CHECKOUT_POLL_MAX_ATTEMPTS) {
+            setCheckoutStatus("timed_out");
+          } else {
+            schedule();
+          }
+        }
+      }
+    };
+    const visibilityChanged = () => {
+      if (document.hidden) {
+        if (timer) clearTimeout(timer);
+      } else {
+        void pollBilling();
+      }
+    };
+
+    void pollBilling();
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [account?.premium, checkoutPollInFlight, checkoutStatus, checkoutSuccess, completeCheckout, loaded]);
 
   React.useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -188,6 +469,24 @@ function DashboardApp() {
     }
   };
 
+  const cancelPlacement = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      await api("/api/container/cancel", { method: "POST" });
+      refreshNeeded.current = false;
+      applyContainer(null);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(error, "The placement could not be withdrawn. Please try again."));
+      }
+      setPollVersion((version) => version + 1);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const refreshKeysAndConnection = async () => {
     const [keyResult, containerResult] = await Promise.all([
       api<{ keys: SshKey[] }>("/api/keys"),
@@ -197,17 +496,214 @@ function DashboardApp() {
     applyContainer(containerResult.container);
   };
 
+  const openBilling = async (path: "/api/billing/checkout" | "/api/billing/portal") => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setBillingAction(path.endsWith("/checkout") ? "checkout" : "portal");
+    setActionError("");
+    try {
+      const result = await api<{ url: string }>(path, { method: "POST" });
+      window.location.assign(result.url);
+    } catch (error) {
+      setActionError(displayError(error, "Billing is temporarily unavailable."));
+      setActionBusy(false);
+      setBillingAction(null);
+    }
+  };
+
+  const upgradeInstance = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setInstanceUpgradeBusy(true);
+    setActionError("");
+    refreshNeeded.current = true;
+    try {
+      const result = await api<{ container: ContainerView }>("/api/container/upgrade", {
+        method: "POST",
+      });
+      refreshNeeded.current = false;
+      applyContainer(result.container);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(
+          error,
+          "The Premium upgrade may have started, but its latest status is unavailable. We will check again automatically.",
+        ));
+      }
+      setPollVersion((version) => version + 1);
+    } finally {
+      setActionBusy(false);
+      setInstanceUpgradeBusy(false);
+    }
+  };
+
+  const deploy = async (tier: Tier) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const result = await api<{ container: ContainerView }>("/api/deploy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tier }),
+      });
+      refreshNeeded.current = true;
+      applyContainer(result.container);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(error, "The instance could not be created. Please try again."));
+      }
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   if (!loaded) {
     return <><h1>Your workbench.</h1><div className="card" aria-live="polite" aria-busy="true"><span className="sr-only">Loading your workbench…</span><div className="skel skel-title" /><div className="skel skel-line" /><div className="skel skel-line short" /></div></>;
   }
 
   return (
     <>
-      <h1>Your workbench.</h1>
+      <div className="dashboard-heading">
+        <h1>Your workbench.</h1>
+        {account ? <span className={`account-state ${account.state}`}>{ACCOUNT_STATE_LABELS[account.state]}</span> : null}
+      </div>
+      {checkoutStatus === "confirming" ? (
+        <div className="notice" role="status" aria-live="polite" aria-busy="true">
+          <BusyLabel busy>Stripe is processing your checkout…</BusyLabel>
+        </div>
+      ) : checkoutStatus === "confirmed" ? (
+        <div className="notice" role="status" aria-live="polite">
+          {container?.tier === "free"
+            ? "Your Premium subscription is active. Your Free instance stays Free until you choose Upgrade instance below."
+            : "Your Premium subscription is active."}
+        </div>
+      ) : checkoutStatus === "timed_out" ? (
+        <div className="notice warning" role="status" aria-live="polite">
+          Checkout completed, but Premium activation is taking longer than expected. <button type="button" className="link-btn" onClick={() => setCheckoutStatus("confirming")}>Check again</button>
+        </div>
+      ) : null}
+      {billing?.billing?.state === "past_due" || billing?.billing?.state === "grace" ? (
+        <div className="notice warning" role="status">
+          Your payment needs attention. Premium service remains available only through the displayed billing deadline.
+        </div>
+      ) : null}
+      {billing?.billing?.state === "cancel_scheduled" && billing.billing.serviceUntil ? (
+        <div className="notice warning" role="status">
+          Premium service is scheduled to end on {new Date(billing.billing.serviceUntil).toISOString().slice(0, 10)}. The workbench will then stop before returning to Free limits. Save active work first; persistent files will be retained.
+        </div>
+      ) : null}
+      {billing?.billing?.state === "expired" ? (
+        <div className="notice error" role="status">
+          Premium access ended. An eligible workbench will stop before returning to Free limits. Unsaved progress may be lost, but persistent files are retained. Resubscribe or complete Free verification to restore eligibility.
+        </div>
+      ) : null}
       {pageError ? <div className="notice error" role="alert" aria-live="assertive">{pageError} <button type="button" className="link-btn" onClick={() => void loadDashboard()}>Try again</button></div> : null}
-      {pageError ? null : <ContainerCard container={container} action={(operation) => void act(operation)} actionBusy={actionBusy} />}
+      {!pageError && configuration && !container && account ? (
+        <section className="instance-creation">
+          <fieldset className="instance-tier-picker">
+            <legend>Choose a tier</legend>
+            <div className="instance-tier-options">
+              <label className={`instance-tier-option${selectedTier === "free" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="instance-tier"
+                  value="free"
+                  checked={selectedTier === "free"}
+                  onChange={() => setSelectedTier("free")}
+                />
+                <span>
+                  <strong>Free</strong>
+                  <small>{MACHINE_SPECS.free}</small>
+                </span>
+              </label>
+              <label className={`instance-tier-option${selectedTier === "paid" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="instance-tier"
+                  value="paid"
+                  checked={selectedTier === "paid"}
+                  onChange={() => setSelectedTier("paid")}
+                />
+                <span>
+                  <strong>Premium</strong>
+                  <small>
+                    {MACHINE_SPECS.paid}
+                    {account.premium || !billing?.paidPlan
+                      ? ""
+                      : ` · ${formatMonthlyPrice(billing.paidPlan.price, billing.paidPlan.currency)}`}
+                  </small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <div className="instance-cta">
+            {selectedTier === "free" ? (
+              account.verified ? (
+                <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("free")}>
+                  Create
+                </button>
+              ) : (
+                <a className="btn primary" href="/verify">Continue</a>
+              )
+            ) : account.premium ? (
+              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void deploy("paid")}>
+                Create
+              </button>
+            ) : billing?.configured ? (
+              <button
+                className="btn primary"
+                type="button"
+                disabled={actionBusy}
+                aria-busy={billingAction === "checkout"}
+                onClick={() => void openBilling("/api/billing/checkout")}
+              >
+                <BusyLabel busy={billingAction === "checkout"}>
+                  {billingAction === "checkout" ? "Opening Stripe checkout…" : "Continue"}
+                </BusyLabel>
+              </button>
+            ) : (
+              <button className="btn primary" type="button" disabled>Continue</button>
+            )}
+            <p className="choice-hint">
+              {selectedTier === "free" && !account.verified
+                ? "Verify to create a Free instance"
+                : selectedTier === "paid" && !account.premium
+                  ? "Upgrade to Premium"
+                  : ""}
+            </p>
+          </div>
+        </section>
+      ) : null}
+      {!pageError && configuration && credentials ? (
+        <ConfigurationSummary
+          configuration={configuration}
+          credentials={credentials}
+          sshKeyCount={keys.length}
+          selectedTier={container?.tier ?? selectedTier}
+          editable={!container}
+        />
+      ) : null}
+      {!pageError && container ? (
+        <ContainerCard
+          container={container}
+          action={(operation) => void act(operation)}
+          cancelPlacement={() => void cancelPlacement()}
+          upgradeOffer={container.status === "running" && container.tier === "free" &&
+              account && !account.premium && billing?.configured && billing.paidPlan
+            ? { ...billing.paidPlan, trialEligible: billing.trialEligible }
+            : null}
+          openUpgradeCheckout={() => void openBilling("/api/billing/checkout")}
+          premiumUpgradeAvailable={Boolean(account?.premium && container.tier === "free")}
+          upgradeInstance={() => void upgradeInstance()}
+          actionBusy={actionBusy}
+          billingBusy={billingAction === "checkout"}
+          instanceUpgradeBusy={instanceUpgradeBusy}
+          billingSource={billing?.billing?.source ?? billing?.entitlement.source ?? null}
+        />
+      ) : null}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}
-      <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section>
+      {container ? <section className="card" aria-labelledby="ssh-heading"><h2 id="ssh-heading">SSH access</h2><div role="status" aria-live="polite"><Connection container={container} hasKeys={keys.length > 0} /></div><SshKeys container={container} keys={keys} refresh={refreshKeysAndConnection} /><div className="sr-only" role="status" aria-live="polite" /></section> : null}
     </>
   );
 }

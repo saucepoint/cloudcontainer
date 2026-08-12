@@ -26,7 +26,7 @@ describe("GitHub App connection", () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
     const response = await app().request(
-      "/auth/github?return_to=/onboarding",
+      "/auth/github?return_to=/configure",
       { headers: await login(env, user) },
       env,
     );
@@ -51,7 +51,7 @@ describe("GitHub App connection", () => {
       expect(githubConfigured(env)).toBe(false);
 
       const response = await app().request(
-        "/auth/github?return_to=/onboarding",
+        "/auth/github?return_to=/configure",
         { headers: await login(env, user) },
         env,
       );
@@ -65,7 +65,7 @@ describe("GitHub App connection", () => {
     const headers = await login(env, user);
 
     const start = await app().request(
-      "/auth/github?return_to=/onboarding",
+      "/auth/github?return_to=/configure",
       { headers },
       env,
     );
@@ -78,7 +78,7 @@ describe("GitHub App connection", () => {
     const stateRow = await env.DB.prepare("SELECT return_to FROM oauth_states WHERE state = ?")
       .bind(state)
       .first<{ return_to: string }>();
-    expect(stateRow?.return_to).toBe("/onboarding");
+    expect(stateRow?.return_to).toBe("/configure");
 
     stubFetch(
       (url) =>
@@ -103,7 +103,7 @@ describe("GitHub App connection", () => {
       env,
     );
     expect(callback.status).toBe(302);
-    expect(callback.headers.get("location")).toBe("/onboarding");
+    expect(callback.headers.get("location")).toBe("/configure");
     const credentials = await env.DB.prepare("SELECT * FROM credentials_encrypted").first();
     expect(credentials).toMatchObject({ github_login: "octocat" });
     expect(JSON.stringify(credentials)).not.toContain("CANARY-");
@@ -148,7 +148,7 @@ describe("GitHub App connection", () => {
     const fetchMock = stubFetch();
 
     const response = await app().request(
-      "/auth/github?return_to=/onboarding",
+      "/auth/github?return_to=/configure",
       { headers },
       env,
     );
@@ -188,7 +188,7 @@ describe("GitHub App connection", () => {
     await seedContainer(env, { host_id: null, ssh_port: null });
 
     const start = await app().request(
-      "/auth/github?return_to=/onboarding",
+      "/auth/github?return_to=/configure",
       { headers },
       env,
     );
@@ -206,7 +206,7 @@ describe("GitHub App connection", () => {
     const { env } = makeEnv(githubConfig);
     const user = await seedUser(env);
     const headers = await login(env, user);
-    const start = await app().request("/auth/github?return_to=/onboarding", { headers }, env);
+    const start = await app().request("/auth/github?return_to=/configure", { headers }, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
     await seedContainer(env, { host_id: null, ssh_port: null });
 

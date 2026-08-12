@@ -168,7 +168,6 @@ fi
 install -d -m 0755 "$CONFIG_DIR"
 install -m 0644 /dev/null "$WORKBENCH_HOST_POLICY_ENV"
 cat >"$WORKBENCH_HOST_POLICY_ENV" <<EOF
-VCPU_OVERCOMMIT=${VCPU_OVERCOMMIT}
 DISK_CAPACITY_PERCENT=${DISK_CAPACITY_PERCENT}
 HOST_RAM_RESERVE_MB=${HOST_RAM_RESERVE_MB:-0}
 HOST_TENANT_LIMIT=${HOST_TENANT_LIMIT:-0}
@@ -237,7 +236,9 @@ fi
 echo "== [5/6] keys + config =="
 if [[ -f "$DAEMON_CONFIG" ]]; then
   if ! jq -e --arg host_id "$HOST_ID" --arg host_type "$HOST_TYPE" \
-    '.hostId == $host_id and (.hostType // "budget") == $host_type' \
+    --arg tenancy_mode "$TENANCY_MODE" \
+    '.hostId == $host_id and (.hostType // "budget") == $host_type and
+      (.tenancyMode // (if (.hostType // "budget") == "dedicated" then "dedicated" else "shared" end)) == $tenancy_mode' \
     "$DAEMON_CONFIG" >/dev/null; then
     echo "!! existing daemon config belongs to another host ID or host type"
     exit 1
@@ -273,6 +274,7 @@ else
   jq -n \
     --arg hostId "$HOST_ID" \
     --arg hostType "$HOST_TYPE" \
+    --arg tenancyMode "$TENANCY_MODE" \
     --argjson listenPort "$DAEMON_PORT" \
     --arg workerRpcPublicKey "$WORKER_PUB" \
     --arg x25519PrivateKey "$X25519_PRIV" \
@@ -280,7 +282,7 @@ else
     --arg project "$PROJECT_NAME" \
     --arg tlsCertPath "$TLS_CERT_PATH" \
     --arg tlsKeyPath "$TLS_KEY_PATH" \
-    '{hostId: $hostId, hostType: $hostType, listenPort: $listenPort,
+    '{hostId: $hostId, hostType: $hostType, tenancyMode: $tenancyMode, listenPort: $listenPort,
       workerRpcPublicKey: $workerRpcPublicKey,
       x25519PrivateKey: $x25519PrivateKey, baseImage: "workbench-base",
       storagePool: $storagePool, project: $project,

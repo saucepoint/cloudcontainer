@@ -5,7 +5,7 @@
  */
 import {
   JobStatusResponseSchema,
-  MAX_HOST_VCPU_OVERCOMMIT,
+  HOST_VCPU_OVERCOMMIT,
   StatsResponseSchema,
   signRequest,
   type JobRequest,
@@ -77,14 +77,17 @@ export async function daemonStats(env: Bindings, host: HostRow): Promise<StatsRe
   if (stats.hostType !== undefined && stats.hostType !== host.host_type) {
     throw new Error("daemon stats host type mismatch");
   }
+  if (stats.tenancyMode !== undefined && stats.tenancyMode !== host.tenancy_mode) {
+    throw new Error("daemon stats tenancy mode mismatch");
+  }
   if (stats.ramTotalMb + RAM_REPORT_TOLERANCE_MB < host.ram_total_mb) {
     throw new Error("daemon reports less RAM than the registered host capacity");
   }
   if (
     stats.cpuLogical !== undefined &&
-    host.vcpu_capacity > stats.cpuLogical * MAX_HOST_VCPU_OVERCOMMIT
+    host.vcpu_capacity !== stats.cpuLogical * HOST_VCPU_OVERCOMMIT
   ) {
-    throw new Error("daemon reports fewer CPUs than the registered host capacity supports");
+    throw new Error("registered host capacity must equal four times the online CPU count");
   }
   return stats;
 }

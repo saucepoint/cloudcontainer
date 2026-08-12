@@ -61,10 +61,13 @@ export function buildApp(opts: {
   });
 
   app.get("/health", (c) => {
+    const tenancyMode = config.tenancyMode ??
+      (config.hostType === "dedicated" ? "dedicated" : "shared");
     const res = HealthResponseSchema.parse({
       ok: true,
       hostId: config.hostId,
       hostType: config.hostType,
+      tenancyMode,
       version,
     });
     return c.json(res);
@@ -75,6 +78,8 @@ export function buildApp(opts: {
     const res: StatsResponse = {
       hostId: config.hostId,
       hostType: config.hostType,
+      tenancyMode: config.tenancyMode ??
+        (config.hostType === "dedicated" ? "dedicated" : "shared"),
       version,
       containers: containers
         .filter((ct) => ct.config["user.workbench.id"])
