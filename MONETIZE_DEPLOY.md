@@ -8,6 +8,59 @@ The integration uses Stripe-hosted Checkout and Customer Portal, a Cloudflare
 Worker webhook, a Cloudflare Queue, and D1 billing state. No Stripe publishable
 key is required by this application.
 
+## Deployment status (verified 2026-08-12)
+
+Completed or verified:
+
+- The checked-in production Wrangler configuration keeps
+  `BILLING_ENABLED=0` and declares the live Price, USD 6 monthly disclosure,
+  live mode, tax enabled, zero grace days, a 60-minute Checkout lifetime, and
+  the production Queue producer/consumer bindings. `wrangler deploy --dry-run`
+  accepts the configuration and reports all intended bindings.
+- `STRIPE_RESTRICTED_KEY` is present in the operator environment, is an
+  `rk_live_` restricted key, and can retrieve the configured live Price and
+  expanded Product. Read/list access is also verified for Customers, Checkout
+  Sessions, Events, Subscriptions, Invoices, and Charges. The key is
+  intentionally named `STRIPE_SECRET_KEY` in the Worker; that production
+  Worker secret exists.
+- The configured Price is active and live, charges USD 6.00 per month, and uses
+  per-unit licensed billing with an interval count of one. Its Product,
+  `Workbench Premium`, is active and has a tax code. The Price now reports
+  `tax_behavior=exclusive`, which matches `STRIPE_TAX_ENABLED=1` and satisfies
+  the Worker's tax metadata validation.
+- Both `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` exist as production
+  Worker secrets. Secret listing proves presence only; it does not verify their
+  values or that the webhook secret belongs to the intended live endpoint.
+- `usebench-billing-events` and `usebench-billing-events-dlq` exist in
+  Cloudflare.
+
+Incomplete or blocked:
+
+- Commit and deploy the gated Wrangler configuration. The latest production
+  Worker version does not yet contain the billing variables or
+  `BILLING_EVENTS`; Cloudflare therefore reports zero producers and consumers
+  for the production Queues.
+- Apply production D1 migrations `0019` through `0024`. All six are currently
+  pending.
+- Verify live-account activation, charges/payouts, and account API version in
+  Stripe Dashboard. The restricted key correctly lacks permission to retrieve
+  account details, so these cannot be verified through it.
+- Verify the key's create permissions for Customers, Checkout Sessions, and
+  Billing Portal Sessions during the controlled canary; doing so earlier would
+  create live Stripe objects.
+- Complete and record the approvals in section 1, especially tax,
+  refund/cancellation, privacy, retention, supported countries/payment methods,
+  and production on-call ownership.
+- Verify the live Customer Portal, recovery/email settings, existing-customer
+  Checkout redirect, and the live webhook destination, event set, API version,
+  signing secret, and Cloudflare source-IP rule. Secret presence alone is not
+  evidence that these settings are correct.
+- Run and record the staging acceptance and local release gates, deploy the
+  compatible daemon fleet, then pass the gate-closed billing preflight and
+  monitoring checks before attempting a live canary.
+
+Do not set `BILLING_ENABLED=1` while any item above remains incomplete.
+
 ## 1. Required access and approvals
 
 The developer performing this release needs:
@@ -373,9 +426,9 @@ npx wrangler d1 migrations list workbench --remote
 cd ../..
 ```
 
-This launch requires migrations through `0023_paid_upgrade_opt_in.sql`. D1
+This launch requires migrations through `0024_host_availability.sql`. D1
 migrations are expand-first and do not automatically roll back. As of
-2026-08-12, production reported migrations `0019` through `0023` as pending;
+2026-08-12, production reported migrations `0019` through `0024` as pending;
 always trust the fresh command output rather than this historical snapshot.
 
 ## 13. Deploy the gated Worker and migrations

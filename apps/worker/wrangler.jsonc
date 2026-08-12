@@ -57,11 +57,13 @@
     // Keep new sales closed while production Stripe resources and policy
     // values are installed and validated through the admin readiness probe.
     "BILLING_ENABLED": "0",
-    "STRIPE_LIVE_MODE": "1"
-    // Intentionally omitted until the live offer and policies are approved:
-    // STRIPE_PRICE_PAID_MONTHLY, PAID_PLAN_MONTHLY_PRICE,
-    // PAID_PLAN_CURRENCY, STRIPE_TAX_ENABLED, BILLING_GRACE_DAYS,
-    // BILLING_CHECKOUT_SESSION_MINUTES, BILLING_EXPORT_WINDOW_DAYS.
+    "STRIPE_LIVE_MODE": "1",
+    "STRIPE_PRICE_PAID_MONTHLY": "price_1U3f8wGembqEGAYvewRGeKeE",
+    "PAID_PLAN_MONTHLY_PRICE": "6",
+    "PAID_PLAN_CURRENCY": "USD",
+    "STRIPE_TAX_ENABLED": "1",
+    "BILLING_GRACE_DAYS": "0",
+    "BILLING_CHECKOUT_SESSION_MINUTES": "60"
   },
   "queues": {
     "producers": [
