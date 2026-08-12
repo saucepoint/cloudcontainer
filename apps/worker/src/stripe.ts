@@ -88,6 +88,7 @@ const StripeEventSchema = z.object({
   type: z.string().min(1),
   created: z.number().int(),
   api_version: z.string().nullable().optional(),
+  livemode: z.boolean(),
   data: z.object({ object: z.record(z.string(), z.unknown()) }).passthrough(),
 }).passthrough();
 const StripeCheckoutSessionSchema = z.object({
@@ -159,7 +160,27 @@ const StripeErrorPayloadSchema = z.object({
 function stripeSecret(env: Bindings): string {
   const secret = env.STRIPE_SECRET_KEY?.trim();
   if (!secret) throw new StripeConfigurationError();
+  const liveMode = configuredStripeLiveMode(env);
+  const validPrefix = liveMode
+    ? secret.startsWith("sk_live_") || secret.startsWith("rk_live_")
+    : secret.startsWith("sk_test_") || secret.startsWith("rk_test_");
+  if (!validPrefix) {
+    throw new StripeConfigurationError("Stripe API key mode does not match STRIPE_LIVE_MODE");
+  }
   return secret;
+}
+
+export function configuredStripeLiveMode(env: Bindings): boolean {
+  const value = env.STRIPE_LIVE_MODE?.trim();
+  if (value !== "0" && value !== "1") {
+    throw new StripeConfigurationError("Stripe live mode is not configured");
+  }
+  return value === "1";
+}
+
+/** Validate the API key prefix without returning or exposing the credential. */
+export function validateStripeApiKeyMode(env: Bindings): void {
+  stripeSecret(env);
 }
 
 async function stripeRequest<T>(
@@ -388,6 +409,7 @@ export async function verifyStripeEvent(
   rawBody: string,
   signatureHeader: string | undefined,
   secret: string | undefined,
+  expectedLiveMode: boolean,
   now = Date.now(),
 ): Promise<StripeEvent> {
   if (!secret?.trim()) throw new StripeConfigurationError("Stripe webhook secret is not configured");
@@ -435,5 +457,8 @@ export async function verifyStripeEvent(
   }
   const event = StripeEventSchema.safeParse(payload);
   if (!event.success) throw new StripeWebhookError("invalid_event");
+  if (event.data.livemode !== expectedLiveMode) {
+    throw new StripeWebhookError("mode_mismatch");
+  }
   return event.data;
 }

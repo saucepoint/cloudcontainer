@@ -506,8 +506,9 @@ open only when all of the following are complete:
 4. `usebench-billing-events` and its dead-letter Queue exist, with
    `BILLING_EVENTS` configured as producer and consumer per `README.md`;
 5. the Stripe event destination points to `/api/stripe/webhook`, uses API
-   version `2026-07-29.dahlia`, and subscribes to the event set in
-   `MONETIZATION.md`;
+   version `2026-07-29.dahlia`, the live account API version in Stripe
+   Workbench is also `2026-07-29.dahlia`, and the destination subscribes to the
+   event set in `MONETIZATION.md`;
 6. Stripe sandbox acceptance covers paid bypass, redirect non-grant, renewal,
    seven-day trial activation, zero-value opening invoice, trial cancellation,
    failed first charge, failed renewal, scheduled paid cancellation/undo,
@@ -516,19 +517,22 @@ open only when all of the following are complete:
    headroom.
 
 Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` only with Wrangler secrets.
-`STRIPE_PRICE_PAID_MONTHLY`, `PAID_PLAN_MONTHLY_PRICE`, `PAID_PLAN_CURRENCY`,
-`BILLING_CHECKOUT_SESSION_MINUTES`, `STRIPE_TAX_ENABLED`,
-`BILLING_GRACE_DAYS`, and `BILLING_EXPORT_WINDOW_DAYS` are non-secret policy
-configuration. Confirm the display amount and currency
+`STRIPE_LIVE_MODE=1`, `STRIPE_PRICE_PAID_MONTHLY`,
+`PAID_PLAN_MONTHLY_PRICE`, `PAID_PLAN_CURRENCY`,
+`BILLING_CHECKOUT_SESSION_MINUTES`, `STRIPE_TAX_ENABLED`, `BILLING_GRACE_DAYS`,
+and `BILLING_EXPORT_WINDOW_DAYS` are non-secret policy configuration. Confirm
+the display amount and currency
 exactly match the configured Stripe Price before launch. Leave
 `BILLING_EXPORT_WINDOW_DAYS` absent until the export duration, notices, and
 destruction policy have been explicitly approved. Run the normal release gates
 and deploy first with `BILLING_ENABLED=0`. Verify authenticated
 `/api/billing/status`, webhook delivery, Queue consumption, and DLQ visibility
-in the target environment. For production, switch every Stripe resource and
-secret to live mode, then enable `BILLING_ENABLED=1` only for a controlled live
-canary using a real payment method. Do not use sandbox objects, test keys, or
-test payment methods in the production canary.
+in the target environment. Run `npm run hostctl -- billing-config` and require
+`ready: true`, `salesEnabled: false`, `expectedLiveMode: true`, plus
+`stripePrice.valid: true` before opening sales. For production, switch every
+Stripe resource and secret to live mode, then enable `BILLING_ENABLED=1` only
+for a controlled live canary using a real payment method. Do not use sandbox
+objects, test keys, or test payment methods in the production canary.
 
 To stop new sales, set `BILLING_ENABLED=0` and deploy. Do not disable the
 webhook, Queue consumer, scheduled canonical reconciliation, or Portal for

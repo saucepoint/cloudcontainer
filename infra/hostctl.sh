@@ -48,6 +48,10 @@ Commands:
   list
       List registered host class, state, release, capacity, and active jobs.
 
+  billing-config
+      Show the redacted Stripe and billing launch-readiness report. This is
+      read-only and works while the new-sales gate remains closed.
+
   probe HOST_ID
       Ask the Worker to perform a signed daemon stats probe while keeping the
       host's current placement state.
@@ -318,6 +322,10 @@ list_hosts() {
       (.activeJobCount | tostring)
     ]) | @tsv
   ' | format_table
+}
+
+billing_configuration() {
+  api GET /api/admin/billing-configuration | jq .
 }
 
 probe_host() {
@@ -1241,6 +1249,7 @@ main() {
   require_command jq
   case "$command" in
     list) (($# == 0)) || die "list takes no arguments"; list_hosts ;;
+    billing-config) (($# == 0)) || die "billing-config takes no arguments"; billing_configuration ;;
     probe) (($# == 1)) || die "probe requires HOST_ID"; probe_host "$1" ;;
     state)
       (($# >= 2)) || die "state requires HOST_ID and active|draining|dead"

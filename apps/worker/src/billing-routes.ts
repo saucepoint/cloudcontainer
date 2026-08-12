@@ -3,6 +3,7 @@ import { bearerToken, secretMatches } from "./admin-auth.js";
 import { requireAccount } from "./auth.js";
 import {
   billingAvailability,
+  billingReadiness,
   configuredCheckoutSessionMinutes,
   inspectPaidStripePrice,
   validatePaidStripePrice,
@@ -16,6 +17,7 @@ import {
 } from "./entitlements.js";
 import { requestPlanTransition } from "./plan-transitions.js";
 import {
+  configuredStripeLiveMode,
   createStripeCheckoutSession,
   createStripeCustomer,
   createStripePortalSession,
@@ -292,6 +294,7 @@ export const billingRoutes = new Hono<AppContext>()
         rawBody,
         c.req.header("stripe-signature"),
         c.env.STRIPE_WEBHOOK_SECRET,
+        configuredStripeLiveMode(c.env),
       );
     } catch (error) {
       if (error instanceof StripeConfigurationError) {
@@ -319,15 +322,21 @@ export const billingRoutes = new Hono<AppContext>()
     if (failure) return failure;
     try {
       const availability = billingAvailability(c.env);
-      if (!availability.configured) {
-        return c.json({ availability, stripePrice: null });
+      const readiness = billingReadiness(c.env);
+      if (!readiness.stripeApiConfigured) {
+        return c.json({ availability, readiness, stripePrice: null });
       }
       try {
-        return c.json({ availability, stripePrice: await inspectPaidStripePrice(c.env) });
+        return c.json({
+          availability,
+          readiness,
+          stripePrice: await inspectPaidStripePrice(c.env),
+        });
       } catch (error) {
         if (error instanceof StripeApiError) {
           return c.json({
             availability,
+            readiness,
             stripePrice: {
               valid: false,
               error: { type: "stripe_api", status: error.status, code: error.code },
@@ -337,6 +346,7 @@ export const billingRoutes = new Hono<AppContext>()
         if (error instanceof StripeConfigurationError) {
           return c.json({
             availability,
+            readiness,
             stripePrice: {
               valid: false,
               error: { type: "configuration", message: error.message },
@@ -349,6 +359,7 @@ export const billingRoutes = new Hono<AppContext>()
       if (error instanceof StripeConfigurationError) {
         return c.json({
           availability: { configured: false, paidPlan: null },
+          readiness: null,
           stripePrice: {
             valid: false,
             error: { type: "configuration", message: error.message },

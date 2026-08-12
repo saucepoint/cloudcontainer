@@ -21,6 +21,7 @@ import {
 } from "./jobs.js";
 import { createUserNotification } from "./notifications.js";
 import {
+  configuredStripeLiveMode,
   parseStripeCheckoutEvent,
   parseStripeInvoice,
   paidPriceId,
@@ -625,9 +626,11 @@ export async function processBillingEventMessage(
     if (event.type !== message.eventType || event.created !== message.eventCreated) {
       throw new BillingEventError("event_metadata_mismatch");
     }
-    if (event.api_version !== undefined && event.api_version !== null &&
-        event.api_version !== STRIPE_API_VERSION) {
+    if (event.api_version !== STRIPE_API_VERSION) {
       throw new BillingEventError("event_api_version_mismatch");
+    }
+    if (event.livemode !== configuredStripeLiveMode(env)) {
+      throw new BillingEventError("event_mode_mismatch");
     }
     if (!SUPPORTED_EVENT_TYPES.has(event.type)) {
       await markNonSubscriptionEvent(env, event.id, event.data.object);

@@ -182,6 +182,7 @@ Billing is fail-closed and remains hidden unless all of these are present:
 - `BILLING_ENABLED=1`, set only after sandbox acceptance and a shared-fleet
   capacity review;
 - `STRIPE_PRICE_PAID_MONTHLY`, containing the one supported recurring Price ID;
+- `STRIPE_LIVE_MODE=1` in production (`0` only in an isolated Stripe sandbox);
 - `PAID_PLAN_MONTHLY_PRICE` (a decimal such as `20.00`) and
   `PAID_PLAN_CURRENCY` (an uppercase ISO code such as `USD`), matching that
   Stripe Price and supplying the server-rendered price disclosure;
@@ -196,8 +197,16 @@ automatic billing destruction; it is intentionally not given an implicit
 deadline. Omitted optional values use only the documented defaults; malformed
 explicit values fail billing configuration instead of silently changing policy.
 
-Create the production Queue and dead-letter Queue, then add this shape to
-`apps/worker/wrangler.jsonc` using the final queue names:
+The production bindings are declared in `apps/worker/wrangler.jsonc`. Create
+their Queue and dead-letter Queue once before the first gated deployment:
+
+```sh
+cd apps/worker
+npx wrangler queues create usebench-billing-events
+npx wrangler queues create usebench-billing-events-dlq
+```
+
+The checked-in binding shape is:
 
 ```jsonc
 "queues": {
@@ -216,13 +225,14 @@ Create the production Queue and dead-letter Queue, then add this shape to
 }
 ```
 
-In Stripe, create one monthly Paid Price, enable the Customer Portal for
+In Stripe, create one live monthly Paid Price, enable the Customer Portal for
 payment-method and invoice management, permit cancellation at period end, and
 leave arbitrary product/quantity switching disabled. Keep the Portal login link
 enabled and turn on Checkout's redirect for Customers that already have an
-active subscription; the Worker always passes the stored Customer ID. Register
-`https://YOUR_BASE_URL/api/stripe/webhook` as an account event destination with
-API version `2026-07-29.dahlia` and the event set listed in
+active subscription; the Worker always passes the stored Customer ID. Upgrade
+the live account API version in Stripe Workbench to `2026-07-29.dahlia`, then
+register `https://YOUR_BASE_URL/api/stripe/webhook` as an account event
+destination with API version `2026-07-29.dahlia` and the event set listed in
 [MONETIZATION.md](./MONETIZATION.md#97-events-to-subscribe-to). Store the
 resulting signing secret with `wrangler secret put STRIPE_WEBHOOK_SECRET`.
 Restrict the webhook route at the Cloudflare edge to Stripe's published webhook
@@ -234,6 +244,24 @@ appropriate. These settings are part of card-network trial compliance and are
 separate for Stripe sandboxes and live mode. Configure Smart Retries according
 to the approved recovery policy; the application never infers a fixed retry
 schedule from Stripe events.
+
+Install the live credentials without placing values on the command line or in
+the repository:
+
+```sh
+cd apps/worker
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+Prefer a live restricted API key (`rk_live_...`). It needs Customers
+create/read, Checkout Sessions create, Billing Portal Sessions create, and
+Events, Prices, Subscriptions, Products, Invoices, and Charges read. With
+`BILLING_ENABLED=0`, deploy the compatible Worker and inspect the redacted
+preflight using `npm run hostctl -- billing-config`. Do not open sales until it
+reports `ready: true`, `salesEnabled: false`, `expectedLiveMode: true`, and a
+valid live Price. After the controlled live canary is ready, changing
+`BILLING_ENABLED` to `1` and redeploying is the final new-sales switch.
 
 Checkout always selects the configured Price server-side and confirms that its
 active Product, recurring interval, amount, currency, quantity model, and tax

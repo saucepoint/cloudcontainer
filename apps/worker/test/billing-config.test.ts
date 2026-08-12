@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   billingAvailability,
+  billingReadiness,
   configuredCheckoutSessionMinutes,
   configuredExportWindowMs,
   configuredGraceMs,
@@ -11,6 +12,7 @@ import { makeEnv } from "./helpers/env.js";
 
 const BILLING_CONFIG = {
   BILLING_ENABLED: "1",
+  STRIPE_LIVE_MODE: "0",
   STRIPE_SECRET_KEY: "sk_test_local",
   STRIPE_WEBHOOK_SECRET: "whsec_local",
   STRIPE_PRICE_PAID_MONTHLY: "price_paid_monthly",
@@ -30,6 +32,19 @@ describe("billing configuration", () => {
     expect(billingAvailability(env).configured).toBe(true);
   });
 
+  it("reports readiness independently from the new-sales gate", () => {
+    const { env } = makeEnv({ ...BILLING_CONFIG, BILLING_ENABLED: "0" });
+
+    expect(billingAvailability(env).configured).toBe(false);
+    expect(billingReadiness(env)).toMatchObject({
+      ready: true,
+      salesEnabled: false,
+      stripeApiConfigured: true,
+      expectedLiveMode: false,
+      missing: [],
+    });
+  });
+
   it("rejects malformed policy instead of silently changing billing behavior", () => {
     const invalidGrace = makeEnv({ ...BILLING_CONFIG, BILLING_GRACE_DAYS: "later" }).env;
     const invalidExport = makeEnv({ ...BILLING_CONFIG, BILLING_EXPORT_WINDOW_DAYS: "0" }).env;
@@ -38,12 +53,16 @@ describe("billing configuration", () => {
       BILLING_CHECKOUT_SESSION_MINUTES: "30",
     }).env;
     const invalidTax = makeEnv({ ...BILLING_CONFIG, STRIPE_TAX_ENABLED: "yes" }).env;
+    const invalidMode = makeEnv({ ...BILLING_CONFIG, STRIPE_LIVE_MODE: "yes" }).env;
+    const mismatchedKeyMode = makeEnv({ ...BILLING_CONFIG, STRIPE_LIVE_MODE: "1" }).env;
 
     for (const check of [
       () => configuredGraceMs(invalidGrace),
       () => configuredExportWindowMs(invalidExport),
       () => configuredCheckoutSessionMinutes(invalidCheckout),
       () => billingAvailability(invalidTax),
+      () => billingAvailability(invalidMode),
+      () => billingAvailability(mismatchedKeyMode),
     ]) {
       expect(check).toThrow(StripeConfigurationError);
     }

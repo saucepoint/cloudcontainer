@@ -753,7 +753,8 @@ source and are never fabricated as, or overwritten by, Stripe state.
 New Paid sales are exposed only when `BILLING_ENABLED=1`, the single supported
 monthly Price is configured server-side, its matching
 `PAID_PLAN_MONTHLY_PRICE` and `PAID_PLAN_CURRENCY` disclosure values exist,
-both Stripe secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
+`STRIPE_LIVE_MODE` explicitly matches the API key and Price, both Stripe
+secrets exist, and the `BILLING_EVENTS` Queue is bound. Checkout
 requires an authenticated owner but not Free verification, stores one Customer
 mapping, permits one unexpired Checkout attempt and one non-terminal
 subscription, and reuses the attempt's stable Stripe idempotency key across
@@ -769,10 +770,12 @@ success redirect is display-only. Portal sessions require the stored Customer
 mapping.
 
 The public webhook verifies Stripe's signature over the exact raw body within
-a five-minute tolerance and publishes only event ID, type, and creation time.
+a five-minute tolerance, rejects the wrong Stripe mode, and publishes only
+event ID, type, and creation time.
 It returns success only after Queue publication. The at-least-once consumer
 deduplicates by event ID, re-fetches the Event and canonical Subscription,
-requires and validates internal user metadata, Customer, configured Price, quantity, the
+requires the pinned API version and Stripe mode, and validates internal user
+metadata, Customer, configured Price, quantity, the
 seven-day trial bound, and one-subscription invariants, and applies monotonic
 D1 facts. Canonical `trialing` state grants access only through `trial_end`;
 only a settled `invoice.paid` with canonical `active` subscription state may
@@ -1097,7 +1100,8 @@ manual checks above have been completed for affected areas.
     and the documented fleet rollback path has been exercised for any release
     that changes the shared contract.
 15. **Billing integrity:** Checkout uses only the configured server Price; a
-    validated Product/Price must match the published offer; only the account's
+    validated live/sandbox Product/Price must match the deployment mode and
+    published offer; only the account's
     first subscription receives a seven-day trial; one active Checkout attempt
     supplies a stable idempotency key; a redirect cannot grant service;
     the raw webhook is verified before durable

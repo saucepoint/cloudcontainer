@@ -558,7 +558,9 @@ Create one v1 Paid product with one recurring monthly Price. Store its Price ID
 as non-secret Worker configuration.
 
 Pin the Stripe API version in code and on the webhook destination. Upgrade it
-only with fixture regeneration and contract tests.
+in the live account's Stripe Workbench settings as well. Upgrade only with
+fixture regeneration and contract tests because queued processing retrieves
+the immutable Event snapshot by ID.
 
 The integration currently pins `2026-07-29.dahlia`. Stripe Billing and Dahlia
 are not competing products: Billing manages subscriptions, while Dahlia names
@@ -573,6 +575,7 @@ explicitly use Stripe's recommended flexible billing mode.
 | `STRIPE_SECRET_KEY` | Worker secret |
 | `STRIPE_WEBHOOK_SECRET` | Worker secret |
 | `STRIPE_PRICE_PAID_MONTHLY` | Non-secret Worker var |
+| `STRIPE_LIVE_MODE` | `1` in production; `0` only in a Stripe sandbox |
 | `STRIPE_TAX_ENABLED` | Non-secret var enabled only after tax readiness |
 | `BILLING_EVENTS` | Cloudflare Queue producer and consumer |
 | `BASE_URL` | Existing non-secret Worker var |
@@ -1085,6 +1088,9 @@ not require production credentials or commercial decisions:
   use to Customer-level state;
 - [x] fail-closed validation of the active Stripe Product and recurring Price
   against the server-rendered amount and currency before Checkout;
+- [x] explicit live/sandbox separation for API keys, Prices, and webhook Events;
+- [x] a redacted readiness probe that validates the Price while the new-sales
+  gate remains closed;
 - [x] one configured price disclosure across landing, account, and dashboard;
 - [x] automatic-tax Checkout address collection and Customer address updates;
 - [x] strict Customer, required metadata, Price, quantity, trial, and API-version
@@ -1126,9 +1132,9 @@ Stripe, Cloudflare, production data, or commercial policy. Keep
   producer and consumer using the retry/DLQ shape in `README.md`. Confirm the
   on-call team can inspect Queue lag, retries, and dead letters.
 - [ ] **6. Create the live webhook event destination.** Point it to
-  `https://usebench.dev/api/stripe/webhook`, pin API version
-  `2026-07-29.dahlia`, and subscribe to every event in §9.7. Store its live
-  signing secret as `STRIPE_WEBHOOK_SECRET`.
+  `https://usebench.dev/api/stripe/webhook`, upgrade the live account and pin
+  the destination to API version `2026-07-29.dahlia`, and subscribe to every
+  event in §9.7. Store its live signing secret as `STRIPE_WEBHOOK_SECRET`.
 - [ ] **7. Configure the live Customer Portal.** Enable payment-method and
   invoice management plus cancellation at period end. Disable arbitrary plan
   switching and quantity changes. Keep the Portal login link enabled and turn
@@ -1144,16 +1150,17 @@ Stripe, Cloudflare, production data, or commercial policy. Keep
   behavior, and address collection have been reviewed. Test the result for each
   supported jurisdiction before setting it to `1`.
 - [ ] **10. Install production vars and secrets with the sales gate closed.**
-  Configure `STRIPE_PRICE_PAID_MONTHLY`, display amount/currency, Checkout
-  lifetime, grace/export policy, Queue binding, and live secrets. Explicitly
-  keep `BILLING_ENABLED=0` for the migration and initial Worker deployment.
+  Configure `STRIPE_LIVE_MODE=1`, `STRIPE_PRICE_PAID_MONTHLY`, display
+  amount/currency, Checkout lifetime, grace/export policy, Queue binding, and
+  live secrets. Explicitly keep `BILLING_ENABLED=0` for the migration and
+  initial Worker deployment.
 - [ ] **11. Record sandbox acceptance evidence.** Exercise the full matrix in
   §14.7, including double-click/concurrent Checkout, abandoned Session expiry,
   first-trial-only resubscription, tax address behavior, zero-value renewal,
   refund/dispute correlation, Queue retry/DLQ replay, and rollback.
 - [ ] **12. Merge and deploy the gated release.** Require a clean worktree and
   passing client build, type-check, lint, full tests, dependency audit, deploy
-  dry-run, remote migration review, migration through `0022`, and post-deploy
+  dry-run, remote migration review, migration through `0023`, and post-deploy
   smoke checks. Confirm existing subscribers can still reach Portal/webhooks
   even while new sales are disabled.
 
@@ -1165,7 +1172,9 @@ Stripe, Cloudflare, production data, or commercial policy. Keep
   transition age, and paid capacity headroom. Verify the alerts reach the
   production on-call owner.
 - [ ] **14. Run a controlled live canary.** Confirm `/api/billing/status` first,
-  then set `BILLING_ENABLED=1` for a limited production canary. Use a real
+  then run `npm run hostctl -- billing-config` with the gate closed and require
+  a ready, live, valid Price report. Set `BILLING_ENABLED=1` only for a limited
+  production canary. Use a real
   payment method and live Product/Price, verify Customer/Subscription/Invoice,
   webhook-to-Queue processing, Portal access, in-app notices, entitlement, and
   container resize. Refund/cancel the canary according to the approved policy.

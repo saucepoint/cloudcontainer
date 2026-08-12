@@ -35,6 +35,7 @@ export type Bindings = Omit<
   | "WORLD_ID_ACTION"
   | "WORLD_ID_ENVIRONMENT"
   | "STRIPE_PRICE_PAID_MONTHLY"
+  | "STRIPE_LIVE_MODE"
   | "PAID_PLAN_MONTHLY_PRICE"
   | "PAID_PLAN_CURRENCY"
   | "STRIPE_TAX_ENABLED"
@@ -58,6 +59,7 @@ export type Bindings = Omit<
   WORLD_ID_ACTION: string;
   WORLD_ID_ENVIRONMENT: "production" | "staging";
   STRIPE_PRICE_PAID_MONTHLY?: string;
+  STRIPE_LIVE_MODE?: string;
   PAID_PLAN_MONTHLY_PRICE?: string;
   PAID_PLAN_CURRENCY?: string;
   STRIPE_TAX_ENABLED?: string;

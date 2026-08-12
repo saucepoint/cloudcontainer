@@ -1,8 +1,10 @@
 import {
+  configuredStripeLiveMode,
   paidPriceId,
   PAID_TRIAL_DAYS,
   retrieveStripePrice,
   StripeConfigurationError,
+  validateStripeApiKeyMode,
   type StripePrice,
 } from "./stripe.js";
 import { formatMonthlyPrice } from "./price.js";
@@ -31,6 +33,7 @@ export interface PaidStripePriceReport {
     unitAmount: number;
     currency: string;
     taxEnabled: boolean;
+    liveMode: boolean;
   };
   actual: {
     id: string;
@@ -48,6 +51,15 @@ export interface PaidStripePriceReport {
     taxBehavior: string | null;
     productTaxCode: string | null;
   };
+}
+
+export interface BillingReadinessReport {
+  ready: boolean;
+  salesEnabled: boolean;
+  stripeApiConfigured: boolean;
+  expectedLiveMode: boolean | null;
+  missing: string[];
+  paidPlan: PaidPlanDisplay | null;
 }
 
 function configuredDurationMs(
@@ -149,6 +161,7 @@ export function billingAvailability(
     !env.STRIPE_SECRET_KEY?.trim() ||
     !env.STRIPE_WEBHOOK_SECRET?.trim() ||
     !env.STRIPE_PRICE_PAID_MONTHLY?.trim() ||
+    !env.STRIPE_LIVE_MODE?.trim() ||
     !env.BILLING_EVENTS ||
     !paidPlan
   ) {
@@ -160,7 +173,50 @@ export function billingAvailability(
   configuredCheckoutSessionMinutes(env);
   configuredGraceMs(env);
   configuredExportWindowMs(env);
+  validateStripeApiKeyMode(env);
   return { configured: true, paidPlan };
+}
+
+/**
+ * Admin-safe launch readiness. This intentionally ignores the sales gate so
+ * operators can validate live Stripe configuration before enabling Checkout.
+ */
+export function billingReadiness(env: Bindings): BillingReadinessReport {
+  const paidPlan = paidPlanDisplay(env);
+  const missing = [
+    !env.STRIPE_SECRET_KEY?.trim() ? "STRIPE_SECRET_KEY" : null,
+    !env.STRIPE_WEBHOOK_SECRET?.trim() ? "STRIPE_WEBHOOK_SECRET" : null,
+    !env.STRIPE_PRICE_PAID_MONTHLY?.trim() ? "STRIPE_PRICE_PAID_MONTHLY" : null,
+    !env.STRIPE_LIVE_MODE?.trim() ? "STRIPE_LIVE_MODE" : null,
+    !env.PAID_PLAN_MONTHLY_PRICE?.trim() ? "PAID_PLAN_MONTHLY_PRICE" : null,
+    !env.PAID_PLAN_CURRENCY?.trim() ? "PAID_PLAN_CURRENCY" : null,
+    !env.BILLING_EVENTS ? "BILLING_EVENTS" : null,
+  ].filter((value): value is string => value !== null);
+  const expectedLiveMode = env.STRIPE_LIVE_MODE?.trim()
+    ? configuredStripeLiveMode(env)
+    : null;
+  const stripeApiConfigured = ![
+    "STRIPE_SECRET_KEY",
+    "STRIPE_PRICE_PAID_MONTHLY",
+    "STRIPE_LIVE_MODE",
+    "PAID_PLAN_MONTHLY_PRICE",
+    "PAID_PLAN_CURRENCY",
+  ].some((name) => missing.includes(name));
+  if (!taxConfigurationIsValid(env.STRIPE_TAX_ENABLED)) {
+    throw new StripeConfigurationError("Stripe Tax setting is invalid");
+  }
+  configuredCheckoutSessionMinutes(env);
+  configuredGraceMs(env);
+  configuredExportWindowMs(env);
+  if (stripeApiConfigured) validateStripeApiKeyMode(env);
+  return {
+    ready: missing.length === 0,
+    salesEnabled: env.BILLING_ENABLED === "1",
+    stripeApiConfigured,
+    expectedLiveMode,
+    missing,
+    paidPlan,
+  };
 }
 
 function productTaxCode(product: StripePrice["product"]): string | null {
@@ -178,6 +234,7 @@ function paidStripePriceReport(
     unitAmount: configuredUnitAmount(env),
     currency: env.PAID_PLAN_CURRENCY?.trim().toLowerCase() ?? "",
     taxEnabled: env.STRIPE_TAX_ENABLED === "1",
+    liveMode: configuredStripeLiveMode(env),
   };
   const actual = {
     id: price.id,
@@ -197,6 +254,7 @@ function paidStripePriceReport(
   };
   const mismatches = [
     actual.id !== expected.id ? "id" : null,
+    actual.liveMode !== expected.liveMode ? "livemode" : null,
     !actual.active ? "active" : null,
     !actual.productActive ? "product_active" : null,
     actual.type !== "recurring" ? "type" : null,

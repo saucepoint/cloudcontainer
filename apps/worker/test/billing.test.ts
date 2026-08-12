@@ -28,6 +28,7 @@ import {
 
 const BILLING_CONFIG = {
   BILLING_ENABLED: "1",
+  STRIPE_LIVE_MODE: "0",
   STRIPE_SECRET_KEY: "sk_test_local",
   STRIPE_WEBHOOK_SECRET: "whsec_local",
   STRIPE_PRICE_PAID_MONTHLY: "price_paid_monthly",
@@ -105,6 +106,8 @@ function invoiceEvent(
     id,
     type,
     created,
+    api_version: "2026-07-29.dahlia",
+    livemode: false,
     data: {
       object: {
         id: invoiceId,
@@ -444,6 +447,27 @@ describe("billing routes", () => {
       .toEqual({ count: 0 });
   });
 
+  it("fails closed when the Stripe Price belongs to the wrong mode", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const { cookie } = await unverifiedUser(env);
+    const fetch = stubFetch((url) => {
+      if (url.pathname === "/v1/prices/price_paid_monthly") {
+        return Response.json(paidPrice({ livemode: true }));
+      }
+      throw new Error("a live Price must not be accepted by a sandbox Worker");
+    });
+
+    const response = await app().request("/api/billing/checkout", {
+      method: "POST",
+      headers: { cookie },
+    }, env);
+
+    expect(response.status).toBe(503);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM stripe_customers").first())
+      .toEqual({ count: 0 });
+  });
+
   it("collects tax addresses and never repeats an account's used trial", async () => {
     const { env } = makeEnv({ ...BILLING_CONFIG, STRIPE_TAX_ENABLED: "1" });
     const { cookie } = await unverifiedUser(env);
@@ -567,6 +591,17 @@ describe("billing routes", () => {
       body: `${raw} `,
     }, env);
     expect(tampered.status).toBe(400);
+
+    const wrongModeEvent = { ...event, id: "evt_wrong_mode_webhook", livemode: true };
+    const wrongModeRaw = JSON.stringify(wrongModeEvent);
+    const wrongModeHeader = await signature(wrongModeRaw, "whsec_local", event.created);
+    const wrongMode = await app().request("/api/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": wrongModeHeader },
+      body: wrongModeRaw,
+    }, env);
+    expect(wrongMode.status).toBe(400);
+    expect(sent).toHaveLength(1);
   });
 
   it("provides a secret-authenticated, non-PII billing support view", async () => {
@@ -620,6 +655,41 @@ describe("billing routes", () => {
     expect(JSON.stringify(body)).not.toContain("whsec_local");
   });
 
+  it("validates Stripe readiness while the new-sales gate remains closed", async () => {
+    const { env } = makeEnv({
+      ...BILLING_CONFIG,
+      BILLING_ENABLED: "0",
+      FLEET_ADMIN_SECRET: "support-secret",
+    });
+    const fetch = stubFetch((url) => {
+      if (url.pathname === "/v1/prices/price_paid_monthly") {
+        return Response.json(paidPrice());
+      }
+      return null;
+    });
+
+    const response = await app().request("/api/admin/billing-configuration", {
+      headers: { authorization: "Bearer support-secret" },
+    }, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      availability: { configured: false },
+      readiness: {
+        ready: true,
+        salesEnabled: false,
+        stripeApiConfigured: true,
+        expectedLiveMode: false,
+        missing: [],
+      },
+      stripePrice: {
+        valid: true,
+        expected: { liveMode: false },
+        actual: { liveMode: false },
+      },
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("billing event consumer", () => {
@@ -645,6 +715,28 @@ describe("billing event consumer", () => {
     });
   });
 
+  it("rejects retrieved events from the wrong Stripe mode", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    const created = Math.floor(Date.now() / 1000);
+    const event = {
+      ...invoiceEvent("evt_wrong_mode", created),
+      livemode: true,
+    };
+    stubFetch(stripeEventRoutes({ evt_wrong_mode: event }, {}));
+
+    await expect(processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    })).rejects.toMatchObject({ code: "event_mode_mismatch" });
+    expect(await env.DB.prepare(
+      "SELECT status, last_error_code FROM stripe_billing_events WHERE event_id = 'evt_wrong_mode'",
+    ).first()).toEqual({
+      status: "failed",
+      last_error_code: "event_mode_mismatch",
+    });
+  });
+
   it("grants Paid access for exactly the canonical seven-day trial window", async () => {
     const { env } = makeEnv(BILLING_CONFIG);
     await unverifiedUser(env);
@@ -655,6 +747,8 @@ describe("billing event consumer", () => {
       id: "evt_trial_started",
       type: "customer.subscription.created",
       created,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "sub_paid", customer: "cus_user" } },
     };
     const openingInvoice = invoiceEvent(
@@ -718,6 +812,8 @@ describe("billing event consumer", () => {
       id: "evt_trial_will_end",
       type: "customer.subscription.trial_will_end",
       created,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "sub_paid", customer: "cus_user" } },
     };
     stubFetch(stripeEventRoutes(
@@ -751,6 +847,8 @@ describe("billing event consumer", () => {
       id: "evt_checkout_expired",
       type: "checkout.session.expired",
       created: 1_800_000_000,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "cs_expired" } },
     };
     stubFetch(stripeEventRoutes({ evt_checkout_expired: event }, {}));
@@ -777,6 +875,8 @@ describe("billing event consumer", () => {
       id: "evt_charge_refunded",
       type: "charge.refunded",
       created: 1_800_000_000,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "ch_refunded", customer: "cus_user" } },
     };
     const invoice = invoiceEvent("ignored", event.created).data.object;
@@ -834,6 +934,8 @@ describe("billing event consumer", () => {
       id: "evt_trial_canceled",
       type: "customer.subscription.updated",
       created,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "sub_paid", customer: "cus_user" } },
     };
     const canceledTrial = {
@@ -1115,6 +1217,8 @@ describe("billing event consumer", () => {
       id: "evt_old_deleted",
       type: "customer.subscription.deleted",
       created: 3,
+      api_version: "2026-07-29.dahlia",
+      livemode: false,
       data: { object: { id: "sub_old", customer: "cus_user" } },
     };
     stubFetch(stripeEventRoutes(
