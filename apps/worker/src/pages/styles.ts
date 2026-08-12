@@ -85,11 +85,10 @@ code, pre { font-family: var(--mono); }
 .card-head h2 { margin: 0; }
 .dashboard-heading { display: flex; gap: 1rem; align-items: flex-end; justify-content: space-between;
   margin-bottom: 0.65rem; }
-.dashboard-heading h1 { margin-bottom: 0; }
-.account-state { flex: 0 0 auto; padding: 0.18rem 0.5rem; border: 1px solid var(--line-strong);
-  border-radius: 999px; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; }
-.account-state.verified, .account-state.verified_premium { border-color: #87ad91; color: #28643b; }
-.account-state.premium, .account-state.verified_premium { background: var(--accent-soft); }
+.dashboard-heading h1 { min-width: 0; margin-bottom: 0; }
+.account-state { flex: 0 1 auto; min-width: 0; color: var(--muted); font-family: var(--mono); font-size: 0.7rem;
+  white-space: normal; overflow-wrap: anywhere; text-align: right; }
+.account-state.verified, .account-state.verified_premium { color: #28643b; }
 .btn, .link-btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
   min-height: 2.15rem; font-weight: 600; font-size: 0.92rem; line-height: 1.2; cursor: pointer;
   text-decoration: none;

@@ -784,13 +784,15 @@ a newer deadline or reverse newer canonical subscription state. The Cron
 reconciler performs bounded stale-subscription repair rather than polling every
 account.
 
-A paid entitlement creates an idempotent in-place resize intent. The current
-container tier and resource fields do not change until the daemon succeeds.
-Free-to-Paid claims only the positive CPU/RAM/disk delta on its current mixed
-shared host; insufficient capacity leaves the Free container usable in
-`upgrade_pending` and retries automatically. Resize failure retains the claimed
-delta and retries without double reservation. Upgrade success restores the
-prior running/stopped state. Paid-to-Free first stops a running container, then
+A paid entitlement makes Premium resources available but does not change an
+existing Free container. The owner must explicitly opt in from the dashboard;
+that action creates an idempotent in-place resize intent. The current container
+tier and resource fields do not change until the daemon succeeds. Free-to-Paid
+claims only the positive CPU/RAM/disk delta on its current mixed shared host;
+insufficient capacity leaves the Free container usable in `upgrade_pending` and
+retries automatically. Resize failure retains the claimed delta and retries
+without double reservation. Upgrade success restores the prior running/stopped
+state. Paid-to-Free remains automatic: it first stops a running container, then
 applies the lower CPU/RAM limits while stopped and leaves it stopped. The UI
 warns that stopping disconnects sessions and can lose unsaved progress. Every
 plan transition keeps at least the container's current home/root allocation;

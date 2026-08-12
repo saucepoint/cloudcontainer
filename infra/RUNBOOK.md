@@ -457,13 +457,14 @@ For an empty draining dedicated host, change its account assignment with:
 The API accepts only an active account with the dedicated paid entitlement.
 It rejects assignment changes while the host has a tenant or active job.
 
-Free/Paid entitlement changes create an idempotent in-place resize. Positive
-resource deltas are reserved before dispatch; no capacity leaves the current
-container usable and pending. A failed resize retains the delta for safe retry,
-and success restores the prior running/stopped state. Paid-to-Free retains the
-grown disk allocation. Inspect transition state in D1/support tooling and let
-the reconciler retry; do not release claimed capacity or rewrite the actual
-tier manually.
+Paid entitlement makes an in-place upgrade available, but an existing Free
+container changes only after its owner opts in from the dashboard. Paid-to-Free
+remains automatic when access ends. Positive resource deltas are reserved
+before dispatch; no capacity leaves the current container usable and pending.
+A failed resize retains the delta for safe retry, and success restores the
+prior running/stopped state. Paid-to-Free retains the grown disk allocation.
+Inspect transition state in D1/support tooling and let the reconciler retry; do
+not release claimed capacity or rewrite the actual tier manually.
 
 Use the following explicit destructive operation only for a tenancy change,
 legacy recovery, or another reviewed case that cannot resize in place. It
@@ -496,7 +497,7 @@ endpoint only after the certificate is trusted and installed.
 Never enable sales merely because Stripe secrets exist. The launch gate is
 open only when all of the following are complete:
 
-1. migrations through `0022` and the compatible Worker are deployed;
+1. migrations through `0023` and the compatible Worker are deployed;
 2. every active shared daemon reports `tenancyMode=shared` and
    `mixed-tier-shared-v1`, and a mixed placement/resize staging run passed;
 3. the monthly Paid Price, currency, tax policy, supported payment methods,

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatRamGb, pollDelay, type ContainerView } from "../client/dashboard-model.js";
+import {
+  formatRamGb,
+  isBusy,
+  planAdjustmentLabel,
+  pollDelay,
+  type ContainerView,
+} from "../client/dashboard-model.js";
 import { HttpError, postJson, requestJson } from "../client/http.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -79,5 +85,38 @@ describe("dashboard polling policy", () => {
   it("stops in steady state unless an immediate refresh is required", () => {
     expect(pollDelay(container())).toBeNull();
     expect(pollDelay(container(), true)).toBe(5_000);
+  });
+});
+
+describe("plan adjustment progress", () => {
+  it("keeps plan transitions visibly busy while waiting for asynchronous work", () => {
+    const pending = container({
+      status: "upgrade_pending",
+      planTransition: { desiredTier: "paid", state: "waiting_capacity", requestedAt: 1 },
+    });
+
+    expect(isBusy(pending)).toBe(true);
+    expect(planAdjustmentLabel(pending)).toBe("Waiting for Premium capacity…");
+  });
+
+  it("distinguishes a safe downgrade stop from its resource adjustment", () => {
+    const transition = { desiredTier: "free", state: "requested", requestedAt: 1 };
+    expect(planAdjustmentLabel(container({
+      status: "upgrade_pending",
+      planTransition: transition,
+      job: { id: "job-stop", op: "stop", status: "running", error: null },
+    }))).toBe("Stopping your workbench before applying Free limits…");
+    expect(planAdjustmentLabel(container({
+      status: "upgrade_pending",
+      planTransition: { ...transition, state: "resizing" },
+    }))).toBe("Applying Free CPU and memory limits…");
+  });
+
+  it("shows when an in-place Premium resize is actively applying", () => {
+    expect(planAdjustmentLabel(container({
+      status: "upgrade_pending",
+      planTransition: { desiredTier: "paid", state: "resizing", requestedAt: 1 },
+      job: { id: "job-resize", op: "resize", status: "queued", error: null },
+    }))).toBe("Applying Premium CPU, memory, and storage limits…");
   });
 });

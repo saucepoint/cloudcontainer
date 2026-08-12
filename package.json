@@ -12,7 +12,7 @@
     "dev:worker": "npm run dev -w apps/worker",
     "dev:daemon": "npm run dev -w apps/daemon",
     "create:invite": "npm run invite:create -w apps/worker --",
-    "create:invite:staging": "npm run invite:create -w apps/worker -- --url https://staging.usebench.dev",
+    "create:invite:staging": "npm run invite:create -w apps/worker -- --environment staging",
     "hostctl": "bash ./infra/hostctl.sh",
     "hostctl:staging": "WORKBENCH_ENVIRONMENT=staging bash ./infra/hostctl.sh",
     "deploy": "bash ./deploy.sh",

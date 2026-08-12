@@ -647,3 +647,79 @@ describe("0022 billing Checkout hardening migration", () => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
+
+describe("0023 Paid upgrade opt-in migration", () => {
+  it("cancels only legacy Paid upgrades that have not reached the host", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0003_multi_agent.sql",
+      "0004_root_disk_accounting.sql",
+      "0005_unique_ssh_keys.sql",
+      "0006_wrangler_oauth.sql",
+      "0007_github_repositories.sql",
+      "0008_host_cpu_health.sql",
+      "0009_passkey_invite_auth.sql",
+      "0010_better_auth_accounts.sql",
+      "0011_free_tier_memory.sql",
+      "0012_developer_service_tokens.sql",
+      "0013_notifications.sql",
+      "0014_host_fleet.sql",
+      "0015_host_lifecycle.sql",
+      "0016_free_tier_cpu.sql",
+      "0017_cli_auth.sql",
+      "0018_setup_drafts.sql",
+      "0019_monetization_foundation.sql",
+      "0020_workbench_configurations.sql",
+      "0021_paid_tier_cpu.sql",
+      "0022_billing_checkout_hardening.sql",
+    ]) db.exec(migration(name));
+    db.exec(`
+      INSERT INTO users
+        (id, name, email, email_verified, subscription_status, created_at, updated_at)
+      VALUES
+        ('waiting-user', 'Waiting', 'waiting@example.test', 1, 'paid', 1, 1),
+        ('reserved-user', 'Reserved', 'reserved@example.test', 1, 'paid', 1, 1);
+      INSERT INTO hosts
+        (id, ipv4, ssh_hostname, daemon_endpoint, daemon_pubkey,
+         ram_total_mb, ram_reserve_mb, vcpu_capacity, vcpu_allocated,
+         disk_total_gb, status, joined_at, host_type, max_tenants)
+      VALUES
+        ('host-1', '192.0.2.10', 'host.test', 'https://host.test', 'pub',
+         16384, 3072, 16, 3, 200, 'active', 1, 'regular', 4);
+      INSERT INTO containers
+        (id, user_id, host_id, ssh_port, agents, tier, placement_class,
+         cpu, ram_mb, disk_gb, status, status_detail, created_at)
+      VALUES
+        ('waiting-container', 'waiting-user', 'host-1', 30500, '["claude"]',
+         'free', 'budget', 1, 1536, 5, 'upgrade_pending', 'waiting', 1),
+        ('reserved-container', 'reserved-user', 'host-1', 30501, '["codex"]',
+         'free', 'budget', 1, 1536, 5, 'upgrade_pending', 'resizing', 1);
+      INSERT INTO container_plan_transitions
+        (container_id, from_tier, to_tier, target_disk_gb, prior_status, state,
+         reserved_cpu, reserved_ram_mb, reserved_disk_gb, requested_at, updated_at)
+      VALUES
+        ('waiting-container', 'free', 'paid', 8, 'running', 'waiting_capacity',
+         0, 0, 0, 1, 1),
+        ('reserved-container', 'free', 'paid', 8, 'running', 'resizing',
+         1, 2560, 6, 1, 1);
+    `);
+
+    db.exec(migration("0023_paid_upgrade_opt_in.sql"));
+
+    expect(db.prepare(
+      "SELECT id, status, status_detail FROM containers ORDER BY id",
+    ).all()).toEqual([
+      { id: "reserved-container", status: "upgrade_pending", status_detail: "resizing" },
+      { id: "waiting-container", status: "running", status_detail: null },
+    ]);
+    expect(db.prepare(
+      "SELECT container_id, state FROM container_plan_transitions ORDER BY container_id",
+    ).all()).toEqual([
+      { container_id: "reserved-container", state: "resizing" },
+      { container_id: "waiting-container", state: "cancelled" },
+    ]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});

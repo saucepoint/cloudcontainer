@@ -390,12 +390,13 @@ The script targets `https://usebench.dev` by default. Pass `-- --url
 https://YOUR_BASE_URL` after the command to target another deployment.
 For staging, use the dedicated command so the target cannot be mistyped:
 
-    read -rs INVITE_ADMIN_SECRET && export INVITE_ADMIN_SECRET
     npm run create:invite:staging
-    unset INVITE_ADMIN_SECRET
 
-This command targets `https://staging.usebench.dev` and must use the staging
-Worker's `INVITE_ADMIN_SECRET`, never the production secret.
+This command targets `https://staging.usebench.dev` and reads
+`INVITE_ADMIN_SECRET` from `~/.config/usebench/staging.env`, overriding any
+production value exported in the current shell. Set
+`USEBENCH_STAGING_ENV_FILE` to use another environment file. The command fails
+before making a request if that staging credential file is unavailable.
 
 The script prints one eight-character uppercase alphanumeric code. Send it to
 its intended recipient through a private channel. The recipient first signs in
@@ -503,6 +504,9 @@ reservation.
 `0022_billing_checkout_hardening.sql` records whether a Stripe Customer has
 already consumed the account-level trial so cancellation and resubscription
 cannot create another free-service period.
+`0023_paid_upgrade_opt_in.sql` retires legacy, unreserved Free-to-Paid resize
+intents before the compatible Worker makes existing-instance upgrades an
+explicit dashboard action.
 
 The CLI package can be built and inspected without publishing:
 

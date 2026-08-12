@@ -106,7 +106,7 @@ export async function reconcile(env: Bindings, now: () => number = Date.now): Pr
   });
 
   // Billing order is safety-sensitive: refresh canonical Stripe state before
-  // enforcing deadlines, realize entitlement-driven transitions before new
+  // enforcing deadlines, realize durable plan transitions before new
   // waitlist placements, and only then consider destructive export expiry.
   const orderedTasks = [
     ["stripe_reconciliation", () => reconcileStaleStripeSubscriptions(env, now())],

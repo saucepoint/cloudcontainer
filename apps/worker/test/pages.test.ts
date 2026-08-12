@@ -378,6 +378,13 @@ describe("account page", () => {
     expect(securityClient).toContain("Delete saved credentials?");
     expect(securityClient).toContain("Delete account?");
   });
+
+  it("shows Stripe progress while opening account billing actions", () => {
+    expect(securityClient).toContain('indicator.className = "spinner"');
+    expect(securityClient).toContain('billingStatus.setAttribute("aria-busy", "true")');
+    expect(securityClient).toContain("Opening Stripe checkout…");
+    expect(securityClient).toContain("Opening Stripe billing…");
+  });
 });
 
 describe("subscription sign-in wiring", () => {
@@ -703,6 +710,9 @@ describe("dashboard loading and polling", () => {
     expect(dashboardClient).toContain("setAccount(result.account)");
     expect(dashboardClient).toContain('setCheckoutStatus("confirmed")');
     expect(dashboardClient).toContain("setTimeout(() => void pollBilling()");
+    expect(dashboardClient).toContain("Stripe is processing your checkout…");
+    expect(dashboardClient).toContain("Your Free instance stays Free until you choose Upgrade instance below.");
+    expect(dashboardClient).not.toContain("desiredTierMismatch");
   });
 
   it("loads one dashboard snapshot, then polls only container state without replacing forms", () => {
@@ -725,13 +735,24 @@ describe("dashboard loading and polling", () => {
   it("offers an in-place Premium upgrade on an already-running Free workbench", () => {
     expect(dashboardClient).toContain("Upgrade this workbench in place.");
     expect(dashboardClient).toContain("Your persistent files stay on the same disk.");
-    expect(dashboardClient).toContain('container.status === "running" && container.tier === "free"');
     expect(dashboardClient).toContain('openBilling("/api/billing/checkout")');
     expect(dashboardClient).toContain("Start 7-day Premium trial →");
+    expect(dashboardClient).toContain("Opening Stripe checkout…");
+    expect(dashboardClient).toContain("Applying Premium CPU, memory, and storage limits…");
+  });
+
+  it("requires an explicit instance-upgrade click after Premium becomes active", () => {
+    expect(dashboardClient).toContain("Premium is active. Upgrade this instance when you are ready.");
+    expect(dashboardClient).toContain("Upgrade instance →");
+    expect(dashboardClient).toContain("Requesting Premium resources…");
+    expect(dashboardClient).toContain('api<{ container: ContainerView }>("/api/container/upgrade"');
+    expect(dashboardClient).toContain("account?.premium && container.tier === \"free\"");
   });
 
   it("warns that downgrade stops can lose unsaved progress while retaining disk data", () => {
-    expect(dashboardClient).toContain("We are stopping the workbench before applying Free limits.");
+    expect(dashboardClient).toContain("Downgrading to Free");
+    expect(dashboardClient).toContain("Stopping your workbench before applying Free limits…");
+    expect(dashboardClient).toContain("The workbench is stopped before Free limits are applied.");
     expect(dashboardClient).toContain("Unsaved progress in active sessions may be lost");
     expect(dashboardClient).toContain("files on the persistent disk will be retained");
     expect(dashboardClient).toContain("Stopping disconnects active sessions. Unsaved progress may be lost");

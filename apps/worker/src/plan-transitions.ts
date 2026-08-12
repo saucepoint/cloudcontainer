@@ -358,14 +358,34 @@ export async function cancelUnreservedPlanTransition(
       `UPDATE container_plan_transitions
        SET state = 'cancelled', updated_at = ?, last_error_code = NULL
        WHERE container_id = ? AND state IN ('requested','waiting_capacity')
-         AND reserved_cpu = 0 AND reserved_ram_mb = 0 AND reserved_disk_gb = 0`,
-    ).bind(at, containerId),
+         AND reserved_cpu = 0 AND reserved_ram_mb = 0 AND reserved_disk_gb = 0
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs
+           WHERE container_id = ? AND status IN ('queued','running')
+             AND op IN ('provision','rebuild','start','stop','destroy','resize')
+         )`,
+    ).bind(at, containerId, containerId),
     env.DB.prepare(
       `UPDATE containers SET status = ?, status_detail = NULL
        WHERE id = ? AND status = 'upgrade_pending' AND changes() = 1`,
     ).bind(transition.prior_status, containerId),
   ])) as Array<{ meta?: { changes?: number } }>;
   return Boolean(results[0]?.meta?.changes);
+}
+
+/** Preserve an existing Paid machine when access returns during an unstarted downgrade. */
+export async function cancelPendingDowngradeForRestoredPaidAccess(
+  env: Bindings,
+  userId: string,
+  at = Date.now(),
+): Promise<boolean> {
+  const container = await getContainerForUser(env, userId);
+  if (!container || container.tier !== "paid" || container.status !== "upgrade_pending") {
+    return false;
+  }
+  const transition = await transitionForContainer(env, container.id);
+  if (transition?.to_tier !== "free") return false;
+  return cancelUnreservedPlanTransition(env, container.id, at);
 }
 
 /**

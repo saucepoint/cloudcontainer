@@ -43,7 +43,11 @@ import {
 } from "./jobs.js";
 import { ProvisioningNotAllowedError, startProvision } from "./placement.js";
 import { accountAccessForUser } from "./entitlements.js";
-import { cancelPlanTransitionForDestroy } from "./plan-transitions.js";
+import {
+  cancelPlanTransitionForDestroy,
+  requestPaidUpgrade,
+  type PlanTransitionResult,
+} from "./plan-transitions.js";
 import { readJsonBody } from "./http.js";
 import {
   markAllNotificationsRead,
@@ -407,6 +411,47 @@ export const apiRoutes = new Hono<AppContext>()
     const container = await getContainerForUser(c.env, userId);
     if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
     return c.json({ error: "Placement has already started; it cannot be withdrawn now." }, 409);
+  })
+  .post("/api/container/upgrade", requireAccount, async (c) => {
+    const user = c.get("user");
+    const container = await getContainerForUser(c.env, user.id);
+    if (!container) return c.json({ error: "No workbench exists for this account." }, 404);
+    const access = await accountAccessForUser(c.env, user);
+    if (!access.premium) {
+      return c.json({ error: "An active Premium plan is required to upgrade this instance." }, 403);
+    }
+    if (container.tier === "paid") {
+      return c.json({ result: "not_needed", container: await currentContainerView(c.env, user.id) });
+    }
+    if (!["running", "stopped", "upgrade_pending"].includes(container.status)) {
+      return c.json({ error: `cannot upgrade while ${container.status}` }, 409);
+    }
+
+    let result: PlanTransitionResult;
+    try {
+      result = await requestPaidUpgrade(c.env, user.id);
+    } catch (error) {
+      if (
+        error instanceof HostJobAdmissionError ||
+        error instanceof LifecycleJobConflictError ||
+        error instanceof ContainerPlacementConflictError
+      ) {
+        return c.json({
+          result: "waiting_capacity",
+          container: await currentContainerView(c.env, user.id),
+        }, 202);
+      }
+      throw error;
+    }
+    if (result === "ineligible") {
+      return c.json({ error: "Premium access changed. Refresh and try again." }, 403);
+    }
+    if (result === "conflict") {
+      return c.json({ error: "Another instance change is already in progress." }, 409);
+    }
+    const view = await currentContainerView(c.env, user.id);
+    if (result === "not_needed") return c.json({ result, container: view });
+    return c.json({ result, container: view }, 202);
   })
   .post("/api/container/:op", requireAccount, async (c) => {
     const user = c.get("user");

@@ -116,9 +116,40 @@ export function isBusy(container: ContainerView | null): boolean {
   return Boolean(container && (
     container.status === "provisioning" ||
     container.status === "destroying" ||
+    container.status === "upgrade_pending" ||
     container.job?.status === "queued" ||
     container.job?.status === "running"
   ));
+}
+
+export function planAdjustmentLabel(container: ContainerView): string | null {
+  if (container.status !== "upgrade_pending" || !container.planTransition) return null;
+  const downgrading = container.planTransition.desiredTier === "free";
+  const activeJob = container.job?.status === "queued" || container.job?.status === "running"
+    ? container.job.op
+    : null;
+
+  if (downgrading && activeJob === "stop") {
+    return "Stopping your workbench before applying Free limits…";
+  }
+  if (activeJob === "resize" || container.planTransition.state === "resizing") {
+    return downgrading
+      ? "Applying Free CPU and memory limits…"
+      : "Applying Premium CPU, memory, and storage limits…";
+  }
+  if (container.planTransition.state === "waiting_capacity") {
+    return downgrading
+      ? "Waiting for the host before applying Free limits…"
+      : "Waiting for Premium capacity…";
+  }
+  if (container.planTransition.state === "failed_retryable") {
+    return downgrading
+      ? "Retrying the Free instance adjustment…"
+      : "Retrying the Premium instance adjustment…";
+  }
+  return downgrading
+    ? "Preparing the Free instance adjustment…"
+    : "Preparing the Premium instance adjustment…";
 }
 
 export function canManageSshKeys(container: ContainerView | null): boolean {

@@ -10,25 +10,50 @@ const billingStatus = document.getElementById("billing-status");
 const checkoutButton = document.getElementById("billing-checkout-btn") as HTMLButtonElement | null;
 const portalButton = document.getElementById("billing-portal-btn") as HTMLButtonElement | null;
 
+function spinner(): HTMLSpanElement {
+  const indicator = document.createElement("span");
+  indicator.className = "spinner";
+  indicator.setAttribute("aria-hidden", "true");
+  return indicator;
+}
+
+function setBillingProgress(message: string): void {
+  if (!billingStatus) return;
+  billingStatus.replaceChildren(spinner(), document.createTextNode(message));
+  billingStatus.setAttribute("aria-busy", "true");
+}
+
+function setBillingMessage(message: string): void {
+  if (!billingStatus) return;
+  billingStatus.textContent = message;
+  billingStatus.removeAttribute("aria-busy");
+}
+
 function openBilling(path: string, button: HTMLButtonElement, pending: string): void {
+  if (button.disabled) return;
+  const originalLabel = button.textContent?.trim() || "Continue";
   button.disabled = true;
-  if (billingStatus) billingStatus.textContent = pending;
+  button.setAttribute("aria-busy", "true");
+  button.replaceChildren(spinner(), document.createTextNode(pending));
+  setBillingProgress(pending);
   void requestJson<{ url: string }>(path, { method: "POST" })
     .then((result) => { window.location.assign(result.url); })
     .catch((error: unknown) => {
-      if (billingStatus) billingStatus.textContent = errorMessage(error, "Billing is temporarily unavailable.");
+      setBillingMessage(errorMessage(error, "Billing is temporarily unavailable."));
+      button.textContent = originalLabel;
+      button.removeAttribute("aria-busy");
       button.disabled = false;
     });
 }
 
 checkoutButton?.addEventListener("click", () => {
-  openBilling("/api/billing/checkout", checkoutButton, "Opening secure checkout…");
+  openBilling("/api/billing/checkout", checkoutButton, "Opening Stripe checkout…");
 });
 portalButton?.addEventListener("click", () => {
-  openBilling("/api/billing/portal", portalButton, "Opening billing management…");
+  openBilling("/api/billing/portal", portalButton, "Opening Stripe billing…");
 });
 if (new URLSearchParams(window.location.search).get("checkout") === "success" && billingStatus) {
-  billingStatus.textContent = "Checkout completed. Activating your 7-day Paid trial…";
+  setBillingProgress("Stripe is processing your checkout…");
 }
 
 function updateNotificationBadge(): void {

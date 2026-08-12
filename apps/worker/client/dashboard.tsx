@@ -8,6 +8,7 @@ import {
   displayError,
   formatRamGb,
   isBusy,
+  planAdjustmentLabel,
   pollDelay,
   type BillingStatus,
   type ContainerAction,
@@ -33,22 +34,60 @@ function redirectIfSignedOut(error: unknown): boolean {
   return true;
 }
 
+function PlanChangeProgress({
+  container,
+  billingSource,
+}: {
+  container: ContainerView;
+  billingSource: string | null;
+}) {
+  const downgrading = container.planTransition?.desiredTier === "free";
+  const adjustment = planAdjustmentLabel(container) ?? "Preparing the instance adjustment…";
+  return (
+    <div className="notice warning" role="status" aria-live="polite" aria-busy="true">
+      <p><strong>{downgrading ? "Downgrading to Free" : "Upgrading to Premium"}</strong></p>
+      {billingSource === "stripe" ? (
+        <p>✓ {downgrading ? "Stripe plan update received." : "Premium access confirmed by Stripe."}</p>
+      ) : null}
+      <p><BusyLabel busy>{adjustment}</BusyLabel></p>
+      <p className="muted">
+        {downgrading
+          ? "Premium access ended. The workbench is stopped before Free limits are applied. Unsaved progress in active sessions may be lost; files on the persistent disk will be retained, including data above the Free storage allocation."
+          : "Your existing workbench remains available while we adjust its machine resources. Persistent files stay on the same disk."}
+      </p>
+    </div>
+  );
+}
+
 function ContainerCard({
   container,
   action,
   cancelPlacement,
   upgradeOffer,
-  upgrade,
+  openUpgradeCheckout,
+  premiumUpgradeAvailable,
+  upgradeInstance,
   actionBusy,
+  billingBusy,
+  instanceUpgradeBusy,
+  billingSource,
 }: {
   container: ContainerView;
   action: (operation: ContainerAction) => void;
   cancelPlacement: () => void;
   upgradeOffer: PremiumUpgradeOffer | null;
-  upgrade: () => void;
+  openUpgradeCheckout: () => void;
+  premiumUpgradeAvailable: boolean;
+  upgradeInstance: () => void;
   actionBusy: boolean;
+  billingBusy: boolean;
+  instanceUpgradeBusy: boolean;
+  billingSource: string | null;
 }) {
   const busy = isBusy(container);
+  const canOfferUpgrade = container.tier === "free" &&
+    (container.status === "running" || container.status === "stopped") &&
+    (upgradeOffer !== null || premiumUpgradeAvailable);
   const runAction = (operation: ContainerAction) => {
     if (operation === "destroy" || operation === "rebuild" || operation === "stop") {
       askConfirmation(
@@ -86,14 +125,32 @@ function ContainerCard({
       <p className="muted">
         {container.cpu} vCPU · {formatRamGb(container.ramMb)} GB RAM · {container.tier === "paid" ? "premium" : "free"}
       </p>
-      {container.status === "running" && container.tier === "free" && upgradeOffer ? (
+      {canOfferUpgrade ? (
         <div className="premium-upgrade-cta">
           <p>
-            <strong>Upgrade this workbench in place.</strong><br />
-            Get 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(upgradeOffer.price, upgradeOffer.currency)}. Your persistent files stay on the same disk.
+            <strong>{premiumUpgradeAvailable ? "Premium is active. Upgrade this instance when you are ready." : "Upgrade this workbench in place."}</strong><br />
+            {premiumUpgradeAvailable
+              ? "Apply 2 vCPU, 4 GB RAM, and more storage without replacing its persistent disk."
+              : <>Get 2 vCPU, 4 GB RAM, and more storage for {formatMonthlyPrice(upgradeOffer!.price, upgradeOffer!.currency)}. Your persistent files stay on the same disk.</>}
           </p>
-          <button className="btn primary" type="button" disabled={actionBusy} onClick={upgrade}>
-            {upgradeOffer.trialEligible ? "Start 7-day Premium trial →" : "Upgrade to Premium →"}
+          <button
+            className="btn primary"
+            type="button"
+            disabled={actionBusy}
+            aria-busy={premiumUpgradeAvailable ? instanceUpgradeBusy : billingBusy}
+            onClick={premiumUpgradeAvailable ? upgradeInstance : openUpgradeCheckout}
+          >
+            <BusyLabel busy={premiumUpgradeAvailable ? instanceUpgradeBusy : billingBusy}>
+              {instanceUpgradeBusy
+                ? "Requesting Premium resources…"
+                : premiumUpgradeAvailable
+                ? "Upgrade instance →"
+                : billingBusy
+                ? "Opening Stripe checkout…"
+                : upgradeOffer!.trialEligible
+                ? "Start 7-day Premium trial →"
+                : "Upgrade to Premium →"}
+            </BusyLabel>
           </button>
         </div>
       ) : null}
@@ -124,11 +181,7 @@ function ContainerCard({
         </p>
       ) : null}
       {container.status === "upgrade_pending" ? (
-        <p className="notice warning">
-          {container.planTransition?.desiredTier === "free"
-            ? "Premium access ended. We are stopping the workbench before applying Free limits. Unsaved progress in active sessions may be lost; files on the persistent disk will be retained."
-            : "Payment confirmed. Your existing workbench remains available while we allocate capacity for the larger plan. Persistent files stay on the same disk."}
-        </p>
+        <PlanChangeProgress container={container} billingSource={billingSource} />
       ) : null}
       {container.status === "destroying" ? <p><BusyLabel busy>Deleting…</BusyLabel></p> : null}
       {container.status === "error" ? (
@@ -263,6 +316,8 @@ function DashboardApp() {
   const [pageError, setPageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [actionBusy, setActionBusy] = React.useState(false);
+  const [billingAction, setBillingAction] = React.useState<"checkout" | "portal" | null>(null);
+  const [instanceUpgradeBusy, setInstanceUpgradeBusy] = React.useState(false);
   const [pollVersion, setPollVersion] = React.useState(0);
   const pollInFlight = React.useRef(false);
   const checkoutPollInFlight = React.useRef(false);
@@ -442,7 +497,9 @@ function DashboardApp() {
   };
 
   const openBilling = async (path: "/api/billing/checkout" | "/api/billing/portal") => {
+    if (actionBusy) return;
     setActionBusy(true);
+    setBillingAction(path.endsWith("/checkout") ? "checkout" : "portal");
     setActionError("");
     try {
       const result = await api<{ url: string }>(path, { method: "POST" });
@@ -450,6 +507,33 @@ function DashboardApp() {
     } catch (error) {
       setActionError(displayError(error, "Billing is temporarily unavailable."));
       setActionBusy(false);
+      setBillingAction(null);
+    }
+  };
+
+  const upgradeInstance = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setInstanceUpgradeBusy(true);
+    setActionError("");
+    refreshNeeded.current = true;
+    try {
+      const result = await api<{ container: ContainerView }>("/api/container/upgrade", {
+        method: "POST",
+      });
+      refreshNeeded.current = false;
+      applyContainer(result.container);
+    } catch (error) {
+      if (!redirectIfSignedOut(error)) {
+        setActionError(displayError(
+          error,
+          "The Premium upgrade may have started, but its latest status is unavailable. We will check again automatically.",
+        ));
+      }
+      setPollVersion((version) => version + 1);
+    } finally {
+      setActionBusy(false);
+      setInstanceUpgradeBusy(false);
     }
   };
 
@@ -485,12 +569,14 @@ function DashboardApp() {
         {account ? <span className={`account-state ${account.state}`}>{ACCOUNT_STATE_LABELS[account.state]}</span> : null}
       </div>
       {checkoutStatus === "confirming" ? (
-        <div className="notice" role="status" aria-live="polite">
-          Checkout completed. Activating your Premium subscription…
+        <div className="notice" role="status" aria-live="polite" aria-busy="true">
+          <BusyLabel busy>Stripe is processing your checkout…</BusyLabel>
         </div>
       ) : checkoutStatus === "confirmed" ? (
         <div className="notice" role="status" aria-live="polite">
-          Your Premium subscription is active.
+          {container?.tier === "free"
+            ? "Your Premium subscription is active. Your Free instance stays Free until you choose Upgrade instance below."
+            : "Your Premium subscription is active."}
         </div>
       ) : checkoutStatus === "timed_out" ? (
         <div className="notice warning" role="status" aria-live="polite">
@@ -565,8 +651,16 @@ function DashboardApp() {
                 Create
               </button>
             ) : billing?.configured ? (
-              <button className="btn primary" type="button" disabled={actionBusy} onClick={() => void openBilling("/api/billing/checkout")}>
-                Continue
+              <button
+                className="btn primary"
+                type="button"
+                disabled={actionBusy}
+                aria-busy={billingAction === "checkout"}
+                onClick={() => void openBilling("/api/billing/checkout")}
+              >
+                <BusyLabel busy={billingAction === "checkout"}>
+                  {billingAction === "checkout" ? "Opening Stripe checkout…" : "Continue"}
+                </BusyLabel>
               </button>
             ) : (
               <button className="btn primary" type="button" disabled>Continue</button>
@@ -599,8 +693,13 @@ function DashboardApp() {
               account && !account.premium && billing?.configured && billing.paidPlan
             ? { ...billing.paidPlan, trialEligible: billing.trialEligible }
             : null}
-          upgrade={() => void openBilling("/api/billing/checkout")}
+          openUpgradeCheckout={() => void openBilling("/api/billing/checkout")}
+          premiumUpgradeAvailable={Boolean(account?.premium && container.tier === "free")}
+          upgradeInstance={() => void upgradeInstance()}
           actionBusy={actionBusy}
+          billingBusy={billingAction === "checkout"}
+          instanceUpgradeBusy={instanceUpgradeBusy}
+          billingSource={billing?.billing?.source ?? billing?.entitlement.source ?? null}
         />
       ) : null}
       {actionError ? <div className="notice error" role="alert" aria-live="assertive">{actionError}</div> : null}

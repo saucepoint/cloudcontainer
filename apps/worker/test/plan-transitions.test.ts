@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getContainerForUser, getJob, refreshJob } from "../src/jobs.js";
 import {
+  cancelPendingDowngradeForRestoredPaidAccess,
   cancelUnreservedPlanTransition,
   requestPaidUpgrade,
   requestPlanTransition,
@@ -322,7 +323,6 @@ describe("in-place plan transitions", () => {
     expect(await requestPlanTransition(env, "user-1", "free", 36_500)).toBe("stopping");
     const stopJob = await getJob(env, String(daemon.submitted[0]?.jobId));
     if (!stopJob) throw new Error("downgrade stop job missing");
-    await refreshJob(env, stopJob);
 
     await env.DB.batch([
       env.DB.prepare(
@@ -335,7 +335,13 @@ describe("in-place plan transitions", () => {
       ).bind(36_501),
     ]);
 
-    expect(await requestPaidUpgrade(env, "user-1", 36_502)).toBe("not_needed");
+    expect(await cancelPendingDowngradeForRestoredPaidAccess(env, "user-1", 36_502))
+      .toBe(false);
+    expect(await transition(env)).toMatchObject({ state: "requested" });
+
+    await refreshJob(env, stopJob);
+    expect(await cancelPendingDowngradeForRestoredPaidAccess(env, "user-1", 36_503))
+      .toBe(true);
     expect(await transition(env)).toMatchObject({ state: "cancelled" });
     expect(await getContainerForUser(env, "user-1")).toMatchObject({
       tier: "paid",

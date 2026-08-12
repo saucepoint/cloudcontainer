@@ -960,6 +960,43 @@ describe("billing event consumer", () => {
     });
   });
 
+  it("activates Premium without automatically changing an existing Free instance", async () => {
+    const { env } = makeEnv(BILLING_CONFIG);
+    await seedUser(env, "user-1", "free");
+    await seedStripeCustomer(env);
+    await seedHost(env, {
+      vcpu_allocated: 1,
+      ram_allocated_mb: 1536,
+      disk_allocated_gb: 10,
+    });
+    await seedContainer(env, { tier: "free", status: "running" });
+    const created = 1_800_000_000;
+    const event = invoiceEvent("evt_paid_free_instance", created);
+    stubFetch(stripeEventRoutes(
+      { evt_paid_free_instance: event },
+      { sub_paid: subscription(created + 2_592_000) },
+    ));
+
+    await processBillingEventMessage(env, {
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    });
+    await reconcileBillingState(env, Date.now());
+
+    expect(await env.DB.prepare(
+      "SELECT tier, status, cpu, ram_mb, disk_gb FROM containers WHERE id = 'container-1'",
+    ).first()).toEqual({
+      tier: "free",
+      status: "running",
+      cpu: 1,
+      ram_mb: 1536,
+      disk_gb: 5,
+    });
+    expect((await env.DB.prepare("SELECT * FROM container_plan_transitions").all()).results)
+      .toEqual([]);
+  });
+
   it("accepts a settled zero-amount renewal but not the trial-opening invoice", async () => {
     const { env } = makeEnv(BILLING_CONFIG);
     await unverifiedUser(env);

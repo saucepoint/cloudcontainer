@@ -8,8 +8,8 @@ import {
   projectStripeEntitlement,
 } from "./entitlements.js";
 import {
+  cancelPendingDowngradeForRestoredPaidAccess,
   cancelUnreservedPlanTransition,
-  requestPaidUpgrade,
   requestPlanTransition,
 } from "./plan-transitions.js";
 import {
@@ -596,7 +596,7 @@ async function applyCanonicalSubscription(
     projection.accessUntil !== null && projection.accessUntil > now
   ) {
     await restoreBillingSuspendedContainer(env, customer.user_id);
-    await requestPaidUpgrade(env, customer.user_id, now);
+    await cancelPendingDowngradeForRestoredPaidAccess(env, customer.user_id, now);
   } else if (authoritativeSubscription && existingEntitlement?.source !== "manual") {
     await enforceEndedPaidAccess(env, user, now);
   }
@@ -955,7 +955,7 @@ export async function reconcileBillingState(
 
     if (projected.accessUntil !== null && projected.accessUntil > at) {
       await restoreBillingSuspendedContainer(env, user.id);
-      await requestPaidUpgrade(env, user.id, at);
+      await cancelPendingDowngradeForRestoredPaidAccess(env, user.id, at);
       continue;
     }
     await enforceEndedPaidAccess(env, user, at);
