@@ -196,9 +196,13 @@ check_eq "tenant project allows only the service-managed proxy exception" "allow
   incus project get "$PROJECT_NAME" restricted.devices.proxy
 check_eq "tenant project network allow-list" "$NETWORK_NAME" \
   incus project get "$PROJECT_NAME" restricted.networks.access
-if incus project get "$PROJECT_NAME" restricted.storage-pools.access >/dev/null 2>&1; then
-  check_eq "tenant project storage allow-list" "$POOL_NAME" \
-    incus project get "$PROJECT_NAME" restricted.storage-pools.access
+STORAGE_POOL_ACCESS=$(incus project get "$PROJECT_NAME" restricted.storage-pools.access 2>/dev/null || true)
+if [[ -n "$STORAGE_POOL_ACCESS" ]]; then
+  if [[ "$STORAGE_POOL_ACCESS" == "$POOL_NAME" ]]; then
+    pass "tenant project storage allow-list"
+  else
+    fail "tenant project storage allow-list (expected $POOL_NAME, got $STORAGE_POOL_ACCESS)"
+  fi
 else
   pass "Incus version has no storage-pool allow-list project key"
 fi
