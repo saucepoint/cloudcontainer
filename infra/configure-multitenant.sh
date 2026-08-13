@@ -55,20 +55,21 @@ printf '%s\n' br_netfilter > /etc/modules-load.d/workbench.conf
 
 # Keep the default project usable for image builds, but tenant instances are
 # created only in the restricted project below.
-incus network show "$NETWORK_NAME" >/dev/null 2>&1 || incus network create "$NETWORK_NAME"
-incus network set "$NETWORK_NAME" ipv4.firewall=true
-incus network set "$NETWORK_NAME" ipv6.firewall=true
+incus network show "$NETWORK_NAME" >/dev/null 2>&1 || \
+  incus network create "$NETWORK_NAME" </dev/null
+incus network set "$NETWORK_NAME" ipv4.firewall=true </dev/null
+incus network set "$NETWORK_NAME" ipv6.firewall=true </dev/null
 incus profile show default >/dev/null 2>&1 || incus profile create default
 DEFAULT_ROOT_POOL=$(incus profile device get default root pool 2>/dev/null || true)
 if [[ -z "$DEFAULT_ROOT_POOL" ]]; then
-  incus profile device add default root disk path=/ pool="$POOL_NAME"
+  incus profile device add default root disk path=/ pool="$POOL_NAME" </dev/null
 elif [[ "$DEFAULT_ROOT_POOL" != "$POOL_NAME" ]]; then
   echo "!! image-build profile root uses pool $DEFAULT_ROOT_POOL instead of $POOL_NAME"
   exit 1
 fi
 DEFAULT_NETWORK=$(incus profile device get default eth0 network 2>/dev/null || true)
 if [[ -z "$DEFAULT_NETWORK" ]]; then
-  incus profile device add default eth0 nic network="$NETWORK_NAME" name=eth0
+  incus profile device add default eth0 nic network="$NETWORK_NAME" name=eth0 </dev/null
 elif [[ "$DEFAULT_NETWORK" != "$NETWORK_NAME" ]]; then
   echo "!! image-build profile eth0 uses network $DEFAULT_NETWORK instead of $NETWORK_NAME"
   exit 1
@@ -210,10 +211,10 @@ incus project set "$PROJECT_NAME" limits.processes="$(( TENANT_SLOTS * TENANT_PR
 incus project set "$PROJECT_NAME" "limits.disk.pool.${POOL_NAME}=${DISK_GB}GiB"
 
 incus --project "$PROJECT_NAME" profile show default >/dev/null 2>&1 || \
-  incus --project "$PROJECT_NAME" profile create default
+  incus --project "$PROJECT_NAME" profile create default </dev/null
 TENANT_ROOT_POOL=$(incus --project "$PROJECT_NAME" profile device get default root pool 2>/dev/null || true)
 if [[ -z "$TENANT_ROOT_POOL" ]]; then
-  incus --project "$PROJECT_NAME" profile device add default root disk path=/ pool="$POOL_NAME"
+  incus --project "$PROJECT_NAME" profile device add default root disk path=/ pool="$POOL_NAME" </dev/null
 elif [[ "$TENANT_ROOT_POOL" != "$POOL_NAME" ]]; then
   echo "!! tenant profile root uses pool $TENANT_ROOT_POOL instead of $POOL_NAME"
   exit 1
@@ -222,7 +223,7 @@ incus --project "$PROJECT_NAME" profile device set default root size="${TENANT_D
 TENANT_NETWORK=$(incus --project "$PROJECT_NAME" profile device get default eth0 network 2>/dev/null || true)
 if [[ -z "$TENANT_NETWORK" ]]; then
   incus --project "$PROJECT_NAME" profile device add default eth0 nic \
-    network="$NETWORK_NAME" name=eth0
+    network="$NETWORK_NAME" name=eth0 </dev/null
 elif [[ "$TENANT_NETWORK" != "$NETWORK_NAME" ]]; then
   echo "!! tenant profile eth0 uses network $TENANT_NETWORK instead of $NETWORK_NAME"
   exit 1
