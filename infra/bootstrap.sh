@@ -147,7 +147,14 @@ elif ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
     fi
     incus storage create "$POOL_NAME" zfs size="${ZFS_LOOP_GB}GiB" </dev/null
   elif command -v zpool >/dev/null && zpool list -H -o name 2>/dev/null | grep -q .; then
-    incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/workbench" </dev/null
+    zpool_name=$(zpool list -H -o name | head -1)
+    zfs create -o canmount=off -o mountpoint=none "$zpool_name/workbench" 2>/dev/null || {
+      zfs list "$zpool_name/workbench" >/dev/null 2>&1 || {
+        echo "!! could not create or find ZFS dataset $zpool_name/workbench" >&2
+        exit 1
+      }
+    }
+    incus storage create "$POOL_NAME" zfs source="$zpool_name/workbench" </dev/null
   elif [[ "$ALLOW_DIR_STORAGE" == "1" ]]; then
     echo "!! creating a development-only dir pool; tenant disk quotas are not enforceable"
     incus storage create "$POOL_NAME" dir </dev/null

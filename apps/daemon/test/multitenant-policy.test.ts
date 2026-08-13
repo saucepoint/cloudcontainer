@@ -128,6 +128,7 @@ printf '%s %s %s %s %s\n' \
     expect(hostPolicy).toContain("HOST_TENANT_LIMIT");
     expect(hostPolicy).toContain("RESOURCE_TENANT_SLOTS");
     expect(configurePolicy).toContain("SHARED_CAPACITY_PROJECT");
+    expect(bootstrap).toContain('zfs create -o canmount=off -o mountpoint=none');
     expect(configurePolicy).toContain("restricted.storage-pools.access");
     expect(configurePolicy).toContain("shared project tenant caps exceed physical capacity");
     expect(configurePolicy).toContain("incus project show workbench-staging");
