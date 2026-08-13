@@ -10,8 +10,8 @@ ALIAS="${ALIAS:-workbench-base}"
 BASE="${BASE:-images:debian/13}"
 PROJECT="${PROJECT:-default}"
 
-incus --project "$PROJECT" delete -f "$NAME" 2>/dev/null || true
-incus --project "$PROJECT" launch "$BASE" "$NAME"
+incus --project "$PROJECT" delete -f "$NAME" </dev/null 2>/dev/null || true
+incus --project "$PROJECT" launch "$BASE" "$NAME" </dev/null
 
 echo "waiting for network…"
 for i in $(seq 1 60); do
@@ -135,7 +135,7 @@ apt-get clean
 rm -f /etc/ssh/ssh_host_*
 SETUP
 
-incus --project "$PROJECT" stop "$NAME"
-incus --project "$PROJECT" publish "$NAME" --alias "$ALIAS" --reuse
-incus --project "$PROJECT" delete "$NAME"
+incus --project "$PROJECT" stop "$NAME" </dev/null
+incus --project "$PROJECT" publish "$NAME" --alias "$ALIAS" --reuse </dev/null
+incus --project "$PROJECT" delete "$NAME" </dev/null
 echo "image '$ALIAS' published."
