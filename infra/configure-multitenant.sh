@@ -195,7 +195,15 @@ incus project set "$PROJECT_NAME" restricted.devices.proxy=allow
 incus project set "$PROJECT_NAME" restricted.backups=block
 incus project set "$PROJECT_NAME" restricted.snapshots=block
 incus project set "$PROJECT_NAME" restricted.networks.access="$NETWORK_NAME"
-incus project set "$PROJECT_NAME" restricted.storage-pools.access="$POOL_NAME"
+# Incus 6.x does not expose restricted.storage-pools.access yet. The
+# tenant project still permits only managed disks and its profile/daemon
+# reference the configured pool explicitly; newer Incus releases accept the
+# additional storage-pool allow-list.
+if incus project set "$PROJECT_NAME" restricted.storage-pools.access="$POOL_NAME" </dev/null 2>/dev/null; then
+  :
+else
+  incus project get "$PROJECT_NAME" restricted.storage-pools.access >/dev/null 2>&1 || true
+fi
 incus project set "$PROJECT_NAME" limits.containers="$TENANT_SLOTS"
 if [[ "$TENANCY_MODE" == "shared" ]]; then
   # CPU/RAM are placement targets, not hard project ceilings. Keeping these

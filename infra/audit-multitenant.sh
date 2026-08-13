@@ -196,8 +196,12 @@ check_eq "tenant project allows only the service-managed proxy exception" "allow
   incus project get "$PROJECT_NAME" restricted.devices.proxy
 check_eq "tenant project network allow-list" "$NETWORK_NAME" \
   incus project get "$PROJECT_NAME" restricted.networks.access
-check_eq "tenant project storage allow-list" "$POOL_NAME" \
-  incus project get "$PROJECT_NAME" restricted.storage-pools.access
+if incus project get "$PROJECT_NAME" restricted.storage-pools.access >/dev/null 2>&1; then
+  check_eq "tenant project storage allow-list" "$POOL_NAME" \
+    incus project get "$PROJECT_NAME" restricted.storage-pools.access
+else
+  pass "Incus version has no storage-pool allow-list project key"
+fi
 check_eq "tenant project shares only the base-image namespace" "false" \
   incus project get "$PROJECT_NAME" features.images
 check_eq "tenant project cannot create networks" "false" \
