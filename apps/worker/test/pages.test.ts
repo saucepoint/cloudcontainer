@@ -78,6 +78,10 @@ describe("landing page call to action", () => {
     expect(html).toContain("access from any terminal client, on any device");
     expect(html).not.toContain("accessed from any terminal client on any device");
     expect(html).toContain("<i>your workflows, your environment, your terminal</i>");
+    expect(html).toContain('<a class="btn primary landing-cta" href="#landing-auth">Get started</a>');
+    expect(html).toContain('id="landing-auth" class="card landing-signin"');
+    expect(html.indexOf("Get started")).toBeLessThan(html.indexOf('class="landing-terminal"'));
+    expect(html.indexOf('class="landing-terminal"')).toBeLessThan(html.indexOf('id="landing-auth"'));
     expect(html).toContain('id="landing-terminal-root"');
     expect(landingClient).toContain("resumeFromRef");
     expect(landingClient).toContain("performance.now() - resumeFromRef.current");
@@ -1025,8 +1029,11 @@ describe("interface foundation", () => {
     const html = String(LandingPage({ devAuth: false }));
     expect(html).toContain('class="landing-hero"');
     expect(html).toContain(".wrap { width: min(100% - 2.5rem, 731px);");
+    expect(html).toContain("html { background: var(--paper); scroll-behavior: smooth; }");
+    expect(html).toContain("scroll-behavior: auto !important;");
     expect(html).toContain(".landing-hero { text-align: left; }");
-    expect(html).toContain(".landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }");
+    expect(html).toContain(".landing-hero .lead { margin: 1.1rem 0 1.25rem; line-height: 1.8; }");
+    expect(html).toContain(".landing-cta-row { margin: 0 0 2.5rem; }");
     expect(html).toContain(".landing-hero .lead { font-size: 0.95rem; }");
     expect(html).toContain(".landing-terminal-window { overflow: hidden; color: #c9d1d9; background: #0d1117;");
     expect(html).toContain(".terminal-screen { min-height: 19.8rem;");
@@ -1047,6 +1054,7 @@ describe("interface foundation", () => {
     expect(html).toContain(".auth-provider-list { display: grid; width: min(100%, 25rem);");
     expect(html).toContain("border: 1px solid var(--line); border-radius: var(--radius);");
     expect(html).toContain(".auth-provider { width: min(100%, 18rem); justify-self: center;");
+    expect(html).toContain(".ssh-key-choice small { display: block; color: var(--muted); font-family: var(--mono); font-size: 0.72rem; overflow-wrap: anywhere; }");
   });
 
   it("stacks each agent's independent sign-ins below its selection copy", () => {

@@ -30,7 +30,7 @@ export const PAGE_STYLES = `
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { background: var(--paper); }
+html { background: var(--paper); scroll-behavior: smooth; }
 body { position: relative; min-height: 100vh; margin: 0; background: var(--paper); color: var(--ink);
   font: 15px/1.5 var(--sans); }
 button, input, textarea, select { font: inherit; }
@@ -242,7 +242,7 @@ pre.ssh.prompt { white-space: pre-wrap; word-break: break-word; }
 .ssh-key-choice:hover, .ssh-key-choice:has(input:checked) { color: var(--accent); }
 .ssh-key-choice input { flex: 0 0 auto; margin-top: 0.25rem; accent-color: var(--accent); }
 .ssh-key-choice span { min-width: 0; }
-.ssh-key-choice small { display: block; color: var(--muted); font-family: var(--mono); font-size: 0.72rem; }
+.ssh-key-choice small { display: block; color: var(--muted); font-family: var(--mono); font-size: 0.72rem; overflow-wrap: anywhere; }
 .ssh-key-toolbar { display: flex; gap: 1rem; align-items: center; justify-content: space-between; margin-top: 1.25rem;
   padding-top: 1rem; border-top: 1px solid var(--line); }
 .ssh-key-toolbar-copy { display: grid; gap: 0.12rem; }
@@ -358,7 +358,8 @@ summary { color: var(--accent); font-size: 0.9rem; cursor: pointer; }
 .err:empty { display: none; }
 .landing-hero { text-align: left; }
 .landing-title { max-width: 650px; }
-.landing-hero .lead { margin-top: 1.1rem; line-height: 1.8; }
+.landing-hero .lead { margin: 1.1rem 0 1.25rem; line-height: 1.8; }
+.landing-cta-row { margin: 0 0 2.5rem; }
 .landing-terminal { margin: 0 0 2.5rem; }
 .landing-terminal-stage { min-width: 0; }
 .landing-terminal-window { overflow: hidden; color: #c9d1d9; background: #0d1117;

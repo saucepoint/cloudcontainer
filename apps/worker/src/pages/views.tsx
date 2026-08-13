@@ -71,6 +71,9 @@ export const LandingPage: FC<{
         <i>your workflows, your environment, your terminal</i>
       </p>
     </div>
+    <div class="landing-cta-row">
+      <a class="btn primary landing-cta" href="#landing-auth">Get started</a>
+    </div>
     <section class="landing-terminal" aria-labelledby="landing-terminal-heading">
       <h2 id="landing-terminal-heading" class="sr-only">SSH terminal demo</h2>
       <div id="landing-terminal-root">
@@ -101,7 +104,7 @@ export const LandingPage: FC<{
         </li>
       </ul>
     </div>
-    <div class="card landing-signin">
+    <div id="landing-auth" class="card landing-signin">
       <div class="landing-signin-content" role="region" aria-label="Sign in or create an account">
         <div id="landing-auth-root"></div>
         {devAuth ? (
