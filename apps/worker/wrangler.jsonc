@@ -56,7 +56,7 @@
     "SSH_PORT_RANGE_END": "39999",
     // Keep new sales closed while production Stripe resources and policy
     // values are installed and validated through the admin readiness probe.
-    "BILLING_ENABLED": "0",
+    "BILLING_ENABLED": "1",
     "STRIPE_LIVE_MODE": "1",
     "STRIPE_PRICE_PAID_MONTHLY": "price_1U3f8wGembqEGAYvewRGeKeE",
     "PAID_PLAN_MONTHLY_PRICE": "6",
