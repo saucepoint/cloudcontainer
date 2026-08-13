@@ -145,12 +145,12 @@ elif ! incus storage show "$POOL_NAME" >/dev/null 2>&1; then
       echo "   Fix: apt-get install linux-image-cloud-amd64 linux-headers-cloud-amd64 zfs-dkms && reboot, then re-run."
       exit 1
     fi
-    incus storage create "$POOL_NAME" zfs size="${ZFS_LOOP_GB}GiB"
+    incus storage create "$POOL_NAME" zfs size="${ZFS_LOOP_GB}GiB" </dev/null
   elif command -v zpool >/dev/null && zpool list -H -o name 2>/dev/null | grep -q .; then
-    incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/workbench"
+    incus storage create "$POOL_NAME" zfs source="$(zpool list -H -o name | head -1)/workbench" </dev/null
   elif [[ "$ALLOW_DIR_STORAGE" == "1" ]]; then
     echo "!! creating a development-only dir pool; tenant disk quotas are not enforceable"
-    incus storage create "$POOL_NAME" dir
+    incus storage create "$POOL_NAME" dir </dev/null
   else
     echo "!! refusing to create a dir pool because it cannot enforce tenant disk quotas."
     echo "   Provide a ZFS pool, set ZFS_LOOP_GB for a development loop pool, or explicitly set ALLOW_DIR_STORAGE=1."
