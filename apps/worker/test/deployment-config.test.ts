@@ -29,9 +29,9 @@ describe("staging deployment configuration", () => {
     expect(wranglerConfig).toContain('"SSH_PORT_RANGE_END": "49999"');
   });
 
-  it("accepts production billing enabled with live mode and durable queues declared", () => {
+  it("keeps production billing disabled with live mode and durable queues declared", () => {
     const productionConfig = wranglerConfig.slice(0, wranglerConfig.indexOf('"env": {'));
-    expect(productionConfig).toContain('"BILLING_ENABLED": "1"');
+    expect(productionConfig).toContain('"BILLING_ENABLED": "0"');
     expect(productionConfig).toContain('"STRIPE_LIVE_MODE": "1"');
     expect(productionConfig).toContain('"queue": "usebench-billing-events"');
     expect(productionConfig).toContain('"dead_letter_queue": "usebench-billing-events-dlq"');

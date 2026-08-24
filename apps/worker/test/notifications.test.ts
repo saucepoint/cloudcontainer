@@ -5,7 +5,7 @@ import { apiRoutes } from "../src/api.js";
 import { app as workerApp } from "../src/index.js";
 import { createUserNotification } from "../src/notifications.js";
 import type { AppContext } from "../src/types.js";
-import { createTestSession, makeEnv, seedUser } from "./helpers/env.js";
+import { createTestSession, makeEnv, seedContainer, seedUser } from "./helpers/env.js";
 
 function app() {
   return new Hono<AppContext>().route("/", adminRoutes).route("/", apiRoutes);
@@ -100,6 +100,89 @@ describe("account notifications", () => {
     expect(await afterRead.json()).toMatchObject({ unreadCount: 0 });
     const otherAfterRead = await app().request("/api/notifications", { headers: { cookie: otherCookie } }, env);
     expect(await otherAfterRead.json()).toMatchObject({ unreadCount: 1 });
+  });
+
+  it("limits container-user announcements to accounts with containers", async () => {
+    const { env } = makeEnv({ INVITE_ADMIN_SECRET: "admin-secret" });
+    const containerUser = await seedUser(env);
+    await seedContainer(env, { host_id: null, ssh_port: null });
+    const accountUser = await seedUser(env, "user-2");
+    const containerCookie = await createTestSession(env, containerUser.id);
+    const accountCookie = await createTestSession(env, accountUser.id);
+
+    const created = await app().request(
+      "/api/admin/notifications",
+      adminJson({
+        title: "Container maintenance",
+        message: "Save your work before maintenance.",
+        severity: "warning",
+        audience: "container_users",
+      }),
+      env,
+    );
+    expect(created.status).toBe(201);
+
+    const forContainerUser = await app().request(
+      "/api/notifications",
+      { headers: { cookie: containerCookie } },
+      env,
+    );
+    expect(await forContainerUser.json()).toMatchObject({
+      unreadCount: 2,
+      notifications: [
+        { title: "Container maintenance" },
+        { title: "Scheduled service shutdown" },
+      ],
+    });
+    const forAccountUser = await app().request(
+      "/api/notifications",
+      { headers: { cookie: accountCookie } },
+      env,
+    );
+    expect(await forAccountUser.json()).toEqual({ notifications: [], unreadCount: 0 });
+  });
+
+  it("seeds the August 30 shutdown notice for container users", async () => {
+    const { env } = makeEnv();
+    const containerUser = await seedUser(env);
+    await seedContainer(env, { host_id: null, ssh_port: null });
+    const accountUser = await seedUser(env, "user-2");
+    const containerCookie = await createTestSession(env, containerUser.id);
+    const accountCookie = await createTestSession(env, accountUser.id);
+
+    const row = await env.DB.prepare(
+      "SELECT title, message, severity, expires_at, audience FROM notifications WHERE id = ?",
+    ).bind("system:shutdown:2026-08-30").first<{
+      title: string;
+      message: string;
+      severity: string;
+      expires_at: number;
+      audience: string;
+    }>();
+    expect(row).toEqual({
+      title: "Scheduled service shutdown",
+      message: "All workbench services will shut down on August 30, 2026. Save your work before then.",
+      severity: "critical",
+      expires_at: 1788134400000,
+      audience: "container_users",
+    });
+
+    const forContainerUser = await app().request(
+      "/api/notifications",
+      { headers: { cookie: containerCookie } },
+      env,
+    );
+    expect(await forContainerUser.json()).toMatchObject({
+      notifications: [{ id: "system:shutdown:2026-08-30" }],
+    });
+    const forAccountUser = await app().request(
+      "/api/notifications",
+      { headers: { cookie: accountCookie } },
+      env,
+    );
+    expect(await forAccountUser.json()).not.toMatchObject({
+      notifications: [{ id: "system:shutdown:2026-08-30" }],
+    });
   });
 
   it("rejects malformed announcements and expires old ones", async () => {

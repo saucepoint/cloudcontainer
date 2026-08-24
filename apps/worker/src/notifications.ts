@@ -3,6 +3,9 @@ import type { Bindings } from "./types.js";
 export const NOTIFICATION_SEVERITIES = ["info", "warning", "critical"] as const;
 export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number];
 
+export const NOTIFICATION_AUDIENCES = ["all", "container_users"] as const;
+export type NotificationAudience = (typeof NOTIFICATION_AUDIENCES)[number];
+
 export interface NotificationView {
   id: string;
   title: string;
@@ -30,6 +33,9 @@ function activeNotificationWhere(now: number): { sql: string; bind: number } {
   };
 }
 
+const containerAudienceSql =
+  "(n.audience = 'all' OR (n.audience = 'container_users' AND EXISTS (SELECT 1 FROM containers c WHERE c.user_id = ?)))";
+
 function toView(row: NotificationRow): NotificationView {
   return {
     id: row.id,
@@ -53,12 +59,13 @@ export async function unreadNotificationCount(
      FROM notifications n
      WHERE ${active.sql}
        AND (n.user_id IS NULL OR n.user_id = ?)
+       AND ${containerAudienceSql}
        AND NOT EXISTS (
          SELECT 1 FROM notification_reads r
          WHERE r.notification_id = n.id AND r.user_id = ?
        )`,
   )
-    .bind(active.bind, now, userId, userId)
+    .bind(active.bind, now, userId, userId, userId)
     .first<{ count: number }>();
   return Number(row?.count ?? 0);
 }
@@ -77,10 +84,11 @@ export async function notificationsForUser(
        ON r.notification_id = n.id AND r.user_id = ?
      WHERE ${active.sql}
        AND (n.user_id IS NULL OR n.user_id = ?)
+       AND ${containerAudienceSql}
      ORDER BY n.created_at DESC
      LIMIT 100`,
   )
-    .bind(userId, active.bind, now, userId)
+    .bind(userId, active.bind, now, userId, userId)
     .all<NotificationRow>();
   return rows.results.map(toView);
 }
@@ -92,15 +100,25 @@ export async function createNotification(
     message: string;
     severity: NotificationSeverity;
     expiresAt: number | null;
+    audience?: NotificationAudience;
   },
 ): Promise<NotificationView> {
   const id = crypto.randomUUID();
   const createdAt = Date.now();
   await env.DB.prepare(
-    `INSERT INTO notifications (id, title, message, severity, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO notifications
+       (id, title, message, severity, created_at, expires_at, audience)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(id, input.title, input.message, input.severity, createdAt, input.expiresAt)
+    .bind(
+      id,
+      input.title,
+      input.message,
+      input.severity,
+      createdAt,
+      input.expiresAt,
+      input.audience ?? "all",
+    )
     .run();
   return {
     id,
@@ -127,8 +145,8 @@ export async function createUserNotification(
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT OR IGNORE INTO notifications
-       (id, user_id, title, message, severity, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, title, message, severity, created_at, expires_at, audience)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     input.id,
     input.userId,
@@ -137,6 +155,7 @@ export async function createUserNotification(
     input.severity,
     input.createdAt ?? Date.now(),
     input.expiresAt ?? null,
+    "all",
   ).run();
 }
 
@@ -150,9 +169,11 @@ export async function markNotificationRead(
     `INSERT OR IGNORE INTO notification_reads (notification_id, user_id, read_at)
      SELECT n.id, ?, ?
      FROM notifications n
-     WHERE n.id = ? AND (n.user_id IS NULL OR n.user_id = ?)`,
+     WHERE n.id = ?
+       AND (n.user_id IS NULL OR n.user_id = ?)
+       AND ${containerAudienceSql}`,
   )
-    .bind(userId, readAt, notificationId, userId)
+    .bind(userId, readAt, notificationId, userId, userId)
     .run();
 }
 
@@ -168,11 +189,12 @@ export async function markAllNotificationsRead(
      FROM notifications n
      WHERE ${active.sql}
        AND (n.user_id IS NULL OR n.user_id = ?)
+       AND ${containerAudienceSql}
        AND NOT EXISTS (
          SELECT 1 FROM notification_reads r
          WHERE r.notification_id = n.id AND r.user_id = ?
        )`,
   )
-    .bind(userId, readAt, active.bind, readAt, userId, userId)
+    .bind(userId, readAt, active.bind, readAt, userId, userId, userId)
     .run();
 }

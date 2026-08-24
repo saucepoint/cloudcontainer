@@ -2,11 +2,21 @@ import { Hono } from "hono";
 import type { AppContext, Bindings } from "./types.js";
 import { hashInviteCode, randomInviteCode } from "./invites.js";
 import { bearerToken, secretMatches } from "./admin-auth.js";
-import { createNotification, NOTIFICATION_SEVERITIES, type NotificationSeverity } from "./notifications.js";
+import {
+  createNotification,
+  NOTIFICATION_AUDIENCES,
+  NOTIFICATION_SEVERITIES,
+  type NotificationAudience,
+  type NotificationSeverity,
+} from "./notifications.js";
 import { readJsonBody } from "./http.js";
 
 function isNotificationSeverity(value: unknown): value is NotificationSeverity {
   return typeof value === "string" && NOTIFICATION_SEVERITIES.some((severity) => severity === value);
+}
+
+function isNotificationAudience(value: unknown): value is NotificationAudience {
+  return typeof value === "string" && NOTIFICATION_AUDIENCES.some((audience) => audience === value);
 }
 
 async function createInvite(env: Bindings, secret: string): Promise<string> {
@@ -49,11 +59,13 @@ export const adminRoutes = new Hono<AppContext>().post("/api/admin/invites", asy
     title?: unknown;
     message?: unknown;
     severity?: unknown;
+    audience?: unknown;
     expiresAt?: unknown;
   }>(c);
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   const message = typeof body?.message === "string" ? body.message.trim() : "";
   const severity = body?.severity ?? "info";
+  const audience = body?.audience ?? "all";
   if (title.length < 1 || title.length > 160) {
     return c.json({ error: "title must be between 1 and 160 characters" }, 400);
   }
@@ -62,6 +74,9 @@ export const adminRoutes = new Hono<AppContext>().post("/api/admin/invites", asy
   }
   if (!isNotificationSeverity(severity)) {
     return c.json({ error: "severity must be info, warning, or critical" }, 400);
+  }
+  if (!isNotificationAudience(audience)) {
+    return c.json({ error: "audience must be all or container_users" }, 400);
   }
   if (
     body?.expiresAt !== undefined &&
@@ -74,6 +89,7 @@ export const adminRoutes = new Hono<AppContext>().post("/api/admin/invites", asy
     title,
     message,
     severity,
+    audience,
     expiresAt: typeof body?.expiresAt === "number" ? body.expiresAt : null,
   });
   c.header("cache-control", "no-store");
